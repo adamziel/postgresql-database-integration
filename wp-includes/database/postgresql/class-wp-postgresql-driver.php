@@ -1015,7 +1015,11 @@ class WP_PostgreSQL_Driver {
 		}
 
 		$this->ensure_postgresql_runtime_helpers_for_query( $query );
-		$stmt                            = $this->connection->query( $query );
+		try {
+			$stmt = $this->connection->query( $query );
+		} catch ( PDOException $e ) {
+			$this->throw_mysql_compatible_postgresql_exception( $e );
+		}
 		$this->last_postgresql_queries[] = array(
 			'sql'    => $query,
 			'params' => array(),
@@ -2398,7 +2402,11 @@ class WP_PostgreSQL_Driver {
 		}
 	}
 	private function execute_postgresql_logged_statement( string $statement, bool $close_cursor = false ): int {
-		$stmt                            = $this->connection->query( $statement );
+		try {
+			$stmt = $this->connection->query( $statement );
+		} catch ( PDOException $e ) {
+			$this->throw_mysql_compatible_postgresql_exception( $e );
+		}
 		$this->last_postgresql_queries[] = array(
 			'sql'    => $statement,
 			'params' => array(),
@@ -2408,6 +2416,18 @@ class WP_PostgreSQL_Driver {
 			$stmt->closeCursor();
 		}
 		return $row_count;
+	}
+	private function throw_mysql_compatible_postgresql_exception( PDOException $exception ): void {
+		$message = str_replace( 'not-null', 'NOT NULL', $exception->getMessage() );
+		if ( $message === $exception->getMessage() ) {
+			throw $exception;
+		}
+
+		$mysql_exception = new PDOException( $message, (int) $exception->getCode(), $exception );
+		if ( isset( $exception->errorInfo ) ) {
+			$mysql_exception->errorInfo = $exception->errorInfo;
+		}
+		throw $mysql_exception;
 	}
 	private function execute_translated_dml_statements( array $dml_query, ?int $return_value = null ): int {
 		if ( ! isset( $dml_query['statements'] ) || ! is_array( $dml_query['statements'] ) ) {
@@ -16664,9 +16684,20 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 	}
 	private function get_postgresql_unqualified_dml_table_reference_sql( string $table_name ): string {
 		return $this->get_postgresql_table_identifier_sql(
-			$this->get_mysql_unqualified_dml_table_backend_schema( $table_name ),
+			$this->get_mysql_unqualified_dml_table_reference_schema(),
 			$table_name
 		);
+	}
+	private function get_mysql_unqualified_dml_table_reference_schema(): string {
+		if (
+			0 !== strcasecmp( $this->db_name, $this->main_db_name )
+			&& 0 !== strcasecmp( $this->db_name, 'public' )
+			&& 0 !== strcasecmp( $this->db_name, 'information_schema' )
+			&& ! $this->is_postgresql_internal_schema( $this->db_name )
+		) {
+			return $this->db_name;
+		}
+		return 'public';
 	}
 	private function get_postgresql_table_identifier_sql( string $table_schema, string $table_name ): string {
 		if ( ! $this->should_qualify_postgresql_table_schema( $table_schema ) ) {
@@ -16701,11 +16732,26 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 			return null;
 		}
 
-		$default_sql = $this->get_mysql_dml_default_sql_from_metadata( $column_metadata );
+		$default_sql = $this->get_non_strict_dml_default_sql_from_metadata( $column_metadata );
 		if ( null !== $default_sql ) {
 			return $default_sql;
 		}
 		return $this->get_mysql_implicit_dml_default_sql( (string) ( $column_metadata['column_type'] ?? '' ) );
+	}
+	private function get_non_strict_dml_default_sql_from_metadata( array $column_metadata ): ?string {
+		if ( null === ( $column_metadata['column_default'] ?? null ) ) {
+			return null;
+		}
+
+		$default   = (string) $column_metadata['column_default'];
+		$base_type = $this->get_base_mysql_dml_column_type( (string) ( $column_metadata['column_type'] ?? '' ) );
+		if (
+			in_array( $base_type, self::MYSQL_IMPLICIT_DML_ZERO_DEFAULT_BASE_TYPES, true )
+			&& $this->is_mysql_numeric_metadata_default( $default )
+		) {
+			return ltrim( trim( $default ), '+' );
+		}
+		return $this->get_mysql_dml_default_sql_from_metadata( $column_metadata );
 	}
 	private function get_mysql_dml_default_sql_from_metadata( array $column_metadata ): ?string {
 		if ( null === ( $column_metadata['column_default'] ?? null ) ) {
@@ -16719,10 +16765,22 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 		) {
 			$translated_default = $this->translate_mysql_default_fragment( $default );
 			if ( null !== $translated_default ) {
+				if ( $this->is_mysql_literal_numeric_default_translation( $translated_default ) ) {
+					return $this->connection->quote( $default );
+				}
 				return $translated_default['sql'];
 			}
 		}
 		return $this->connection->quote( $default );
+	}
+	private function is_mysql_literal_numeric_default_translation( array $translated_default ): bool {
+		if ( null === ( $translated_default['metadata'] ?? null ) ) {
+			return false;
+		}
+		return $this->is_mysql_numeric_metadata_default( (string) $translated_default['metadata'] );
+	}
+	private function is_mysql_numeric_metadata_default( string $default ): bool {
+		return 1 === preg_match( '/^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/', trim( $default ) );
 	}
 	private function is_mysql_auto_increment_column_metadata( array $column_metadata ): bool {
 		return 'auto_increment' === strtolower( (string) ( $column_metadata['extra'] ?? '' ) );
@@ -26266,7 +26324,13 @@ END',
 	}
 	private function mysql_scope_references_non_public_schema( array $scope ): bool {
 		foreach ( $scope['tables'] ?? array() as $table ) {
-			if ( 'public' !== ( $table['schema'] ?? 'public' ) ) {
+			if (
+				'public' !== ( $table['schema'] ?? 'public' )
+				&& (
+					! empty( $table['schema_qualified'] )
+					|| 'public' !== $this->get_mysql_unqualified_dml_table_reference_schema()
+				)
+			) {
 				return true;
 			}
 		}
@@ -26358,8 +26422,9 @@ END',
 				}
 
 				$table = array(
-					'schema' => $this->get_mysql_table_reference_backend_schema( $reference ),
-					'table'  => $reference['table'],
+					'schema'           => $this->get_mysql_table_reference_backend_schema( $reference ),
+					'table'            => $reference['table'],
+					'schema_qualified' => ! empty( $reference['schema_qualified'] ),
 				);
 				$alias = strtolower( null === $reference['alias'] ? $reference['table'] : $reference['alias'] );
 				if ( isset( $scope['aliases'][ $alias ] ) ) {

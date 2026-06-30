@@ -2227,8 +2227,8 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 
 		$this->assertSame( 3, $driver->query( $replace ) );
 		$sql = $this->assert_last_replace_select_materialized_sql( $driver, 'wptests_replace_select' );
-		$this->assertStringContainsString(
-			' AS SELECT id AS "id" , CAST(name AS text) AS "name" , color AS "color" FROM wptests_replace_select_source WHERE 1 = 1',
+		$this->assertMatchesRegularExpressionCompat(
+			'/ AS SELECT id AS "id" , CAST\(name AS text\) AS "name" , color AS "color" FROM "?wptests_replace_select_source"? WHERE 1 = 1/',
 			$sql[1]
 		);
 		$this->assertStringContainsString(

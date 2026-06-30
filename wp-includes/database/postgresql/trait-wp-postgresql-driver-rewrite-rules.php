@@ -2347,17 +2347,25 @@ WHERE option_name IN (
 			$unique_index_metadata_rows,
 			$unique_index_groups
 		);
-		$delete_conflict_index_groups     = $this->get_mysql_replace_delete_conflict_index_groups(
+		$safe_delete_conflict_index_groups = $this->get_mysql_replace_delete_conflict_index_groups(
 			$table_name,
 			$columns,
 			$value_rows,
 			$probe_safe_rows,
 			$unique_index_groups
 		);
+		$delete_conflict_index_groups      = $this->get_mysql_replace_applicable_delete_conflict_index_groups(
+			$table_name,
+			$columns,
+			$value_rows,
+			$probe_safe_rows,
+			$safe_delete_conflict_index_groups,
+			$conflict_target
+		);
 		$all_delete_conflict_index_groups = $this->get_mysql_replace_delete_conflict_index_groups( $table_name, $columns, array(), array(), $unique_index_groups );
 		if (
 			null !== $conflict_target
-			&& count( $all_delete_conflict_index_groups ) > count( $delete_conflict_index_groups )
+			&& count( $all_delete_conflict_index_groups ) > count( $safe_delete_conflict_index_groups )
 		) {
 			$materialized_values_flow = $this->get_mysql_replace_values_delete_then_insert_flow(
 				$table_name,
@@ -2655,6 +2663,63 @@ WHERE option_name IN (
 	private function mysql_replace_conflict_indexes_are_probe_safe_for_rows( array $conflict_indexes, array $value_rows, array $probe_safe_rows ): bool {
 		foreach ( $value_rows as $row_index => $values ) {
 			if ( ! $this->mysql_upsert_conflict_indexes_are_probe_safe_for_row( $values, $probe_safe_rows[ $row_index ] ?? array(), $conflict_indexes ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+	private function get_mysql_replace_applicable_delete_conflict_index_groups( string $table_name, array $columns, array $value_rows, array $probe_safe_rows, array $conflict_index_groups, ?array $conflict_target ): array {
+		if ( empty( $value_rows ) || empty( $conflict_index_groups ) ) {
+			return $conflict_index_groups;
+		}
+
+		$target_conflict_indexes = null;
+		if ( null !== $conflict_target ) {
+			$target_conflict_indexes = $this->get_mysql_upsert_conflict_indexes( $columns, $conflict_target['parts'] ?? array() );
+		}
+
+		$applicable_groups = array();
+		foreach ( $conflict_index_groups as $conflict_indexes ) {
+			if (
+				null !== $target_conflict_indexes
+				&& $this->mysql_conflict_index_groups_match( $conflict_indexes, $target_conflict_indexes )
+			) {
+				$applicable_groups[] = $conflict_indexes;
+				continue;
+			}
+
+			if ( $this->has_duplicate_mysql_replace_conflict_value_rows( $value_rows, $probe_safe_rows, $conflict_indexes ) ) {
+				$applicable_groups[] = $conflict_indexes;
+				continue;
+			}
+
+			foreach ( $value_rows as $row_index => $values ) {
+				$conflict_exists = $this->mysql_upsert_conflict_exists( $table_name, $values, $conflict_indexes );
+				if ( null === $conflict_exists ) {
+					return $conflict_index_groups;
+				}
+
+				if ( $conflict_exists ) {
+					$applicable_groups[] = $conflict_indexes;
+					continue 2;
+				}
+			}
+		}
+		return $applicable_groups;
+	}
+	private function mysql_conflict_index_groups_match( array $left, array $right ): bool {
+		if ( count( $left ) !== count( $right ) ) {
+			return false;
+		}
+
+		foreach ( $left as $index => $left_part ) {
+			$right_part = $right[ $index ] ?? null;
+			if (
+				null === $right_part
+				|| (int) ( $left_part['index'] ?? -1 ) !== (int) ( $right_part['index'] ?? -2 )
+				|| 0 !== strcasecmp( (string) ( $left_part['column'] ?? '' ), (string) ( $right_part['column'] ?? '' ) )
+				|| (string) ( $left_part['sub_part'] ?? '' ) !== (string) ( $right_part['sub_part'] ?? '' )
+			) {
 				return false;
 			}
 		}
