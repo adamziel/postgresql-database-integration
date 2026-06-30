@@ -3385,14 +3385,11 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 				$rows
 			)
 		);
-		$this->assertSame(
+		$this->assert_last_postgresql_sql_statements(
+			$driver,
 			array(
-				array(
-					'sql'    => 'SELECT * FROM wptests_comments WHERE "comment_post_ID" = 7 AND comment_approved = \'1\' ORDER BY wptests_comments.comment_date_gmt ASC, "comment_ID" ASC',
-					'params' => array(),
-				),
-			),
-			$driver->get_last_postgresql_queries()
+				'SELECT * FROM "wptests_comments" WHERE "comment_post_ID" = 7 AND comment_approved = \'1\' ORDER BY wptests_comments.comment_date_gmt ASC, "comment_ID" ASC',
+			)
 		);
 	}
 
@@ -3424,14 +3421,11 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 				$rows
 			)
 		);
-		$this->assertSame(
+		$this->assert_last_postgresql_sql_statements(
+			$driver,
 			array(
-				array(
-					'sql'    => 'SELECT wptests_comments."comment_ID" FROM wptests_comments WHERE "comment_post_ID" = 7 AND comment_approved = \'1\' ORDER BY wptests_comments.comment_date_gmt ASC, "comment_ID" ASC',
-					'params' => array(),
-				),
-			),
-			$driver->get_last_postgresql_queries()
+				'SELECT wptests_comments."comment_ID" FROM "wptests_comments" WHERE "comment_post_ID" = 7 AND comment_approved = \'1\' ORDER BY wptests_comments.comment_date_gmt ASC, "comment_ID" ASC',
+			)
 		);
 	}
 
@@ -11312,14 +11306,11 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 				$rows
 			)
 		);
-		$this->assertSame(
+		$this->assert_last_postgresql_sql_statements(
+			$driver,
 			array(
-				array(
-					'sql'    => 'SELECT wptests_posts."ID" FROM wptests_posts WHERE wptests_posts.post_type = \'post\' AND wptests_posts.post_status = \'publish\' ORDER BY wptests_posts.post_date DESC, wptests_posts."ID" DESC LIMIT 3 OFFSET 0',
-					'params' => array(),
-				),
-			),
-			$driver->get_last_postgresql_queries()
+				'SELECT wptests_posts."ID" FROM "wptests_posts" WHERE wptests_posts.post_type = \'post\' AND wptests_posts.post_status = \'publish\' ORDER BY wptests_posts.post_date DESC, wptests_posts."ID" DESC LIMIT 3 OFFSET 0',
+			)
 		);
 	}
 
@@ -12510,7 +12501,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assertSame(
 			array(
 				array(
-					'sql'    => 'SELECT "__wp_pg_distinct"."term_id" AS "term_id" FROM (SELECT t.term_id AS "term_id", MIN(t.name) AS "__wp_pg_order_0" FROM wptests_terms AS t INNER JOIN wptests_term_taxonomy AS tt ON t.term_id = tt.term_id INNER JOIN wptests_term_relationships AS tr ON tr.term_taxonomy_id = tt.term_taxonomy_id WHERE tt.taxonomy IN (\'category\') AND tr.object_id IN (1) GROUP BY t.term_id) AS "__wp_pg_distinct" ORDER BY "__wp_pg_distinct"."__wp_pg_order_0" ASC LIMIT 10',
+					'sql'    => 'SELECT "__wp_pg_distinct"."term_id" AS "term_id" FROM (SELECT t.term_id AS "term_id", MIN(LOWER(t.name)) AS "__wp_pg_order_0" FROM wptests_terms AS t INNER JOIN wptests_term_taxonomy AS tt ON t.term_id = tt.term_id INNER JOIN wptests_term_relationships AS tr ON tr.term_taxonomy_id = tt.term_taxonomy_id WHERE tt.taxonomy IN (\'category\') AND tr.object_id IN (1) GROUP BY t.term_id) AS "__wp_pg_distinct" ORDER BY "__wp_pg_distinct"."__wp_pg_order_0" ASC LIMIT 10',
 					'params' => array(),
 				),
 			),
@@ -12550,7 +12541,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assertSame(
 			array(
 				array(
-					'sql'    => 'SELECT "__wp_pg_distinct"."term_id" AS "term_id" FROM (SELECT DISTINCT t.term_id AS "term_id", MIN(t.name) AS "__wp_pg_order_0" FROM wptests_terms AS t INNER JOIN wptests_term_taxonomy AS tt ON t.term_id = tt.term_id INNER JOIN wptests_term_relationships AS tr ON tr.term_taxonomy_id = tt.term_taxonomy_id WHERE tt.taxonomy IN (\'category\') AND tr.object_id IN (1) GROUP BY t.term_id) AS "__wp_pg_distinct" ORDER BY "__wp_pg_distinct"."__wp_pg_order_0" ASC LIMIT 10',
+					'sql'    => 'SELECT "__wp_pg_distinct"."term_id" AS "term_id" FROM (SELECT DISTINCT t.term_id AS "term_id", MIN(LOWER(t.name)) AS "__wp_pg_order_0" FROM wptests_terms AS t INNER JOIN wptests_term_taxonomy AS tt ON t.term_id = tt.term_id INNER JOIN wptests_term_relationships AS tr ON tr.term_taxonomy_id = tt.term_taxonomy_id WHERE tt.taxonomy IN (\'category\') AND tr.object_id IN (1) GROUP BY t.term_id) AS "__wp_pg_distinct" ORDER BY "__wp_pg_distinct"."__wp_pg_order_0" ASC LIMIT 10',
 					'params' => array(),
 				),
 			),
@@ -12598,7 +12589,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assertSame(
 			array(
 				array(
-					'sql'    => 'SELECT "__wp_pg_distinct"."term_id" AS "term_id", "__wp_pg_distinct"."term_taxonomy_id" AS "term_taxonomy_id", "__wp_pg_distinct"."taxonomy" AS "taxonomy", "__wp_pg_distinct"."description" AS "description", "__wp_pg_distinct"."parent" AS "parent", "__wp_pg_distinct"."count" AS "count" FROM (SELECT DISTINCT t.term_id AS "term_id", tt.term_taxonomy_id AS "term_taxonomy_id", tt.taxonomy AS "taxonomy", tt.description AS "description", tt.parent AS "parent", COUNT (p.post_type) AS "count", MIN(t.name) AS "__wp_pg_order_0" FROM wptests_terms AS t INNER JOIN wptests_term_taxonomy AS tt ON t.term_id = tt.term_id LEFT JOIN wptests_term_relationships AS r ON r.term_taxonomy_id = tt.term_taxonomy_id LEFT JOIN wptests_posts AS p ON p."ID" = r.object_id WHERE tt.taxonomy IN (\'wptests_tax\') AND (p.post_type = \'post\' OR p.post_type IS NULL) AND (p.post_status = \'publish\') GROUP BY t.term_id, tt.term_taxonomy_id, tt.taxonomy, tt.description, tt.parent) AS "__wp_pg_distinct" ORDER BY "__wp_pg_distinct"."__wp_pg_order_0" ASC',
+					'sql'    => 'SELECT "__wp_pg_distinct"."term_id" AS "term_id", "__wp_pg_distinct"."term_taxonomy_id" AS "term_taxonomy_id", "__wp_pg_distinct"."taxonomy" AS "taxonomy", "__wp_pg_distinct"."description" AS "description", "__wp_pg_distinct"."parent" AS "parent", "__wp_pg_distinct"."count" AS "count" FROM (SELECT DISTINCT t.term_id AS "term_id", tt.term_taxonomy_id AS "term_taxonomy_id", tt.taxonomy AS "taxonomy", tt.description AS "description", tt.parent AS "parent", COUNT (p.post_type) AS "count", MIN(LOWER(t.name)) AS "__wp_pg_order_0" FROM wptests_terms AS t INNER JOIN wptests_term_taxonomy AS tt ON t.term_id = tt.term_id LEFT JOIN wptests_term_relationships AS r ON r.term_taxonomy_id = tt.term_taxonomy_id LEFT JOIN wptests_posts AS p ON p."ID" = r.object_id WHERE tt.taxonomy IN (\'wptests_tax\') AND (p.post_type = \'post\' OR p.post_type IS NULL) AND (p.post_status = \'publish\') GROUP BY t.term_id, tt.term_taxonomy_id, tt.taxonomy, tt.description, tt.parent) AS "__wp_pg_distinct" ORDER BY "__wp_pg_distinct"."__wp_pg_order_0" ASC',
 					'params' => array(),
 				),
 			),
@@ -12702,7 +12693,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assertSame(
 			array(
 				array(
-					'sql'    => 'SELECT "__wp_pg_distinct"."ID" AS "ID" FROM (SELECT (wptests_users."ID") AS "ID", MIN(user_login) AS "__wp_pg_order_0" FROM wptests_users WHERE 1 = 1 GROUP BY (wptests_users."ID")) AS "__wp_pg_distinct" ORDER BY "__wp_pg_distinct"."__wp_pg_order_0" ASC LIMIT 50 OFFSET 0',
+					'sql'    => 'SELECT "__wp_pg_distinct"."ID" AS "ID" FROM (SELECT (wptests_users."ID") AS "ID", MIN(LOWER(user_login)) AS "__wp_pg_order_0" FROM wptests_users WHERE 1 = 1 GROUP BY (wptests_users."ID")) AS "__wp_pg_distinct" ORDER BY "__wp_pg_distinct"."__wp_pg_order_0" ASC LIMIT 50 OFFSET 0',
 					'params' => array(),
 				),
 			),
@@ -12994,14 +12985,11 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 
 		$this->assertCount( 1, $rows );
 		$this->assertSame( '1', $rows[0]->ID );
-		$this->assertSame(
+		$this->assert_last_postgresql_sql_statements(
+			$driver,
 			array(
-				array(
-					'sql'    => 'SELECT "ID" FROM wptests_posts ORDER BY "ID" ASC LIMIT 1 OFFSET 0',
-					'params' => array(),
-				),
-			),
-			$driver->get_last_postgresql_queries()
+				'SELECT "ID" FROM "wptests_posts" ORDER BY "ID" ASC LIMIT 1 OFFSET 0',
+			)
 		);
 
 		$found_rows = $driver->query( 'SELECT FOUND_ROWS()' );
@@ -13037,7 +13025,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assertCount( 2, $queries );
 		$this->assertStringNotContainsString( 'SQL_CALC_FOUND_ROWS', $queries[0]['sql'] );
 		$this->assertSame(
-			'SELECT "__wp_pg_distinct"."ID" AS "ID" FROM (SELECT wptests_users."ID" AS "ID", MIN(user_login) AS "__wp_pg_order_0" FROM wptests_users INNER JOIN wptests_usermeta ON (wptests_users."ID" = wptests_usermeta.user_id) WHERE 1 = 1 AND wptests_usermeta.meta_key = \'foo\' GROUP BY wptests_users."ID") AS "__wp_pg_distinct" ORDER BY "__wp_pg_distinct"."__wp_pg_order_0" ASC LIMIT 1 OFFSET 0',
+			'SELECT "__wp_pg_distinct"."ID" AS "ID" FROM (SELECT wptests_users."ID" AS "ID", MIN(LOWER(user_login)) AS "__wp_pg_order_0" FROM wptests_users INNER JOIN wptests_usermeta ON (wptests_users."ID" = wptests_usermeta.user_id) WHERE 1 = 1 AND wptests_usermeta.meta_key = \'foo\' GROUP BY wptests_users."ID") AS "__wp_pg_distinct" ORDER BY "__wp_pg_distinct"."__wp_pg_order_0" ASC LIMIT 1 OFFSET 0',
 			$queries[0]['sql']
 		);
 		$this->assertSame(

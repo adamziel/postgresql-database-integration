@@ -1666,9 +1666,22 @@ class WP_PostgreSQL_Driver {
 			'table_name'            => $table_reference['table'],
 			'table_name_end'        => $table_name_end,
 			'table_reference_start' => $table_reference_start,
-			'table_schema'          => $this->get_mysql_unqualified_dml_table_backend_schema( $table_reference['table'] ),
+			'table_schema'          => $this->get_mysql_usermeta_priming_select_table_backend_schema( $table_reference['table'] ),
 			'where_reference'       => $where['reference'],
 		);
+	}
+	private function get_mysql_usermeta_priming_select_table_backend_schema( string $table_name ): string {
+		return $this->has_postgresql_backend_connection()
+			? $this->get_mysql_unqualified_dml_table_backend_schema( $table_name )
+			: 'public';
+	}
+	private function has_postgresql_backend_connection(): bool {
+		try {
+			$this->connection->get_pdo();
+		} catch ( Error $e ) {
+			return false;
+		}
+		return true;
 	}
 	private function is_mysql_usermeta_priming_select_projection( array $tokens, int $start, int $end ): bool {
 		$ranges = $this->split_top_level_mysql_arguments( $tokens, $start, $end );
@@ -1797,11 +1810,7 @@ class WP_PostgreSQL_Driver {
 			'prefix_sql' => sprintf(
 				'SELECT %s FROM %s WHERE %s IN (',
 				$this->translate_simple_select_projection_to_postgresql( $tokens, 1, $shape['from_position'] ),
-				$this->get_mysql_main_database_table_reference_sql(
-					$tokens,
-					$shape['table_reference_start'],
-					$shape['table_name_end']
-				),
+				$this->get_mysql_usermeta_priming_select_table_reference_sql( $shape ),
 				$this->translate_mysql_token_sequence_to_postgresql(
 					$tokens,
 					$shape['where_reference']['start'],
@@ -1817,6 +1826,28 @@ class WP_PostgreSQL_Driver {
 				)
 			),
 		);
+	}
+	private function get_mysql_usermeta_priming_select_table_reference_sql( array $shape ): string {
+		if ( 'public' !== $shape['table_schema'] ) {
+			return $this->get_postgresql_schema_identifier( $shape['table_schema'], $shape['table_name'] );
+		}
+
+		$tokens = $shape['tokens'];
+		$start  = $shape['table_reference_start'];
+		$end    = $shape['table_name_end'];
+		if (
+			$start + 3 === $end
+			&& isset( $tokens[ $start + 1 ], $tokens[ $start + 2 ] )
+			&& WP_MySQL_Lexer::DOT_SYMBOL === $tokens[ $start + 1 ]->id
+		) {
+			return WP_MySQL_Lexer::DOUBLE_QUOTED_TEXT === $tokens[ $start + 2 ]->id
+				? $this->connection->quote_identifier( $tokens[ $start + 2 ]->get_value() )
+				: $this->translate_mysql_identifier_token_to_postgresql( $tokens[ $start + 2 ] );
+		}
+
+		return isset( $tokens[ $start ] ) && WP_MySQL_Lexer::DOUBLE_QUOTED_TEXT === $tokens[ $start ]->id
+			? $this->connection->quote_identifier( $tokens[ $start ]->get_value() )
+			: $this->translate_mysql_identifier_token_to_postgresql( $tokens[ $start ] ?? null );
 	}
 	private function get_mysql_usermeta_priming_select_slot_sql( array $shape ): array {
 		$slot_sql = array();
