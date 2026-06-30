@@ -4132,10 +4132,12 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 
 		$driver->query(
 			'CREATE TABLE wptests_woocommerce_sessions (
-				session_id INTEGER PRIMARY KEY,
-				session_key TEXT NOT NULL UNIQUE,
-				session_value TEXT NOT NULL,
-				session_expiry INTEGER NOT NULL
+				session_id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				session_key char(32) NOT NULL,
+				session_value longtext NOT NULL,
+				session_expiry bigint(20) unsigned NOT NULL,
+				PRIMARY KEY (session_id),
+				UNIQUE KEY session_key (session_key)
 			)'
 		);
 		$this->install_mysql_schema_metadata_fixture(
@@ -4484,18 +4486,13 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assertSame( array( 'id', 'slug', 'value' ), $translation['columns'] );
 		$this->assertSame(
 			'INSERT INTO "metadata_order_upsert" ("id", "slug", "value") VALUES (1, \'first\', \'old\') ON CONFLICT ("id") DO UPDATE SET "slug" = excluded."slug", "value" = excluded."value"',
-			$translation['sql']
+			$this->remove_real_pgsql_test_schema_qualifiers( $translation['sql'] )
 		);
 
 		$this->assertSame( 1, $driver->query( $insert ) );
 		$this->assertSame(
-			array(
-				array(
-					'sql'    => 'INSERT INTO "metadata_order_upsert" ("id", "slug", "value") VALUES (1, \'first\', \'old\') ON CONFLICT ("id") DO UPDATE SET "slug" = excluded."slug", "value" = excluded."value"',
-					'params' => array(),
-				),
-			),
-			$driver->get_last_postgresql_queries()
+			'INSERT INTO "metadata_order_upsert" ("id", "slug", "value") VALUES (1, \'first\', \'old\') ON CONFLICT ("id") DO UPDATE SET "slug" = excluded."slug", "value" = excluded."value"',
+			$this->get_last_single_postgresql_sql( $driver )
 		);
 
 		$update = "INSERT INTO `metadata_order_upsert` VALUES (1, 'second', 'new')
@@ -7252,7 +7249,6 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 
 		$driver->query(
 			'CREATE TABLE wptests_update_joined_order (
-				ctid INTEGER UNIQUE NOT NULL,
 				id INTEGER PRIMARY KEY,
 				status TEXT NOT NULL
 			)'
@@ -7264,7 +7260,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 				meta_value TEXT NOT NULL
 			)'
 		);
-		$driver->query( "INSERT INTO wptests_update_joined_order (ctid, id, status) VALUES (1, 1, 'draft'), (2, 2, 'draft'), (3, 3, 'publish')" );
+		$driver->query( "INSERT INTO wptests_update_joined_order (id, status) VALUES (1, 'draft'), (2, 'draft'), (3, 'publish')" );
 		$driver->query( "INSERT INTO wptests_update_joined_order_meta (post_id, meta_key, meta_value) VALUES (1, '_status', 'private'), (2, '_status', 'scheduled'), (3, '_other', 'ignore')" );
 
 		$update = "UPDATE wptests_update_joined_order AS p
@@ -7317,7 +7313,6 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 
 		$driver->query(
 			'CREATE TABLE wptests_update_joined_limit (
-				ctid INTEGER UNIQUE NOT NULL,
 				id INTEGER PRIMARY KEY,
 				status TEXT NOT NULL
 			)'
@@ -7330,11 +7325,11 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 			)'
 		);
 		$driver->query(
-			"INSERT INTO wptests_update_joined_limit (ctid, id, status) VALUES
-				(1, 1, 'queued'),
-				(2, 2, 'queued'),
-				(3, 3, 'queued'),
-				(4, 4, 'done')"
+			"INSERT INTO wptests_update_joined_limit (id, status) VALUES
+				(1, 'queued'),
+				(2, 'queued'),
+				(3, 'queued'),
+				(4, 'done')"
 		);
 		$driver->query(
 			"INSERT INTO wptests_update_joined_limit_meta (post_id, priority, meta_value) VALUES
@@ -8221,18 +8216,17 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 
 		$driver->query(
 			'CREATE TABLE wptests_update_order_limit_exec (
-				ctid INTEGER UNIQUE NOT NULL,
 				id INTEGER PRIMARY KEY,
 				priority INTEGER NOT NULL,
 				status TEXT NOT NULL
 			)'
 		);
 		$driver->query(
-			"INSERT INTO wptests_update_order_limit_exec (ctid, id, priority, status) VALUES
-				(1, 1, 40, 'queued'),
-				(2, 2, 20, 'queued'),
-				(3, 3, 10, 'queued'),
-				(4, 4, 30, 'queued')"
+			"INSERT INTO wptests_update_order_limit_exec (id, priority, status) VALUES
+				(1, 40, 'queued'),
+				(2, 20, 'queued'),
+				(3, 10, 'queued'),
+				(4, 30, 'queued')"
 		);
 
 		$update = "UPDATE wptests_update_order_limit_exec AS q
@@ -8262,24 +8256,18 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 
 		$driver->query(
 			'CREATE TABLE wptests_update_ordered (
-				ctid INTEGER UNIQUE NOT NULL,
 				id INTEGER PRIMARY KEY,
 				status TEXT NOT NULL
 			)'
 		);
-		$driver->query( "INSERT INTO wptests_update_ordered (ctid, id, status) VALUES (1, 1, 'draft'), (2, 2, 'publish'), (3, 3, 'draft')" );
+		$driver->query( "INSERT INTO wptests_update_ordered (id, status) VALUES (1, 'draft'), (2, 'publish'), (3, 'draft')" );
 
 		$update = "UPDATE `wptests_update_ordered` SET `status` = 'archived' WHERE `status` = 'draft' ORDER BY `id` DESC";
 
 		$this->assertSame( 2, $driver->query( $update ) );
 		$this->assertSame(
-			array(
-				array(
-					'sql'    => 'UPDATE "wptests_update_ordered" SET "status" = \'archived\' WHERE (ctid IN (SELECT ctid FROM "wptests_update_ordered" WHERE "status" = \'draft\' ORDER BY "id" DESC)) AND ("status" IS DISTINCT FROM (\'archived\'))',
-					'params' => array(),
-				),
-			),
-			$driver->get_last_postgresql_queries()
+			'UPDATE "wptests_update_ordered" SET "status" = \'archived\' WHERE (ctid IN (SELECT ctid FROM "wptests_update_ordered" WHERE "status" = \'draft\' ORDER BY "id" DESC)) AND ("status" IS DISTINCT FROM (\'archived\'))',
+			$this->get_last_single_postgresql_sql( $driver )
 		);
 
 		$rows = $driver->query( 'SELECT id, status FROM wptests_update_ordered ORDER BY id' );
@@ -8562,24 +8550,18 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 
 		$driver->query(
 			'CREATE TABLE wptests_delete_ordered (
-				ctid INTEGER UNIQUE NOT NULL,
 				id INTEGER PRIMARY KEY,
 				status TEXT NOT NULL
 			)'
 		);
-		$driver->query( "INSERT INTO wptests_delete_ordered (ctid, id, status) VALUES (1, 1, 'stale'), (2, 2, 'keep'), (3, 3, 'stale')" );
+		$driver->query( "INSERT INTO wptests_delete_ordered (id, status) VALUES (1, 'stale'), (2, 'keep'), (3, 'stale')" );
 
 		$delete = "DELETE FROM `wptests_delete_ordered` WHERE `status` = 'stale' ORDER BY `id` DESC";
 
 		$this->assertSame( 2, $driver->query( $delete ) );
 		$this->assertSame(
-			array(
-				array(
-					'sql'    => 'DELETE FROM "wptests_delete_ordered" WHERE ctid IN (SELECT ctid FROM "wptests_delete_ordered" WHERE "status" = \'stale\' ORDER BY "id" DESC)',
-					'params' => array(),
-				),
-			),
-			$driver->get_last_postgresql_queries()
+			'DELETE FROM "wptests_delete_ordered" WHERE ctid IN (SELECT ctid FROM "wptests_delete_ordered" WHERE "status" = \'stale\' ORDER BY "id" DESC)',
+			$this->get_last_single_postgresql_sql( $driver )
 		);
 
 		$rows = $driver->query( 'SELECT id, status FROM wptests_delete_ordered ORDER BY id' );
@@ -8678,19 +8660,18 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 
 		$driver->query(
 			'CREATE TABLE wptests_delete_order_exec (
-				ctid INTEGER PRIMARY KEY,
-				id INTEGER NOT NULL,
+				id INTEGER PRIMARY KEY,
 				priority INTEGER NOT NULL,
 				state TEXT NOT NULL
 			)'
 		);
 		$driver->query(
-			"INSERT INTO wptests_delete_order_exec (ctid, id, priority, state) VALUES
-				(1, 1, 10, 'stale'),
-				(2, 2, 20, 'stale'),
-				(3, 3, 30, 'stale'),
-				(4, 4, 40, 'stale'),
-				(5, 5, 50, 'keep')"
+			"INSERT INTO wptests_delete_order_exec (id, priority, state) VALUES
+				(1, 10, 'stale'),
+				(2, 20, 'stale'),
+				(3, 30, 'stale'),
+				(4, 40, 'stale'),
+				(5, 50, 'keep')"
 		);
 
 		$delete = "DELETE FROM wptests_delete_order_exec
@@ -8734,11 +8715,10 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 
 		$driver->query(
 			'CREATE TABLE wptests_delete_limit_only (
-				ctid INTEGER PRIMARY KEY,
-				id INTEGER NOT NULL
+				id INTEGER PRIMARY KEY
 			)'
 		);
-		$driver->query( 'INSERT INTO wptests_delete_limit_only (ctid, id) VALUES (1, 1), (2, 2), (3, 3), (4, 4)' );
+		$driver->query( 'INSERT INTO wptests_delete_limit_only (id) VALUES (1), (2), (3), (4)' );
 
 		$this->assertSame( 2, $driver->query( 'DELETE FROM wptests_delete_limit_only LIMIT 1, 2' ) );
 
@@ -32891,6 +32871,16 @@ $$'
 				$this->sync_mysql_schema_catalog_side_effects_for_schema(
 					$metadata_tables,
 					$metadata_schema
+				);
+				$this->seed_mysql_column_metadata_introspection_cache_for_created_tables(
+					$metadata_tables,
+					$metadata_schema,
+					$query
+				);
+				$this->seed_mysql_show_create_table_metadata_introspection_cache_for_created_tables(
+					$metadata_tables,
+					$metadata_schema,
+					$query
 				);
 
 				foreach ( $metadata_tables as $metadata ) {

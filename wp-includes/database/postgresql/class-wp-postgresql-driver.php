@@ -1355,12 +1355,6 @@ class WP_PostgreSQL_Driver {
 			return $this->get_unsupported_mysql_create_table_statement_message( $tokens, $position + 1 );
 		}
 
-		$statement_token = $tokens[ $position ] ?? null;
-		$known_message   = $this->get_mysql_unsupported_statement_message( 'create', $statement_token->id ?? null );
-		if ( null !== $known_message ) {
-			return $known_message;
-		}
-
 		$statement_end = $this->get_mysql_statement_end_position( $tokens, 1 );
 		if ( null === $statement_end ) {
 			return 'Unsupported CREATE statement.';
@@ -1368,6 +1362,12 @@ class WP_PostgreSQL_Driver {
 
 		if ( null !== $this->consume_mysql_table_administration_token_sequence( $tokens, $position, self::MYSQL_SPATIAL_REFERENCE_SYSTEM_STATEMENT_TOKENS ) ) {
 			return 'Unsupported CREATE SPATIAL REFERENCE SYSTEM statement.';
+		}
+
+		$statement_token = $tokens[ $position ] ?? null;
+		$known_message   = $this->get_mysql_unsupported_statement_message( 'create', $statement_token->id ?? null );
+		if ( null !== $known_message ) {
+			return $known_message;
 		}
 
 		return 'Unsupported CREATE statement.';
@@ -5634,7 +5634,7 @@ $wp_mysql_primary_index_comment$',
 			throw new InvalidArgumentException( 'Unsupported CREATE INDEX statement.' );
 		}
 
-		$table_schema = $this->get_mysql_schema_aware_table_backend_schema( $table_reference, 'CREATE INDEX' );
+		$table_schema = $this->get_mysql_standalone_index_table_backend_schema( $table_reference, 'CREATE INDEX' );
 		if ( ! isset( $tokens[ $position ] ) || WP_MySQL_Lexer::OPEN_PAR_SYMBOL !== $tokens[ $position ]->id ) {
 			throw new InvalidArgumentException( 'Unsupported CREATE INDEX statement.' );
 		}
@@ -6082,6 +6082,23 @@ $wp_mysql_primary_index_comment$',
 
 		$position = $value_position + 1;
 		return $value_token;
+	}
+	private function get_mysql_standalone_index_table_backend_schema( array $table_reference, string $statement_type ): string {
+		$requested_schema = $table_reference['schema'];
+		if ( null !== $requested_schema ) {
+			if ( 0 === strcasecmp( $requested_schema, 'information_schema' ) ) {
+				throw new InvalidArgumentException( 'Unsupported information_schema query.' );
+			}
+
+			if (
+				0 !== strcasecmp( $requested_schema, $this->main_db_name )
+				&& 0 !== strcasecmp( $requested_schema, 'public' )
+				&& 0 !== strcasecmp( $requested_schema, $this->db_name )
+			) {
+				throw new InvalidArgumentException( sprintf( 'Unsupported %s statement.', $statement_type ) );
+			}
+		}
+		return $this->get_mysql_schema_aware_table_backend_schema( $table_reference, $statement_type );
 	}
 	private function get_mysql_schema_aware_table_backend_schema( array $table_reference, string $statement_type ): string {
 		$requested_schema = $table_reference['schema'];
@@ -8017,7 +8034,7 @@ $wp_mysql_primary_index_comment$',
 		}
 
 		$table_schema = null === $table_schema
-			? $this->get_mysql_schema_aware_table_backend_schema( $table_reference, $statement_type )
+			? $this->get_mysql_standalone_index_table_backend_schema( $table_reference, $statement_type )
 			: $table_schema;
 		$table_name   = $table_reference['table'];
 		return array(
