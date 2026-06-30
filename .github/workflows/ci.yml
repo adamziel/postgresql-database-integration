@@ -8,8 +8,8 @@ on:
       - trunk
 
 jobs:
-  smoke:
-    name: PostgreSQL smoke test
+  test:
+    name: PostgreSQL tests
     runs-on: ubuntu-latest
 
     services:
@@ -41,8 +41,18 @@ jobs:
       - name: Validate Composer metadata
         run: composer validate --strict --no-check-publish
 
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
+
       - name: Lint PHP files
         run: composer run lint
+
+      - name: Run PostgreSQL PHPUnit suite
+        run: composer run test-postgresql
+        env:
+          PGSQL_TEST_DSN: pgsql:host=127.0.0.1;port=5432;dbname=wordpress_test
+          PGSQL_TEST_USER: wordpress
+          PGSQL_TEST_PASSWORD: wordpress
 
       - name: Run PostgreSQL smoke test
         run: composer run test-smoke

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit bootstrap="tests/bootstrap-postgresql.php" colors="true">
+	<testsuites>
+		<testsuite name="PostgreSQL">
+			<file>tests/WP_PostgreSQL_Connection_Tests.php</file>
+			<file>tests/WP_PostgreSQL_Create_Table_Translator_Tests.php</file>
+			<file>tests/WP_PostgreSQL_Driver_RegExp_Tests.php</file>
+			<file>tests/WP_PostgreSQL_Driver_Tests.php</file>
+			<file>tests/WP_PostgreSQL_DB_Tests.php</file>
+			<file>tests/WP_PostgreSQL_Install_Functions_Tests.php</file>
+		</testsuite>
+	</testsuites>
+</phpunit>

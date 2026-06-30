@@ -57,10 +57,22 @@ Install Composer metadata and run local checks:
 
 ```bash
 composer validate --strict --no-check-publish
+composer install
 composer run lint
 ```
 
-Run the PostgreSQL smoke test against a PostgreSQL database:
+Run the full PostgreSQL PHPUnit suite against a PostgreSQL database:
+
+```bash
+PGSQL_TEST_DSN='pgsql:host=127.0.0.1;port=5432;dbname=wordpress_test' \
+PGSQL_TEST_USER='wordpress' \
+PGSQL_TEST_PASSWORD='wordpress' \
+composer run test-postgresql
+```
+
+`composer run test` is an alias for the full PostgreSQL PHPUnit suite.
+
+Run the focused PostgreSQL smoke test against a PostgreSQL database:
 
 ```bash
 PGSQL_TEST_DSN='pgsql:host=127.0.0.1;port=5432;dbname=wordpress_test' \
@@ -77,16 +89,18 @@ rows, verifies a MySQL function rewrite, and checks `SHOW TABLES` support.
 
 GitHub Actions workflow: `.github/workflows/ci.yml`.
 
-The workflow starts a PostgreSQL 16 service, validates Composer metadata, lints
-all PHP files, and runs the standalone PostgreSQL smoke test through Composer.
+The workflow starts a PostgreSQL 16 service, validates Composer metadata, installs
+Composer development dependencies, lints all PHP files, runs the full PostgreSQL
+PHPUnit suite with `composer run test-postgresql`, and keeps the standalone
+PostgreSQL smoke test in the CI path.
 
 ## Current Limitations
 
 - This is an extraction of the PostgreSQL work from the SQLite Database
   Integration monorepo and is not a published WordPress.org plugin.
 - Existing MySQL databases are not migrated.
-- Full WordPress PHPUnit and E2E coverage is not included yet; the current CI
-  path is a focused driver smoke test.
+- Full WordPress E2E coverage is not included yet; CI runs the standalone
+  PostgreSQL PHPUnit suite and a focused driver smoke test.
 - PostgreSQL version support policy is not finalized beyond the PostgreSQL 16
   CI target.
 - The driver still translates MySQL-flavored SQL because WordPress and many
