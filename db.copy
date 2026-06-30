@@ -1,0 +1,43 @@
+<?php
+/**
+ * Plugin Name: PostgreSQL integration (Drop-in)
+ * Version: 0.1.0
+ * Author: The WordPress Team
+ *
+ * Copy this file to wp-content/db.php to load the PostgreSQL database
+ * integration before WordPress creates the wpdb instance.
+ *
+ * @package wp-postgresql-integration
+ */
+
+define( 'POSTGRESQL_DB_DROPIN_VERSION', '0.1.0' );
+
+$postgresql_plugin_implementation_folder_path = '{POSTGRESQL_IMPLEMENTATION_FOLDER_PATH}';
+if ( ! file_exists( $postgresql_plugin_implementation_folder_path ) ) {
+	$postgresql_plugin_implementation_folder_path = realpath( __DIR__ . '/plugins/postgresql-database-integration' );
+}
+
+if (
+	! $postgresql_plugin_implementation_folder_path
+	|| ! file_exists( $postgresql_plugin_implementation_folder_path . '/wp-includes/db.php' )
+) {
+	return;
+}
+
+$database_engine = defined( 'DB_ENGINE' )
+	? DB_ENGINE
+	: ( defined( 'DATABASE_ENGINE' ) ? DATABASE_ENGINE : 'postgresql' );
+$database_engine = strtolower( (string) $database_engine );
+if ( in_array( $database_engine, array( 'postgres', 'pgsql', 'postgresql' ), true ) ) {
+	$database_engine = 'postgresql';
+}
+
+if ( ! defined( 'DATABASE_TYPE' ) ) {
+	define( 'DATABASE_TYPE', $database_engine );
+}
+
+if ( ! defined( 'DB_ENGINE' ) ) {
+	define( 'DB_ENGINE', $database_engine );
+}
+
+require_once $postgresql_plugin_implementation_folder_path . '/wp-includes/db.php';
