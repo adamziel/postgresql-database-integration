@@ -7233,7 +7233,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 					'params' => array(),
 				),
 			),
-			$driver->get_last_postgresql_queries()
+			$this->get_last_schema_postgresql_queries( $driver )
 		);
 
 		$rows = $driver->query( 'SELECT id, status FROM wptests_update_joined ORDER BY id' );
@@ -7499,7 +7499,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 					'params' => array(),
 				),
 			),
-			$driver->get_last_postgresql_queries()
+			$this->get_last_schema_postgresql_queries( $driver )
 		);
 
 		$rows = $driver->query( 'SELECT post_id, status FROM wptests_update_joined_using ORDER BY post_id' );
@@ -7723,6 +7723,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		);
 
 		$this->assertNotNull( $sql );
+		$sql = $this->remove_real_pgsql_test_schema_qualifiers( $sql );
 		$this->assertStringContainsString( 'UPDATE "wptests_options" AS "o" SET "option_value" = "mysql_update_values"."mysql_update_value_0"', $sql );
 		$this->assertStringContainsString( 'SELECT "o".ctid AS "mysql_update_target_ctid", "it"."TABLE_TYPE" AS "mysql_update_value_0"', $sql );
 		$this->assertStringContainsString( 'FROM "wptests_options" AS "o" JOIN (', $sql );
@@ -7803,10 +7804,11 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		);
 
 		$this->assertNotNull( $sql );
+		$sql = $this->remove_real_pgsql_test_schema_qualifiers( $sql );
 		$this->assertStringContainsString( 'UPDATE "wptests_options" AS "o" SET "option_value" = "mysql_update_values"."mysql_update_value_0"', $sql );
 		$this->assertStringContainsString( 'WHERE "it"."TABLE_SCHEMA" IN ( SELECT \'wptests\' )', $sql );
 		$this->assertStringNotContainsString( 'DATABASE()', $sql );
-		$this->assertStringNotContainsString( 'information_schema.tables', $sql );
+		$this->assertStringNotContainsString( '__wp_mysql_information_schema', $sql );
 	}
 
 	/**
@@ -7863,8 +7865,10 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 			$update
 		);
 
+		$this->assertNotNull( $sql );
+		$sql = $this->remove_real_pgsql_test_schema_qualifiers( $sql );
 		$this->assertStringStartsWith( 'UPDATE "wptests_update_right_source" AS "s" SET "value" = "mysql_update_values"."mysql_update_value_0"', $sql );
-		$this->assertStringContainsString( 'FROM (SELECT "s".ctid AS "mysql_update_target_ctid", t.value AS "mysql_update_value_0" FROM wptests_update_right_source AS s RIGHT JOIN wptests_update_right_target AS t ON t.id = s.id', $sql );
+		$this->assertStringContainsString( 'FROM (SELECT "s".ctid AS "mysql_update_target_ctid", t.value AS "mysql_update_value_0" FROM "wptests_update_right_source" AS "s" RIGHT JOIN "wptests_update_right_target" AS "t" ON t.id = s.id', $sql );
 		$this->assertStringContainsString( '"s".ctid = "mysql_update_values"."mysql_update_target_ctid"', $sql );
 	}
 
@@ -7953,7 +7957,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 					'params' => array(),
 				),
 			),
-			$driver->get_last_postgresql_queries()
+			$this->get_last_schema_postgresql_queries( $driver )
 		);
 
 		$rows = $driver->query( 'SELECT id, status FROM wptests_update_multi_source ORDER BY id' );
@@ -8107,6 +8111,8 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 			$update
 		);
 
+		$this->assertNotNull( $sql );
+		$sql = $this->remove_real_pgsql_test_schema_qualifiers( $sql );
 		$this->assertStringStartsWith(
 			'UPDATE "wptests_update_left_joined" AS "p" SET "status" = "mysql_update_values"."mysql_update_value_0" FROM (SELECT "p".ctid AS "mysql_update_target_ctid", COALESCE(pm.meta_value, \'orphan\') AS "mysql_update_value_0"',
 			$sql
@@ -8984,6 +8990,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		);
 
 		$this->assertNotNull( $sql );
+		$sql = $this->remove_real_pgsql_test_schema_qualifiers( $sql );
 		$this->assertStringContainsString( 'WITH mysql_delete_rows AS MATERIALIZED', $sql );
 		$this->assertStringContainsString( 'SELECT "o".ctid AS "mysql_delete_target_0_ctid"', $sql );
 		$this->assertStringContainsString( 'FROM "wptests_options" AS "o" JOIN (', $sql );
@@ -9254,11 +9261,12 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		);
 
 		$this->assertNotNull( $sql );
+		$sql = $this->remove_real_pgsql_test_schema_qualifiers( $sql );
 		$this->assertStringContainsString( 'DELETE FROM "wptests_options" AS "o" WHERE "o".ctid IN (SELECT "o".ctid FROM "wptests_options" AS "o" JOIN (', $sql );
 		$this->assertStringContainsString( ') AS "it" ON "o"."option_name" = "it"."TABLE_NAME"', $sql );
 		$this->assertStringContainsString( 'WHERE "it"."TABLE_SCHEMA" = \'wptests\'', $sql );
 		$this->assertStringContainsString( '"o"."autoload" = \'yes\'', $sql );
-		$this->assertStringNotContainsString( 'information_schema.tables', $sql );
+		$this->assertStringNotContainsString( '__wp_mysql_information_schema', $sql );
 	}
 
 	/**
@@ -9280,10 +9288,11 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		);
 
 		$this->assertNotNull( $sql );
+		$sql = $this->remove_real_pgsql_test_schema_qualifiers( $sql );
 		$this->assertStringContainsString( 'DELETE FROM "wptests_options" AS "o" WHERE "o".ctid IN (SELECT "o".ctid FROM "wptests_options" AS "o" JOIN (', $sql );
 		$this->assertStringContainsString( 'WHERE "it"."TABLE_SCHEMA" IN ( SELECT \'wptests\' )', $sql );
 		$this->assertStringNotContainsString( 'DATABASE()', $sql );
-		$this->assertStringNotContainsString( 'information_schema.tables', $sql );
+		$this->assertStringNotContainsString( '__wp_mysql_information_schema', $sql );
 	}
 
 	/**
@@ -9429,7 +9438,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 					'params' => array(),
 				),
 			),
-			$driver->get_last_postgresql_queries()
+			$this->get_last_schema_postgresql_queries( $driver )
 		);
 
 		$rows = $driver->query( "SELECT option_value, autoload FROM wp_options WHERE option_name = 'key1'" );

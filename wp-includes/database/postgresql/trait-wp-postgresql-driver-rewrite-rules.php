@@ -548,6 +548,7 @@ WHERE option_name IN (
 
 		$context = array(
 			'sources'                     => $parsed_sources['sources'],
+			'source_replacements'         => $parsed_sources['source_replacements'],
 			'join_predicate_ranges'       => $parsed_sources['join_predicate_ranges'],
 			'join_predicate_replacements' => $parsed_sources['join_predicate_replacements'],
 			'using_columns'               => $parsed_sources['using_columns'],
