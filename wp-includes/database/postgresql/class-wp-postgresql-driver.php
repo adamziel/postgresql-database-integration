@@ -12406,7 +12406,7 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 		);
 	}
 	private function get_mysql_insert_set_identifier_token_value( ?WP_MySQL_Token $token ): ?string {
-		$identifier = $this->get_mysql_dml_identifier_token_value( $token );
+		$identifier = $this->get_mysql_dml_identifier_or_double_quoted_token_value( $token );
 		if ( null !== $identifier ) {
 			return $identifier;
 		}
@@ -14479,13 +14479,13 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 		return null !== $target_reference && empty( $target_reference['derived'] ) ? $target_reference : null;
 	}
 	private function parse_mysql_joined_update_assignment_target( array $tokens, int $position, int $end, array $table_references ): ?array {
-		$first_identifier = $this->get_mysql_dml_identifier_token_value( $tokens[ $position ] ?? null );
+		$first_identifier = $this->get_mysql_dml_identifier_or_double_quoted_token_value( $tokens[ $position ] ?? null );
 		if ( null === $first_identifier ) {
 			return null;
 		}
 
 		if ( $position + 2 < $end && WP_MySQL_Lexer::DOT_SYMBOL === ( $tokens[ $position + 1 ]->id ?? null ) ) {
-			$column = $this->get_mysql_dml_identifier_token_value( $tokens[ $position + 2 ] ?? null );
+			$column = $this->get_mysql_dml_identifier_or_double_quoted_token_value( $tokens[ $position + 2 ] ?? null );
 			if ( null === $column ) {
 				return null;
 			}
@@ -14857,13 +14857,13 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 		unset( $values );
 	}
 	private function parse_simple_mysql_update_assignment_target( string $table_name, ?string $alias, array $tokens, int $position, int $end ): ?array {
-		$first_identifier = $this->get_mysql_dml_identifier_token_value( $tokens[ $position ] ?? null );
+		$first_identifier = $this->get_mysql_dml_identifier_or_double_quoted_token_value( $tokens[ $position ] ?? null );
 		if ( null === $first_identifier ) {
 			return null;
 		}
 
 		if ( $position + 2 < $end && WP_MySQL_Lexer::DOT_SYMBOL === ( $tokens[ $position + 1 ]->id ?? null ) ) {
-			$column = $this->get_mysql_dml_identifier_token_value( $tokens[ $position + 2 ] ?? null );
+			$column = $this->get_mysql_dml_identifier_or_double_quoted_token_value( $tokens[ $position + 2 ] ?? null );
 			if ( null === $column || ! $this->is_mysql_dml_table_qualifier( $first_identifier, $table_name, $alias ) ) {
 				return null;
 			}
@@ -16638,10 +16638,28 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 		);
 	}
 	private function get_postgresql_table_identifier_sql( string $table_schema, string $table_name ): string {
-		if ( 'public' !== $table_schema ) {
-			return $this->get_postgresql_schema_identifier( $table_schema, $table_name );
+		if ( ! $this->should_qualify_postgresql_table_schema( $table_schema ) ) {
+			return $this->connection->quote_identifier( $table_name );
 		}
-		return $this->connection->quote_identifier( $table_name );
+		return $this->get_postgresql_schema_identifier( $table_schema, $table_name );
+	}
+	private function should_qualify_postgresql_table_schema( string $table_schema ): bool {
+		if ( 0 === strcasecmp( $table_schema, 'public' ) ) {
+			return false;
+		}
+
+		$uses_explicit_catalog_schema = 0 !== strcasecmp( $this->db_name, $this->main_db_name )
+			&& 0 !== strcasecmp( $this->db_name, 'public' )
+			&& 0 !== strcasecmp( $this->db_name, 'information_schema' )
+			&& ! $this->is_postgresql_internal_schema( $this->db_name );
+		if ( $uses_explicit_catalog_schema ) {
+			return true;
+		}
+
+		if ( 0 === strcasecmp( $table_schema, $this->get_current_postgresql_schema() ) ) {
+			return false;
+		}
+		return true;
 	}
 	private function get_non_strict_dml_default_sql_for_column( array $column_metadata ): ?string {
 		if ( 'NO' !== strtoupper( (string) ( $column_metadata['is_nullable'] ?? '' ) ) ) {
@@ -23159,7 +23177,7 @@ END',
 		$identifiers = array();
 
 		while ( isset( $tokens[ $position ] ) ) {
-			$identifier = $this->get_mysql_dml_identifier_token_value( $tokens[ $position ] );
+			$identifier = $this->get_mysql_dml_identifier_or_double_quoted_token_value( $tokens[ $position ] );
 			if ( null === $identifier ) {
 				return null;
 			}
@@ -23383,7 +23401,7 @@ END',
 		return false;
 	}
 	private function parse_mysql_upsert_assignment_target( string $table_name, array $tokens, int $position, int $end ): ?array {
-		$first_identifier = $this->get_mysql_dml_identifier_token_value( $tokens[ $position ] ?? null );
+		$first_identifier = $this->get_mysql_dml_identifier_or_double_quoted_token_value( $tokens[ $position ] ?? null );
 		if ( null === $first_identifier ) {
 			return null;
 		}
@@ -23395,13 +23413,13 @@ END',
 			);
 		}
 
-		$second_identifier = $this->get_mysql_dml_identifier_token_value( $tokens[ $position + 2 ] ?? null );
+		$second_identifier = $this->get_mysql_dml_identifier_or_double_quoted_token_value( $tokens[ $position + 2 ] ?? null );
 		if ( null === $second_identifier ) {
 			return null;
 		}
 
 		if ( $position + 4 < $end && WP_MySQL_Lexer::DOT_SYMBOL === ( $tokens[ $position + 3 ]->id ?? null ) ) {
-			$third_identifier = $this->get_mysql_dml_identifier_token_value( $tokens[ $position + 4 ] ?? null );
+			$third_identifier = $this->get_mysql_dml_identifier_or_double_quoted_token_value( $tokens[ $position + 4 ] ?? null );
 			if (
 				null === $third_identifier
 				|| 0 !== strcasecmp( $first_identifier, $this->main_db_name )
@@ -26419,7 +26437,7 @@ END',
 		if ( isset( $tokens[ $start ] ) && WP_MySQL_Lexer::DOUBLE_QUOTED_TEXT === $tokens[ $start ]->id ) {
 			$table_name   = $tokens[ $start ]->get_value();
 			$table_schema = $this->get_mysql_unqualified_dml_table_backend_schema( $table_name );
-			if ( 'public' !== $table_schema ) {
+			if ( $this->should_qualify_postgresql_table_schema( $table_schema ) ) {
 				return $this->get_postgresql_schema_identifier( $table_schema, $table_name );
 			}
 			return $this->connection->quote_identifier( $table_name );
@@ -26428,7 +26446,7 @@ END',
 		$table_name = $this->get_mysql_identifier_token_value( $tokens[ $start ] ?? null, true );
 		if ( null !== $table_name ) {
 			$table_schema = $this->get_mysql_unqualified_dml_table_backend_schema( $table_name );
-			if ( 'public' !== $table_schema ) {
+			if ( $this->should_qualify_postgresql_table_schema( $table_schema ) ) {
 				return $this->get_postgresql_schema_identifier( $table_schema, $table_name );
 			}
 		}
@@ -30630,6 +30648,16 @@ $wp_mysql_%1$s_domain$',
 			return $token->get_value();
 		}
 		return null;
+	}
+	private function get_mysql_dml_identifier_or_double_quoted_token_value( ?WP_MySQL_Token $token ): ?string {
+		$identifier = $this->get_mysql_dml_identifier_token_value( $token );
+		if ( null !== $identifier ) {
+			return $identifier;
+		}
+
+		return null !== $token && WP_MySQL_Lexer::DOUBLE_QUOTED_TEXT === $token->id
+			? $token->get_value()
+			: null;
 	}
 	private function is_mysql_identifier_like_token_value( ?WP_MySQL_Token $token, string $value ): bool {
 		if ( null === $token ) {
