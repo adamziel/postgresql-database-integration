@@ -1,49 +1,99 @@
 <?php
-/**
- * Savepoint recorder used by PostgreSQL connection tests.
- *
- * @package wp-postgresql-integration
- */
 
+/**
+ * PDO-like proxy backed by real PostgreSQL that records statement savepoint commands.
+ */
 class WP_PostgreSQL_Connection_Statement_Savepoint_Recording_PDO {
 	/**
-	 * SQL statements observed by the recorder.
+	 * Recorded exec() SQL.
 	 *
 	 * @var string[]
 	 */
-	private $statements = array();
+	public $exec_sql = array();
 
 	/**
-	 * Record a SQL statement.
+	 * Recorded prepare() SQL.
+	 *
+	 * @var string[]
+	 */
+	public $prepared_sql = array();
+
+	/**
+	 * PostgreSQL PDO used for real statement execution.
+	 *
+	 * @var PDO
+	 */
+	private $pdo;
+
+	/**
+	 * Constructor.
+	 */
+	public function __construct( PDO $pdo ) {
+		$this->pdo = $pdo;
+		$this->pdo->setAttribute( PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION );
+		$this->pdo->setAttribute( PDO::ATTR_STRINGIFY_FETCHES, true );
+	}
+
+	/**
+	 * Begin a transaction.
+	 *
+	 * @return bool Whether the transaction started.
+	 */
+	public function beginTransaction(): bool { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		return $this->pdo->beginTransaction();
+	}
+
+	/**
+	 * Roll back the active transaction.
+	 *
+	 * @return bool Whether the transaction was rolled back.
+	 */
+	public function rollBack(): bool { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		return $this->pdo->rollBack();
+	}
+
+	/**
+	 * Check whether a transaction is active.
+	 *
+	 * @return bool Whether a transaction is active.
+	 */
+	public function inTransaction(): bool { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		return $this->pdo->inTransaction();
+	}
+
+	/**
+	 * Prepare a SQL statement.
 	 *
 	 * @param string $sql SQL statement.
+	 * @return PDOStatement Statement object.
 	 */
-	public function record( string $sql ): void {
-		$this->statements[] = $sql;
+	public function prepare( string $sql ): PDOStatement {
+		$this->prepared_sql[] = $sql;
+		return $this->pdo->prepare( $sql );
 	}
 
 	/**
-	 * Return all recorded SQL statements.
+	 * Execute a SQL statement and record savepoint commands.
 	 *
-	 * @return string[]
+	 * @param string $sql SQL statement.
+	 * @return int|false Affected row count, or false on failure.
 	 */
-	public function get_statements(): array {
-		return $this->statements;
+	public function exec( string $sql ) {
+		$this->exec_sql[] = $sql;
+		return $this->pdo->exec( $sql );
 	}
 
 	/**
-	 * Return recorded savepoint-related SQL statements.
+	 * Get PDO attributes.
 	 *
-	 * @return string[]
+	 * @param int $attribute Attribute identifier.
+	 * @return mixed Attribute value.
 	 */
-	public function get_savepoint_statements(): array {
-		return array_values(
-			array_filter(
-				$this->statements,
-				static function ( string $sql ): bool {
-					return 1 === preg_match( '/^\s*(SAVEPOINT|RELEASE\s+SAVEPOINT|ROLLBACK\s+TO\s+SAVEPOINT)\b/i', $sql );
-				}
-			)
-		);
+	public function getAttribute( int $attribute ) { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		if ( PDO::ATTR_DRIVER_NAME === $attribute ) {
+			return 'pgsql';
+		}
+
+		return $this->pdo->getAttribute( $attribute );
 	}
 }

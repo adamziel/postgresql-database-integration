@@ -1,345 +1,132 @@
 <?php
+
+require_once __DIR__ . '/../wp-includes/database/load.php';
+
+if ( ! function_exists( 'wp_postgresql_tests_create_pgsql_pdo' ) ) {
+	/**
+	 * Create an isolated real PostgreSQL PDO for PostgreSQL test harnesses.
+	 *
+	 * @return PDO Real PostgreSQL PDO with an isolated search_path schema.
+	 */
+	function wp_postgresql_tests_create_pgsql_pdo(): PDO {
+		$dsn = getenv( 'PGSQL_TEST_DSN' );
+		if ( false === $dsn || '' === $dsn ) {
+			throw new RuntimeException( 'Set PGSQL_TEST_DSN to run PostgreSQL-backed tests.' );
+		}
+
+		$user     = getenv( 'PGSQL_TEST_USER' );
+		$password = getenv( 'PGSQL_TEST_PASSWORD' );
+		$pdo      = new PDO(
+			$dsn,
+			false === $user ? null : $user,
+			false === $password ? null : $password
+		);
+		$pdo->setAttribute( PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION );
+		$pdo->setAttribute( PDO::ATTR_STRINGIFY_FETCHES, true );
+
+		if ( 'pgsql' !== $pdo->getAttribute( PDO::ATTR_DRIVER_NAME ) ) {
+			throw new RuntimeException( 'PGSQL_TEST_DSN must use the pgsql PDO driver.' );
+		}
+
+		$schema     = 'wp_pg_test_' . strtolower( bin2hex( random_bytes( 8 ) ) );
+		$schema_sql = WP_PostgreSQL_Connection::quote_identifier_value( $schema );
+
+		$pdo->exec( 'CREATE SCHEMA ' . $schema_sql );
+		$pdo->exec( 'SET search_path TO ' . $schema_sql . ', public' );
+
+		register_shutdown_function(
+			static function () use ( $pdo, $schema_sql ): void {
+				try {
+					if ( $pdo->inTransaction() ) {
+						$pdo->rollBack();
+					}
+
+					$pdo->exec( 'DROP SCHEMA IF EXISTS ' . $schema_sql . ' CASCADE' );
+				} catch ( Throwable $e ) {
+					// Cleanup should not mask the isolated script result.
+				}
+			}
+		);
+
+		return $pdo;
+	}
+}
+
+// Configure the test environment.
+error_reporting( E_ALL );
+
+// Polyfill WPDB globals.
+$GLOBALS['table_prefix'] = 'wptests_';
+$GLOBALS['wpdb']         = new class() {
+	public function set_prefix( string $prefix ): void {}
+};
+
 /**
- * Shared PHPUnit bootstrap for the standalone PostgreSQL integration tests.
- *
- * @package wp-postgresql-integration
+ * Polyfills for WordPress functions
  */
-
-if ( ! defined( 'WP_POSTGRESQL_TEST_ROOT' ) ) {
-	define( 'WP_POSTGRESQL_TEST_ROOT', dirname( __DIR__ ) );
-}
-
-if ( ! defined( 'ABSPATH' ) ) {
-	define( 'ABSPATH', WP_POSTGRESQL_TEST_ROOT . '/tests/wordpress-stubs/' );
-}
-
-if ( ! defined( 'WPINC' ) ) {
-	define( 'WPINC', 'wp-includes' );
-}
-
-if ( ! defined( 'HOUR_IN_SECONDS' ) ) {
-	define( 'HOUR_IN_SECONDS', 3600 );
-}
-
-if ( ! function_exists( '__' ) ) {
-	function __( $text, $domain = 'default' ) {
-		return $text;
-	}
-}
-
-if ( ! function_exists( '_deprecated_argument' ) ) {
-	function _deprecated_argument( $function, $version, $message = '' ) {
-		$GLOBALS['wp_postgresql_test_deprecated_arguments'][] = array( $function, $version, $message );
-	}
+if ( ! function_exists( 'do_action' ) ) {
+	/**
+	 * Polyfill the do_action function.
+	 */
+	function do_action() {}
 }
 
 if ( ! function_exists( 'apply_filters' ) ) {
-	function apply_filters( $hook_name, $value ) {
+	/**
+	 * Polyfill the apply_filters function.
+	 *
+	 * @param string $tag The filter name.
+	 * @param mixed  $value The value to filter.
+	 * @param mixed  ...$args Additional arguments to pass to the filter.
+	 *
+	 * @return mixed Returns $value.
+	 */
+	function apply_filters( $tag, $value, ...$args ) {
 		return $value;
 	}
 }
 
-if ( ! function_exists( 'is_wp_error' ) ) {
-	function is_wp_error( $thing ) {
-		return $thing instanceof WP_Error;
-	}
-}
+if ( extension_loaded( 'mbstring' ) ) {
 
-if ( ! function_exists( 'wp_strip_all_tags' ) ) {
-	function wp_strip_all_tags( $text ) {
-		return trim( strip_tags( (string) $text ) );
-	}
-}
-
-if ( ! function_exists( 'wp_die' ) ) {
-	function wp_die( $message = '', $title = '', $args = array() ) {
-		throw new RuntimeException( wp_strip_all_tags( (string) $message ) );
-	}
-}
-
-if ( ! class_exists( 'WP_Error', false ) ) {
-	class WP_Error {
+	if ( ! function_exists( 'mb_str_starts_with' ) ) {
 		/**
-		 * Error code.
+		 * Polyfill for mb_str_starts_with.
 		 *
-		 * @var string
-		 */
-		public $code;
-
-		/**
-		 * Error message.
+		 * @param string $haystack The string to search in.
+		 * @param string $needle   The string to search for.
 		 *
-		 * @var string
-		 */
-		public $message;
-
-		/**
-		 * Constructor.
-		 *
-		 * @param string $code    Error code.
-		 * @param string $message Error message.
-		 */
-		public function __construct( $code = '', $message = '' ) {
-			$this->code    = $code;
-			$this->message = $message;
-		}
-
-		/**
-		 * Get the first error message.
-		 *
-		 * @return string
-		 */
-		public function get_error_message() {
-			return $this->message;
-		}
-	}
-}
-
-if ( ! function_exists( 'mbstring_binary_safe_encoding' ) ) {
-	function mbstring_binary_safe_encoding() {}
-}
-
-if ( ! function_exists( 'reset_mbstring_encoding' ) ) {
-	function reset_mbstring_encoding() {}
-}
-
-if ( ! class_exists( 'wpdb', false ) ) {
-	class wpdb {
-		/**
-		 * Database name.
-		 *
-		 * @var string
-		 */
-		public $dbname;
-
-		/**
-		 * Database user.
-		 *
-		 * @var string
-		 */
-		public $dbuser;
-
-		/**
-		 * Database password.
-		 *
-		 * @var string
-		 */
-		public $dbpassword;
-
-		/**
-		 * Database host.
-		 *
-		 * @var string
-		 */
-		public $dbhost;
-
-		/**
-		 * Last error message.
-		 *
-		 * @var string
-		 */
-		public $last_error = '';
-
-		/**
-		 * Last query result.
-		 *
-		 * @var mixed
-		 */
-		public $last_result;
-
-		/**
-		 * Last SQL query.
-		 *
-		 * @var string
-		 */
-		public $last_query = '';
-
-		/**
-		 * Whether the database connection is ready.
-		 *
-		 * @var bool
-		 */
-		public $ready = false;
-
-		/**
-		 * Number of rows returned or affected.
-		 *
-		 * @var int
-		 */
-		public $num_rows = 0;
-
-		/**
-		 * Number of queries executed.
-		 *
-		 * @var int
-		 */
-		public $num_queries = 0;
-
-		/**
-		 * Query function call description.
-		 *
-		 * @var string
-		 */
-		public $func_call = '';
-
-		/**
-		 * Last raw result set.
-		 *
-		 * @var mixed
-		 */
-		public $result;
-
-		/**
-		 * Column info cache.
-		 *
-		 * @var mixed
-		 */
-		public $col_info;
-
-		/**
-		 * Saved query log.
-		 *
-		 * @var array
-		 */
-		public $queries = array();
-
-		/**
-		 * Whether errors are suppressed.
-		 *
-		 * @var bool
-		 */
-		public $suppress_errors = false;
-
-		/**
-		 * Whether errors should be shown.
-		 *
-		 * @var bool
-		 */
-		public $show_errors = false;
-
-		/**
-		 * Number of rows affected.
-		 *
-		 * @var int
-		 */
-		public $rows_affected = 0;
-
-		/**
-		 * Insert id.
-		 *
-		 * @var int|string
-		 */
-		public $insert_id = 0;
-
-		/**
-		 * MySQL compatibility marker used by WordPress metadata helpers.
-		 *
-		 * @var bool
-		 */
-		public $is_mysql = true;
-
-		/**
-		 * Current charset.
-		 *
-		 * @var string
-		 */
-		public $charset = 'utf8mb4';
-
-		/**
-		 * Current collation.
-		 *
-		 * @var string
-		 */
-		public $collate = 'utf8mb4_unicode_ci';
-
-		/**
-		 * Table charset cache.
-		 *
-		 * @var array
-		 */
-		public $table_charset = array();
-
-		/**
-		 * Column metadata cache.
-		 *
-		 * @var array
-		 */
-		public $col_meta = array();
-
-		/**
-		 * Prefix used by test table names.
-		 *
-		 * @var string
-		 */
-		public $prefix = 'wp_';
-
-		/**
-		 * Constructor.
-		 *
-		 * @param string $dbuser     Database user.
-		 * @param string $dbpassword Database password.
-		 * @param string $dbname     Database name.
-		 * @param string $dbhost     Database host.
-		 */
-		public function __construct( $dbuser = '', $dbpassword = '', $dbname = '', $dbhost = '' ) {
-			$this->dbuser     = $dbuser;
-			$this->dbpassword = $dbpassword;
-			$this->dbname     = $dbname;
-			$this->dbhost     = $dbhost;
-		}
-
-		/**
-		 * Report whether a WordPress database capability is available.
-		 *
-		 * @param string $db_cap Capability name.
 		 * @return bool
 		 */
-		public function has_cap( $db_cap ) {
-			return in_array( $db_cap, array( 'collation', 'utf8mb4', 'utf8mb4_520' ), true );
+		function mb_str_starts_with( string $haystack, string $needle ) {
+			return empty( $needle ) || 0 === mb_strpos( $haystack, $needle );
 		}
+	}
 
+	if ( ! function_exists( 'mb_str_contains' ) ) {
 		/**
-		 * Basic query passthrough for tests.
+		 * Polyfill for mb_str_contains.
 		 *
-		 * @param string $query SQL query.
-		 * @return mixed
-		 */
-		public function query( $query ) {
-			$this->last_query = $query;
-			if ( $this->dbh instanceof WP_PostgreSQL_Driver ) {
-				$result              = $this->dbh->query( $query );
-				$this->last_result   = $result;
-				$this->rows_affected = is_int( $result ) ? $result : 0;
-				$this->num_rows      = is_array( $result ) ? count( $result ) : $this->rows_affected;
-				$this->insert_id     = $this->dbh->get_insert_id();
-				return $result;
-			}
-
-			return false;
-		}
-
-		/**
-		 * Preserve the base method shape expected by the drop-in.
-		 */
-		public function flush() {
-			$this->last_result   = null;
-			$this->last_query    = '';
-			$this->num_rows      = 0;
-			$this->rows_affected = 0;
-		}
-
-		/**
-		 * Simple error printer replacement for tests.
+		 * @param string $haystack The string to search in.
+		 * @param string $needle   The string to search for.
 		 *
-		 * @param string $str Error message.
-		 * @return false
+		 * @return bool
 		 */
-		public function print_error( $str = '' ) {
-			$this->last_error = (string) $str;
-			return false;
+		function mb_str_contains( string $haystack, string $needle ) {
+			return empty( $needle ) || false !== mb_strpos( $haystack, $needle );
+		}
+	}
+
+	if ( ! function_exists( 'mb_str_ends_with' ) ) {
+		/**
+		 * Polyfill for mb_str_ends_with.
+		 *
+		 * @param string $haystack The string to search in.
+		 * @param string $needle   The string to search for.
+		 *
+		 * @return bool
+		 */
+		function mb_str_ends_with( string $haystack, string $needle ) {
+			return empty( $needle ) || mb_substr( $haystack, - mb_strlen( $needle ) ) === $needle;
 		}
 	}
 }
-
-require_once WP_POSTGRESQL_TEST_ROOT . '/wp-includes/database/load.php';
-require_once WP_POSTGRESQL_TEST_ROOT . '/tests/WP_PostgreSQL_Connection_Statement_Savepoint_Recording_PDO.php';
