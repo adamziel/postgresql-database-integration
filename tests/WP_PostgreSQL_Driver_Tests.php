@@ -546,7 +546,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 
 		$this->assertSame( 1, $driver->query( $insert ) );
 		$this->assertSame(
-			'INSERT INTO wptests_insert_ignore_select ("id", "value") SELECT id, value FROM wptests_insert_ignore_select_source ORDER BY id ON CONFLICT DO NOTHING',
+			'INSERT INTO "wptests_insert_ignore_select" ("id", "value") SELECT id, value FROM wptests_insert_ignore_select_source ORDER BY id ON CONFLICT DO NOTHING',
 			$this->get_last_single_postgresql_sql( $driver )
 		);
 
@@ -665,7 +665,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 			)
 		);
 		$this->assertSame(
-			'INSERT INTO wptests_insert_priority (id, value) SELECT id, value FROM wptests_insert_priority_source',
+			'INSERT INTO "wptests_insert_priority" (id, value) SELECT id, value FROM wptests_insert_priority_source',
 			$this->get_last_single_postgresql_sql( $driver )
 		);
 		$this->assertStringNotContainsString( 'DELAYED', $this->get_last_single_postgresql_sql( $driver ) );
@@ -760,7 +760,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assertSame(
 			array(
 				array(
-					'sql'    => 'INSERT INTO "wptests_comments" ("comment_ID", "comment_author", "comment_author_email", "comment_content", "comment_parent") VALUES (1, \'\', \'\', \'\', \'0\')',
+					'sql'    => 'INSERT INTO "wptests_comments" ("comment_ID", "comment_author", "comment_author_email", "comment_content", "comment_parent") VALUES (1, \'\', \'\', \'\', 0)',
 					'params' => array(),
 				),
 			),
@@ -804,7 +804,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assertSame(
 			array(
 				array(
-					'sql'    => 'INSERT INTO "wptests_posts" ("ID", "post_title", "post_date", "post_content", "post_excerpt", "post_status", "post_parent") VALUES (1, \'Post 1\', \'0000-00-00 00:00:00\', \'\', \'\', \'publish\', \'0\')',
+					'sql'    => 'INSERT INTO "wptests_posts" ("ID", "post_title", "post_date", "post_content", "post_excerpt", "post_status", "post_parent") VALUES (1, \'Post 1\', \'0000-00-00 00:00:00\', \'\', \'\', \'publish\', 0)',
 					'params' => array(),
 				),
 			),
@@ -852,7 +852,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assertIsArray( $translation );
 		$this->assertSame(
 			'INSERT INTO "wptests_insert_current_timestamp_defaults" ("id", "created_at", "updated_at") VALUES (1, TO_CHAR(CURRENT_TIMESTAMP AT TIME ZONE \'UTC\', \'YYYY-MM-DD HH24:MI:SS\'), TO_CHAR(CURRENT_TIMESTAMP AT TIME ZONE \'UTC\', \'YYYY-MM-DD HH24:MI:SS\'))',
-			$translation['sql']
+			$this->remove_real_pgsql_test_schema_qualifiers( $translation['sql'] )
 		);
 	}
 
@@ -1721,8 +1721,8 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_simple_wordpress_replace_with_existing_id_is_translated_to_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_users ("ID" INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_users ("ID", display_name) VALUES (2, \'Walter Sobchak\')' );
+		$driver->query( 'CREATE TABLE wptests_users (`ID` INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`, display_name) VALUES (2, \'Walter Sobchak\')' );
 
 		$replace = "REPLACE INTO `wptests_users` (`ID`, `display_name`) VALUES (2, 'Walter Replace Sobchak')";
 
@@ -1749,8 +1749,8 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_value_keyword_replace_is_translated_to_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_replace_value_keyword ("ID" INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_replace_value_keyword ("ID", display_name) VALUES (2, \'old\')' );
+		$driver->query( 'CREATE TABLE wptests_replace_value_keyword (`ID` INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_replace_value_keyword (`ID`, display_name) VALUES (2, \'old\')' );
 
 		$replace = "REPLACE INTO `wptests_replace_value_keyword` (`ID`, `display_name`) VALUE (2, 'new')";
 
@@ -1774,8 +1774,8 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_simple_replace_without_into_is_translated_to_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_replace_without_into ("ID" INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_replace_without_into ("ID", display_name) VALUES (2, \'old\')' );
+		$driver->query( 'CREATE TABLE wptests_replace_without_into (`ID` INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_replace_without_into (`ID`, display_name) VALUES (2, \'old\')' );
 
 		$replace = "REPLACE `wptests_replace_without_into` (`ID`, `display_name`) VALUES (2, 'new')";
 
@@ -1813,7 +1813,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assert_last_postgresql_sql_statements(
 			$driver,
 			array(
-				'DELETE FROM "wptests_options" WHERE (("option_id" = 8) OR ("option_name" = \'siteurl\'))',
+				'DELETE FROM "wptests_options" WHERE ("option_name" = \'siteurl\')',
 				'INSERT INTO "wptests_options" ("option_id", "option_name", "option_value") VALUES (8, \'siteurl\', \'updated\')',
 			)
 		);
@@ -1829,7 +1829,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assert_last_postgresql_sql_statements(
 			$driver,
 			array(
-				'DELETE FROM "wptests_options" WHERE (("option_id" = 9) OR ("option_name" = \'home\'))',
+				'DELETE FROM "wptests_options" WHERE ("option_name" = \'home\')',
 				'INSERT INTO "wptests_options" ("option_id", "option_name", "option_value") VALUES (9, \'home\', \'created\')',
 			)
 		);
@@ -1847,7 +1847,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assert_last_postgresql_sql_statements(
 			$driver,
 			array(
-				'DELETE FROM "wptests_options" WHERE (("option_id" = 10) OR ("option_name" = \'home\'))',
+				'DELETE FROM "wptests_options" WHERE ("option_name" = \'home\')',
 				'INSERT INTO "wptests_options" ("option_id", "option_name", "option_value") VALUES (10, \'home\', \'qualified\')',
 			)
 		);
@@ -1896,7 +1896,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assertSame( 3, $driver->query( $replace_select ) );
 		$sql = $this->assert_last_replace_select_materialized_sql( $driver, 'wptests_replace_priority' );
 		$this->assertStringContainsString(
-			' AS SELECT id AS "id" , value AS "value" FROM wptests_replace_priority_source',
+			' AS SELECT id AS "id" , value AS "value" FROM "wptests_replace_priority_source"',
 			$sql[1]
 		);
 		$this->assertStringNotContainsString( 'DELAYED', implode( "\n", $sql ) );
@@ -1923,8 +1923,8 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_multi_row_replace_with_known_conflict_column_is_translated_to_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_replace_multi ("ID" INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_replace_multi ("ID", display_name) VALUES (2, \'old\')' );
+		$driver->query( 'CREATE TABLE wptests_replace_multi (`ID` INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_replace_multi (`ID`, display_name) VALUES (2, \'old\')' );
 
 		$replace = "REPLACE INTO `wptests_replace_multi` (`ID`, `display_name`) VALUES (2, 'updated'), (3, 'new')";
 
@@ -2374,7 +2374,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_columnless_replace_select_uses_mysql_metadata_columns(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_replace_select_columnless ("ID" INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_replace_select_columnless (`ID` INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
 		$this->install_mysql_schema_metadata_fixture(
 			$driver,
 			'CREATE TABLE wptests_replace_select_columnless (
@@ -2383,9 +2383,9 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 				PRIMARY KEY (ID)
 			)'
 		);
-		$driver->query( 'CREATE TABLE wptests_replace_select_columnless_source ("ID" INTEGER NOT NULL, display_name TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_replace_select_columnless ("ID", display_name) VALUES (2, \'old\')' );
-		$driver->query( 'INSERT INTO wptests_replace_select_columnless_source ("ID", display_name) VALUES (2, \'updated\'), (3, \'new\')' );
+		$driver->query( 'CREATE TABLE wptests_replace_select_columnless_source (`ID` INTEGER NOT NULL, display_name TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_replace_select_columnless (`ID`, display_name) VALUES (2, \'old\')' );
+		$driver->query( 'INSERT INTO wptests_replace_select_columnless_source (`ID`, display_name) VALUES (2, \'updated\'), (3, \'new\')' );
 
 		$replace = 'REPLACE INTO wptests_replace_select_columnless
 			SELECT `ID`, display_name FROM wptests_replace_select_columnless_source WHERE 1 = 1';
@@ -2393,7 +2393,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$this->assertSame( 3, $driver->query( $replace ) );
 		$sql = $this->assert_last_replace_select_materialized_sql( $driver, 'wptests_replace_select_columnless' );
 		$this->assertStringContainsString(
-			' AS SELECT "ID" AS "ID" , display_name AS "display_name" FROM wptests_replace_select_columnless_source WHERE 1 = 1',
+			' AS SELECT "ID" AS "ID" , display_name AS "display_name" FROM "wptests_replace_select_columnless_source" WHERE 1 = 1',
 			$sql[1]
 		);
 		$this->assertStringContainsString(
@@ -2602,7 +2602,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_columnless_multi_row_replace_uses_mysql_metadata_columns(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_replace_columnless ("ID" INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_replace_columnless (`ID` INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
 		$this->install_mysql_schema_metadata_fixture(
 			$driver,
 			'CREATE TABLE wptests_replace_columnless (
@@ -2611,7 +2611,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 				PRIMARY KEY (ID)
 			)'
 		);
-		$driver->query( 'INSERT INTO wptests_replace_columnless ("ID", display_name) VALUES (2, \'old\')' );
+		$driver->query( 'INSERT INTO wptests_replace_columnless (`ID`, display_name) VALUES (2, \'old\')' );
 
 		$replace = "REPLACE INTO `wptests_replace_columnless` VALUES (2, 'updated'), (3, 'new')";
 
@@ -2635,7 +2635,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_multi_row_replace_with_duplicate_conflict_values_runs_sequentially(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_replace_duplicate ("ID" INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_replace_duplicate (`ID` INTEGER PRIMARY KEY, display_name TEXT NOT NULL)' );
 
 		$replace = "REPLACE INTO `wptests_replace_duplicate` (`ID`, `display_name`) VALUES (4, 'first'), (4, 'second')";
 
@@ -3235,8 +3235,8 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_simple_select_with_backticked_identifiers_is_translated_to_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, "post_title" TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", "post_title") VALUES (1, \'Hello\')' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, `post_title` TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, `post_title`) VALUES (1, \'Hello\')' );
 
 		$select = 'SELECT `ID`, `post_title` FROM `wptests_posts` WHERE `ID` = 1';
 		$rows   = $driver->query( $select );
@@ -3262,8 +3262,8 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_simple_select_with_bare_uppercase_id_is_translated_to_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_users ("ID" INTEGER PRIMARY KEY, user_login TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_users ("ID", user_login) VALUES (1, \'admin\')' );
+		$driver->query( 'CREATE TABLE wptests_users (`ID` INTEGER PRIMARY KEY, user_login TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`, user_login) VALUES (1, \'admin\')' );
 
 		$select = 'SELECT ID, user_login FROM wptests_users WHERE ID = 1';
 		$rows   = $driver->query( $select );
@@ -3288,8 +3288,8 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_simple_select_with_bare_uppercase_id_where_and_limit_is_translated_to_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_title TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_title) VALUES (1, \'Hello\')' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_title TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_title) VALUES (1, \'Hello\')' );
 
 		$select = 'SELECT * FROM wptests_posts WHERE ID = 1 LIMIT 1';
 		$rows   = $driver->query( $select );
@@ -3313,8 +3313,8 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_simple_select_count_with_bare_uppercase_id_is_translated_to_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_users ("ID" INTEGER PRIMARY KEY, user_login TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_users ("ID", user_login) VALUES (1, \'admin\')' );
+		$driver->query( 'CREATE TABLE wptests_users (`ID` INTEGER PRIMARY KEY, user_login TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`, user_login) VALUES (1, \'admin\')' );
 
 		$select = 'SELECT COUNT(ID) as c FROM wptests_users';
 		$rows   = $driver->query( $select );
@@ -3338,8 +3338,8 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_simple_select_with_mixed_case_comment_identifiers_is_translated_to_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_comments ("comment_ID" INTEGER PRIMARY KEY, "comment_post_ID" INTEGER NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", "comment_post_ID") VALUES (7, 1)' );
+		$driver->query( 'CREATE TABLE wptests_comments (`comment_ID` INTEGER PRIMARY KEY, `comment_post_ID` INTEGER NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, `comment_post_ID`) VALUES (7, 1)' );
 
 		$select = 'SELECT comment_ID FROM wptests_comments WHERE comment_post_ID = 1 ORDER BY comment_ID DESC';
 		$rows   = $driver->query( $select );
@@ -3363,12 +3363,12 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_simple_select_approved_comments_order_uses_comment_id_tiebreaker(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_comments ("comment_ID" INTEGER PRIMARY KEY, "comment_post_ID" INTEGER NOT NULL, comment_date_gmt TEXT NOT NULL, comment_approved TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", "comment_post_ID", comment_date_gmt, comment_approved) VALUES (184, 7, \'2024-01-01 00:00:00\', \'1\')' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", "comment_post_ID", comment_date_gmt, comment_approved) VALUES (180, 7, \'2024-01-01 00:00:00\', \'1\')' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", "comment_post_ID", comment_date_gmt, comment_approved) VALUES (181, 7, \'2024-01-01 00:00:00\', \'1\')' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", "comment_post_ID", comment_date_gmt, comment_approved) VALUES (183, 8, \'2024-01-01 00:00:00\', \'1\')' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", "comment_post_ID", comment_date_gmt, comment_approved) VALUES (185, 7, \'2024-01-01 00:00:00\', \'0\')' );
+		$driver->query( 'CREATE TABLE wptests_comments (`comment_ID` INTEGER PRIMARY KEY, `comment_post_ID` INTEGER NOT NULL, comment_date_gmt TEXT NOT NULL, comment_approved TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, `comment_post_ID`, comment_date_gmt, comment_approved) VALUES (184, 7, \'2024-01-01 00:00:00\', \'1\')' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, `comment_post_ID`, comment_date_gmt, comment_approved) VALUES (180, 7, \'2024-01-01 00:00:00\', \'1\')' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, `comment_post_ID`, comment_date_gmt, comment_approved) VALUES (181, 7, \'2024-01-01 00:00:00\', \'1\')' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, `comment_post_ID`, comment_date_gmt, comment_approved) VALUES (183, 8, \'2024-01-01 00:00:00\', \'1\')' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, `comment_post_ID`, comment_date_gmt, comment_approved) VALUES (185, 7, \'2024-01-01 00:00:00\', \'0\')' );
 
 		$select = "SELECT *
 			FROM wptests_comments
@@ -3402,12 +3402,12 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_simple_select_approved_comment_ids_order_uses_comment_id_tiebreaker(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_comments ("comment_ID" INTEGER PRIMARY KEY, "comment_post_ID" INTEGER NOT NULL, comment_date_gmt TEXT NOT NULL, comment_approved TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", "comment_post_ID", comment_date_gmt, comment_approved) VALUES (184, 7, \'2024-01-01 00:00:00\', \'1\')' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", "comment_post_ID", comment_date_gmt, comment_approved) VALUES (180, 7, \'2024-01-01 00:00:00\', \'1\')' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", "comment_post_ID", comment_date_gmt, comment_approved) VALUES (181, 7, \'2024-01-01 00:00:00\', \'1\')' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", "comment_post_ID", comment_date_gmt, comment_approved) VALUES (183, 8, \'2024-01-01 00:00:00\', \'1\')' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", "comment_post_ID", comment_date_gmt, comment_approved) VALUES (185, 7, \'2024-01-01 00:00:00\', \'0\')' );
+		$driver->query( 'CREATE TABLE wptests_comments (`comment_ID` INTEGER PRIMARY KEY, `comment_post_ID` INTEGER NOT NULL, comment_date_gmt TEXT NOT NULL, comment_approved TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, `comment_post_ID`, comment_date_gmt, comment_approved) VALUES (184, 7, \'2024-01-01 00:00:00\', \'1\')' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, `comment_post_ID`, comment_date_gmt, comment_approved) VALUES (180, 7, \'2024-01-01 00:00:00\', \'1\')' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, `comment_post_ID`, comment_date_gmt, comment_approved) VALUES (181, 7, \'2024-01-01 00:00:00\', \'1\')' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, `comment_post_ID`, comment_date_gmt, comment_approved) VALUES (183, 8, \'2024-01-01 00:00:00\', \'1\')' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, `comment_post_ID`, comment_date_gmt, comment_approved) VALUES (185, 7, \'2024-01-01 00:00:00\', \'0\')' );
 
 		$select = "SELECT wptests_comments.comment_ID
 			FROM wptests_comments
@@ -3441,8 +3441,8 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_simple_select_with_mysql_offset_count_limit_is_translated_to_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_comments ("comment_ID" INTEGER PRIMARY KEY, "comment_post_ID" INTEGER NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", "comment_post_ID") VALUES (7, 1)' );
+		$driver->query( 'CREATE TABLE wptests_comments (`comment_ID` INTEGER PRIMARY KEY, `comment_post_ID` INTEGER NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, `comment_post_ID`) VALUES (7, 1)' );
 
 		$select = 'SELECT comment_ID FROM wptests_comments WHERE comment_post_ID = 1 ORDER BY comment_ID ASC LIMIT 0,500';
 		$rows   = $driver->query( $select );
@@ -9038,9 +9038,9 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_simple_delete_with_bare_uppercase_id_where_is_translated_to_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_users ("ID" INTEGER PRIMARY KEY, user_login TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_users ("ID", user_login) VALUES (1, \'admin\')' );
-		$driver->query( 'INSERT INTO wptests_users ("ID", user_login) VALUES (2, \'editor\')' );
+		$driver->query( 'CREATE TABLE wptests_users (`ID` INTEGER PRIMARY KEY, user_login TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`, user_login) VALUES (1, \'admin\')' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`, user_login) VALUES (2, \'editor\')' );
 
 		$delete = 'DELETE FROM wptests_users WHERE ID != 1';
 
@@ -9073,7 +9073,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 				post_id INTEGER NOT NULL
 			)'
 		);
-		$driver->query( 'INSERT INTO wptests_posts ("ID") VALUES (1)' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`) VALUES (1)' );
 		$driver->query( 'INSERT INTO wptests_postmeta (meta_id, post_id) VALUES (1, 1)' );
 		$driver->query( 'INSERT INTO wptests_postmeta (meta_id, post_id) VALUES (2, 999)' );
 
@@ -9494,7 +9494,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_complex_join_select_quotes_qualified_mixed_case_wordpress_identifiers(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
 		$driver->query( 'CREATE TABLE wptests_postmeta (post_id INTEGER NOT NULL, meta_key TEXT NOT NULL, meta_value TEXT NOT NULL)' );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status, post_date) VALUES (1, 'nav_menu_item', 'publish', '2024-01-01 00:00:00')" );
 		$driver->query( "INSERT INTO wptests_postmeta (post_id, meta_key, meta_value) VALUES (1, '_menu_item_object_id', '2')" );
@@ -9711,9 +9711,9 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_field_function_is_translated_to_postgresql_case_expression(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_name TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_name) VALUES (1, \'alpha\')' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_name) VALUES (2, \'beta\')' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_name TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_name) VALUES (1, \'alpha\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_name) VALUES (2, \'beta\')' );
 
 		$select = 'SELECT ID FROM wptests_posts WHERE ID IN (1, 2) ORDER BY FIELD(ID, 2, 1)';
 		$rows   = $driver->query( $select );
@@ -11264,7 +11264,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_wordpress_posts_post_date_desc_order_uses_id_tiebreaker(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
 		for ( $id = 1; $id <= 5; $id++ ) {
 			$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status, post_date) VALUES ($id, 'post', 'publish', '2024-01-01 00:00:00')" );
 		}
@@ -11302,7 +11302,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_leading_comment_select_uses_id_tiebreaker(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
 		for ( $id = 1; $id <= 3; $id++ ) {
 			$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status, post_date) VALUES ($id, 'post', 'publish', '2024-01-01 00:00:00')" );
 		}
@@ -11340,8 +11340,8 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_wordpress_posts_post_date_asc_order_does_not_add_id_tiebreaker(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_type, post_status, post_date) VALUES (1, \'post\', \'publish\', \'2024-01-01 00:00:00\')' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_type, post_status, post_date) VALUES (1, \'post\', \'publish\', \'2024-01-01 00:00:00\')' );
 
 		$select = "SELECT SQL_CALC_FOUND_ROWS wptests_posts.ID
 			FROM wptests_posts
@@ -11367,7 +11367,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_wordpress_grouped_posts_post_date_desc_order_uses_id_tiebreaker(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
 		for ( $id = 1; $id <= 3; $id++ ) {
 			$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status, post_date) VALUES ($id, 'post', 'publish', '2024-01-01 00:00:00')" );
 		}
@@ -12578,7 +12578,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$driver->query( 'CREATE TABLE wptests_terms (term_id INTEGER PRIMARY KEY, name TEXT NOT NULL)' );
 		$driver->query( 'CREATE TABLE wptests_term_taxonomy (term_taxonomy_id INTEGER PRIMARY KEY, term_id INTEGER NOT NULL, taxonomy TEXT NOT NULL, description TEXT NOT NULL, parent INTEGER NOT NULL)' );
 		$driver->query( 'CREATE TABLE wptests_term_relationships (object_id INTEGER NOT NULL, term_taxonomy_id INTEGER NOT NULL)' );
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL)' );
 		$driver->query( "INSERT INTO wptests_terms (term_id, name) VALUES (1, 'Beta')" );
 		$driver->query( "INSERT INTO wptests_terms (term_id, name) VALUES (2, 'Alpha')" );
 		$driver->query( "INSERT INTO wptests_term_taxonomy (term_taxonomy_id, term_id, taxonomy, description, parent) VALUES (10, 1, 'wptests_tax', 'Beta description', 0)" );
@@ -12700,9 +12700,9 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_distinct_parenthesized_user_id_order_by_hides_login_order_column(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_users ("ID" INTEGER PRIMARY KEY, user_login TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_users ("ID", user_login) VALUES (1, \'zeta\')' );
-		$driver->query( 'INSERT INTO wptests_users ("ID", user_login) VALUES (2, \'alpha\')' );
+		$driver->query( 'CREATE TABLE wptests_users (`ID` INTEGER PRIMARY KEY, user_login TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`, user_login) VALUES (1, \'zeta\')' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`, user_login) VALUES (2, \'alpha\')' );
 
 		$rows = $driver->query( 'SELECT DISTINCT(wptests_users.ID) FROM wptests_users WHERE 1=1  ORDER BY user_login LIMIT 0, 50' );
 
@@ -12764,9 +12764,9 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_distinct_order_by_keyword_projection_alias_preserves_projected_order(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_users ("ID" INTEGER PRIMARY KEY)' );
-		$driver->query( 'INSERT INTO wptests_users ("ID") VALUES (2023)' );
-		$driver->query( 'INSERT INTO wptests_users ("ID") VALUES (2024)' );
+		$driver->query( 'CREATE TABLE wptests_users (`ID` INTEGER PRIMARY KEY)' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`) VALUES (2023)' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`) VALUES (2024)' );
 
 		$rows = $driver->query( 'SELECT DISTINCT ID AS year FROM wptests_users ORDER BY year DESC' );
 
@@ -12833,7 +12833,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_sql_calc_found_rows_select_is_translated_to_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status, post_date) VALUES (1, 'post', 'publish', '2024-01-01 00:00:00')" );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status, post_date) VALUES (2, 'post', 'publish', '2024-01-02 00:00:00')" );
 
@@ -12866,7 +12866,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_found_rows_query_supports_alias_projection(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status, post_date) VALUES (1, 'shop_order', 'wc-completed', '2024-01-01 00:00:00')" );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status, post_date) VALUES (2, 'shop_order', 'wc-completed', '2024-01-02 00:00:00')" );
 
@@ -12892,7 +12892,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_leading_comment_sql_calc_found_rows_select_is_translated_to_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status, post_date) VALUES (1, 'post', 'publish', '2024-01-01 00:00:00')" );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status, post_date) VALUES (2, 'post', 'publish', '2024-01-01 00:00:00')" );
 
@@ -12925,7 +12925,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_found_rows_returns_last_sql_calc_found_rows_count(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL)' );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status) VALUES (1, 'post', 'publish')" );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status) VALUES (2, 'post', 'publish')" );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status) VALUES (3, 'post', 'publish')" );
@@ -12951,7 +12951,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_found_rows_runtime_function_rewrites_inside_scalar_expressions(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL)' );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status) VALUES (1, 'post', 'publish')" );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status) VALUES (2, 'post', 'publish')" );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status) VALUES (3, 'page', 'publish')" );
@@ -12997,7 +12997,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_non_sql_calc_select_does_not_run_found_rows_accounting(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL)' );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type) VALUES (1, 'post')" );
 		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type) VALUES (2, 'post')" );
 
@@ -13025,10 +13025,10 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_distinct_sql_calc_found_rows_select_strips_modifier_and_orders_safely(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_users ("ID" INTEGER PRIMARY KEY, user_login TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_users (`ID` INTEGER PRIMARY KEY, user_login TEXT NOT NULL)' );
 		$driver->query( 'CREATE TABLE wptests_usermeta (user_id INTEGER NOT NULL, meta_key TEXT NOT NULL, meta_value TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_users ("ID", user_login) VALUES (1, \'zeta\')' );
-		$driver->query( 'INSERT INTO wptests_users ("ID", user_login) VALUES (2, \'alpha\')' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`, user_login) VALUES (1, \'zeta\')' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`, user_login) VALUES (2, \'alpha\')' );
 		$driver->query( 'INSERT INTO wptests_usermeta (user_id, meta_key, meta_value) VALUES (1, \'foo\', \'bar\')' );
 		$driver->query( 'INSERT INTO wptests_usermeta (user_id, meta_key, meta_value) VALUES (1, \'foo\', \'baz\')' );
 		$driver->query( 'INSERT INTO wptests_usermeta (user_id, meta_key, meta_value) VALUES (2, \'foo\', \'bar\')' );
@@ -13066,11 +13066,11 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_simple_sql_calc_found_rows_count_uses_window_count_for_non_empty_pages(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
 		$driver->query( 'CREATE TABLE wptests_postmeta (post_id INTEGER NOT NULL, meta_key TEXT NOT NULL, meta_value TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_type, post_status, post_date) VALUES (1, \'post\', \'publish\', \'2024-01-01 00:00:00\')' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_type, post_status, post_date) VALUES (2, \'post\', \'publish\', \'2024-01-02 00:00:00\')' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_type, post_status, post_date) VALUES (3, \'post\', \'draft\', \'2024-01-03 00:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_type, post_status, post_date) VALUES (1, \'post\', \'publish\', \'2024-01-01 00:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_type, post_status, post_date) VALUES (2, \'post\', \'publish\', \'2024-01-02 00:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_type, post_status, post_date) VALUES (3, \'post\', \'draft\', \'2024-01-03 00:00:00\')' );
 		$driver->query( 'INSERT INTO wptests_postmeta (post_id, meta_key, meta_value) VALUES (1, \'color\', \'blue\')' );
 		$driver->query( 'INSERT INTO wptests_postmeta (post_id, meta_key, meta_value) VALUES (1, \'color\', \'green\')' );
 		$driver->query( 'INSERT INTO wptests_postmeta (post_id, meta_key, meta_value) VALUES (2, \'color\', \'red\')' );
@@ -13175,11 +13175,11 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_simple_sql_calc_found_rows_count_uses_direct_unordered_source_count_for_empty_pages(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
 		$driver->query( 'CREATE TABLE wptests_postmeta (post_id INTEGER NOT NULL, meta_key TEXT NOT NULL, meta_value TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_type, post_status, post_date) VALUES (1, \'post\', \'publish\', \'2024-01-01 00:00:00\')' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_type, post_status, post_date) VALUES (2, \'post\', \'publish\', \'2024-01-02 00:00:00\')' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_type, post_status, post_date) VALUES (3, \'post\', \'draft\', \'2024-01-03 00:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_type, post_status, post_date) VALUES (1, \'post\', \'publish\', \'2024-01-01 00:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_type, post_status, post_date) VALUES (2, \'post\', \'publish\', \'2024-01-02 00:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_type, post_status, post_date) VALUES (3, \'post\', \'draft\', \'2024-01-03 00:00:00\')' );
 		$driver->query( 'INSERT INTO wptests_postmeta (post_id, meta_key, meta_value) VALUES (1, \'color\', \'blue\')' );
 		$driver->query( 'INSERT INTO wptests_postmeta (post_id, meta_key, meta_value) VALUES (1, \'color\', \'green\')' );
 		$driver->query( 'INSERT INTO wptests_postmeta (post_id, meta_key, meta_value) VALUES (2, \'color\', \'red\')' );
@@ -13248,10 +13248,10 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_grouped_sql_calc_found_rows_count_keeps_cardinality_preserving_wrapper(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
 		$driver->query( 'CREATE TABLE wptests_postmeta (post_id INTEGER NOT NULL, meta_key TEXT NOT NULL, meta_value TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_type, post_status, post_date) VALUES (1, \'post\', \'publish\', \'2024-01-01 00:00:00\')' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_type, post_status, post_date) VALUES (2, \'post\', \'publish\', \'2024-01-02 00:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_type, post_status, post_date) VALUES (1, \'post\', \'publish\', \'2024-01-01 00:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_type, post_status, post_date) VALUES (2, \'post\', \'publish\', \'2024-01-02 00:00:00\')' );
 		$driver->query( 'INSERT INTO wptests_postmeta (post_id, meta_key, meta_value) VALUES (1, \'color\', \'blue\')' );
 		$driver->query( 'INSERT INTO wptests_postmeta (post_id, meta_key, meta_value) VALUES (1, \'color\', \'green\')' );
 		$driver->query( 'INSERT INTO wptests_postmeta (post_id, meta_key, meta_value) VALUES (2, \'color\', \'red\')' );
@@ -13346,13 +13346,13 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_numeric_literal_predicates_use_mysql_truthiness_without_changing_values_or_limits(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_date TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_date) VALUES (1, \'2024-01-01 00:00:00\')' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_date) VALUES (7, \'2024-01-07 00:00:00\')' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_date) VALUES (9, \'2024-01-09 00:00:00\')' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_date) VALUES (10, \'2024-01-10 00:00:00\')' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_date) VALUES (11, \'2024-01-11 00:00:00\')' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_date) VALUES (12, \'2024-01-12 00:00:00\')' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_date TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_date) VALUES (1, \'2024-01-01 00:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_date) VALUES (7, \'2024-01-07 00:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_date) VALUES (9, \'2024-01-09 00:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_date) VALUES (10, \'2024-01-10 00:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_date) VALUES (11, \'2024-01-11 00:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_date) VALUES (12, \'2024-01-12 00:00:00\')' );
 
 		$rows = $driver->query(
 			'SELECT SQL_CALC_FOUND_ROWS wptests_posts.ID
@@ -13781,10 +13781,10 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_aggregate_count_order_by_is_dropped_for_postgresql(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_comments ("comment_ID" INTEGER PRIMARY KEY, comment_date_gmt TEXT NOT NULL, comment_approved TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", comment_date_gmt, comment_approved) VALUES (1, \'2024-01-03 00:00:00\', \'1\')' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", comment_date_gmt, comment_approved) VALUES (2, \'2024-01-01 00:00:00\', \'0\')' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", comment_date_gmt, comment_approved) VALUES (3, \'2024-01-02 00:00:00\', \'spam\')' );
+		$driver->query( 'CREATE TABLE wptests_comments (`comment_ID` INTEGER PRIMARY KEY, comment_date_gmt TEXT NOT NULL, comment_approved TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, comment_date_gmt, comment_approved) VALUES (1, \'2024-01-03 00:00:00\', \'1\')' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, comment_date_gmt, comment_approved) VALUES (2, \'2024-01-01 00:00:00\', \'0\')' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, comment_date_gmt, comment_approved) VALUES (3, \'2024-01-02 00:00:00\', \'spam\')' );
 
 		$rows = $driver->query(
 			"SELECT COUNT(*)
@@ -13812,11 +13812,11 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_user_role_count_aggregate_projection_preserves_array_n_shape(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_users ("ID" INTEGER PRIMARY KEY)' );
+		$driver->query( 'CREATE TABLE wptests_users (`ID` INTEGER PRIMARY KEY)' );
 		$driver->query( 'CREATE TABLE wptests_usermeta (user_id INTEGER NOT NULL, meta_key TEXT NOT NULL, meta_value TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_users ("ID") VALUES (1)' );
-		$driver->query( 'INSERT INTO wptests_users ("ID") VALUES (2)' );
-		$driver->query( 'INSERT INTO wptests_users ("ID") VALUES (3)' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`) VALUES (1)' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`) VALUES (2)' );
+		$driver->query( 'INSERT INTO wptests_users (`ID`) VALUES (3)' );
 		$driver->query( 'INSERT INTO wptests_usermeta (user_id, meta_key, meta_value) VALUES (1, \'wptests_capabilities\', \'a:1:{s:13:"administrator";b:1;}\')' );
 		$driver->query( 'INSERT INTO wptests_usermeta (user_id, meta_key, meta_value) VALUES (2, \'wptests_capabilities\', \'a:1:{s:6:"editor";b:1;}\')' );
 		$driver->query( 'INSERT INTO wptests_usermeta (user_id, meta_key, meta_value) VALUES (3, \'wptests_capabilities\', \'a:0:{}\')' );
@@ -13978,11 +13978,11 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_grouped_comment_meta_order_by_uses_aggregate_sort_expression(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_comments ("comment_ID" INTEGER PRIMARY KEY)' );
+		$driver->query( 'CREATE TABLE wptests_comments (`comment_ID` INTEGER PRIMARY KEY)' );
 		$driver->query( 'CREATE TABLE wptests_commentmeta (comment_id INTEGER NOT NULL, meta_key TEXT NOT NULL, meta_value TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID") VALUES (1)' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID") VALUES (2)' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID") VALUES (3)' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`) VALUES (1)' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`) VALUES (2)' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`) VALUES (3)' );
 		$driver->query( 'INSERT INTO wptests_commentmeta (comment_id, meta_key, meta_value) VALUES (1, \'foo\', \'aaa\')' );
 		$driver->query( 'INSERT INTO wptests_commentmeta (comment_id, meta_key, meta_value) VALUES (2, \'foo\', \'zzz\')' );
 		$driver->query( 'INSERT INTO wptests_commentmeta (comment_id, meta_key, meta_value) VALUES (3, \'foo\', \'jjj\')' );
@@ -14022,11 +14022,11 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 	public function test_grouped_comment_meta_secondary_order_by_uses_aggregate_sort_expression(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_comments ("comment_ID" INTEGER PRIMARY KEY, comment_date TEXT NOT NULL)' );
+		$driver->query( 'CREATE TABLE wptests_comments (`comment_ID` INTEGER PRIMARY KEY, comment_date TEXT NOT NULL)' );
 		$driver->query( 'CREATE TABLE wptests_commentmeta (comment_id INTEGER NOT NULL, meta_key TEXT NOT NULL, meta_value TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", comment_date) VALUES (1, \'2015-01-28 03:00:00\')' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", comment_date) VALUES (2, \'2015-01-28 05:00:00\')' );
-		$driver->query( 'INSERT INTO wptests_comments ("comment_ID", comment_date) VALUES (3, \'2015-01-28 03:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, comment_date) VALUES (1, \'2015-01-28 03:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, comment_date) VALUES (2, \'2015-01-28 05:00:00\')' );
+		$driver->query( 'INSERT INTO wptests_comments (`comment_ID`, comment_date) VALUES (3, \'2015-01-28 03:00:00\')' );
 		$driver->query( 'INSERT INTO wptests_commentmeta (comment_id, meta_key, meta_value) VALUES (1, \'foo\', \'jjj\')' );
 		$driver->query( 'INSERT INTO wptests_commentmeta (comment_id, meta_key, meta_value) VALUES (2, \'foo\', \'zzz\')' );
 		$driver->query( 'INSERT INTO wptests_commentmeta (comment_id, meta_key, meta_value) VALUES (3, \'foo\', \'aaa\')' );
@@ -31287,8 +31287,8 @@ $$'
 	public function test_ansi_quotes_sql_mode_treats_double_quoted_text_as_identifiers(): void {
 		$driver = $this->create_driver();
 
-		$driver->query( 'CREATE TABLE wptests_posts ("ID" INTEGER PRIMARY KEY, post_title TEXT NOT NULL)' );
-		$driver->query( 'INSERT INTO wptests_posts ("ID", post_title) VALUES (1, \'Hello\')' );
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_title TEXT NOT NULL)' );
+		$driver->query( 'INSERT INTO wptests_posts (`ID`, post_title) VALUES (1, \'Hello\')' );
 
 		$literal = $driver->query( 'SELECT "post_title" AS value' );
 		$this->assertSame( 'post_title', $literal[0]->value );
@@ -31377,13 +31377,13 @@ $$'
 
 		$driver->set_sql_mode( '' );
 		$this->assertSame(
-			"SELECT value FROM wptests_like_escape WHERE value LIKE 'abc{$backslash}_' OR value NOT LIKE 'def{$backslash}%'",
+			"SELECT value FROM wptests_like_escape WHERE value LIKE E'abc{$backslash}{$backslash}_' OR value NOT LIKE E'def{$backslash}{$backslash}%'",
 			$this->translate_driver_query_with_private_method( $driver, 'translate_mysql_compatible_query', $query )
 		);
 
 		$driver->set_sql_mode( 'NO_BACKSLASH_ESCAPES' );
 		$this->assertSame(
-			"SELECT value FROM wptests_like_escape WHERE value LIKE 'abc{$backslash}_' ESCAPE '' OR value NOT LIKE 'def{$backslash}%' ESCAPE ''",
+			"SELECT value FROM wptests_like_escape WHERE value LIKE E'abc{$backslash}{$backslash}_' ESCAPE '' OR value NOT LIKE E'def{$backslash}{$backslash}%' ESCAPE ''",
 			$this->translate_driver_query_with_private_method( $driver, 'translate_mysql_compatible_query', $query )
 		);
 
@@ -31392,11 +31392,11 @@ $$'
 			'translate_mysql_compatible_query',
 			"SELECT CAST(meta_value AS DECIMAL(10,2)) LIKE '12{$backslash}_' AS matched FROM wptests_postmeta"
 		);
-		$this->assertStringContainsString( "LIKE '12{$backslash}_' ESCAPE '' AS matched", $cast_like_sql );
+		$this->assertStringContainsString( "LIKE E'12{$backslash}{$backslash}_' ESCAPE '' AS matched", $cast_like_sql );
 		$this->assertStringNotContainsString( "ESCAPE '' ESCAPE ''", $cast_like_sql );
 
 		$this->assertSame(
-			"SELECT value FROM wptests_like_escape WHERE value LIKE 'abc{$backslash}_' ESCAPE '!'",
+			"SELECT value FROM wptests_like_escape WHERE value LIKE E'abc{$backslash}{$backslash}_' ESCAPE '!'",
 			$this->translate_driver_query_with_private_method(
 				$driver,
 				'translate_mysql_compatible_query',
@@ -32382,7 +32382,8 @@ $$'
 
 		$this->assertSame( array( 'alpha', 'beta' ), $parts );
 		$sql = $this->get_last_single_postgresql_sql( $driver );
-		$this->assertStringContainsString( 'GROUP_CONCAT(DISTINCT CAST(value AS text))', $sql );
+		$this->assertStringContainsString( "STRING_AGG(DISTINCT CAST(value AS text), CAST(',' AS text))", $sql );
+		$this->assertStringNotContainsString( 'GROUP_CONCAT', $sql );
 		$this->assertStringContainsString( ', 1024', $sql );
 	}
 
@@ -32879,10 +32880,35 @@ $$'
 					throw new InvalidArgumentException( 'Unsupported PostgreSQL catalog metadata fixture.' );
 				}
 
+				$metadata_schema = $this->get_mysql_create_table_select_backend_schema( $table_reference, false );
+				if ( 0 === strcasecmp( $metadata_schema, 'public' ) || 0 === strcasecmp( $metadata_schema, $this->db_name ) ) {
+					$metadata_schema = function ( string $table_name ): string {
+						return $this->resolve_mysql_table_schema_for_introspection( 'public', $table_name );
+					};
+				}
+
+				$metadata_tables = $this->get_postgresql_catalog_mysql_schema_metadata_or_fail( $query );
 				$this->sync_mysql_schema_catalog_side_effects_for_schema(
-					$this->get_postgresql_catalog_mysql_schema_metadata_or_fail( $query ),
-					$this->get_mysql_create_table_select_backend_schema( $table_reference, false )
+					$metadata_tables,
+					$metadata_schema
 				);
+
+				foreach ( $metadata_tables as $metadata ) {
+					$schema_name = is_callable( $metadata_schema )
+						? (string) call_user_func( $metadata_schema, $metadata['table_name'] )
+						: (string) $metadata_schema;
+					foreach ( $metadata['columns'] as $column ) {
+						$column_comment = $this->get_postgresql_catalog_column_comment( $column, true );
+						if ( '' !== $column_comment ) {
+							$this->sync_postgresql_catalog_column_comment(
+								$schema_name,
+								$metadata['table_name'],
+								(string) $column['name'],
+								$column_comment
+							);
+						}
+					}
+				}
 			},
 			$driver,
 			WP_PostgreSQL_Driver::class
@@ -33443,7 +33469,7 @@ $$'
 	 * @return WP_PostgreSQL_Driver
 	 */
 	private function create_driver( string $db_name = 'wptests' ): WP_PostgreSQL_Driver {
-		return $this->create_real_pgsql_driver( $db_name, true );
+		return $this->create_real_pgsql_driver( $db_name );
 	}
 
 	/**
@@ -33935,7 +33961,7 @@ $$'
 		$queries = $driver->get_last_postgresql_queries();
 
 		$this->assertCount( 1, $queries );
-		return $queries[0]['sql'];
+		return $this->remove_real_pgsql_test_schema_qualifiers( $queries[0]['sql'] );
 	}
 
 	/**
@@ -35156,7 +35182,7 @@ $$'
 	 * @return array[] PostgreSQL queries.
 	 */
 	private function get_last_schema_postgresql_queries( WP_PostgreSQL_Driver $driver ): array {
-		return array_values(
+		$queries = array_values(
 			array_filter(
 				$driver->get_last_postgresql_queries(),
 				static function ( array $query ): bool {
@@ -35168,6 +35194,13 @@ $$'
 				}
 			)
 		);
+
+		foreach ( $queries as &$query ) {
+			$query['sql'] = $this->remove_real_pgsql_test_schema_qualifiers( (string) $query['sql'] );
+		}
+		unset( $query );
+
+		return $queries;
 	}
 
 	/**
@@ -35289,6 +35322,14 @@ $$'
 	 * @param WP_PostgreSQL_Driver $driver Driver under test.
 	 */
 	private function install_direct_information_schema_options_metadata( WP_PostgreSQL_Driver $driver ): void {
+		$driver->query(
+			'CREATE TABLE wptests_options (
+				option_id INTEGER PRIMARY KEY,
+				option_name TEXT NOT NULL UNIQUE,
+				option_value TEXT NOT NULL,
+				autoload TEXT NOT NULL
+			)'
+		);
 		$this->install_mysql_schema_metadata_fixture(
 			$driver,
 			"CREATE TABLE wptests_options (

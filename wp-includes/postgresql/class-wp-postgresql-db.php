@@ -636,6 +636,10 @@ class WP_PostgreSQL_DB extends wpdb {
 				$this->postgresql_column_length_cache[ $tablekey ]
 			);
 		}
+
+		if ( $this->dbh instanceof WP_PostgreSQL_Driver ) {
+			$this->dbh->clear_metadata_caches();
+		}
 	}
 
 	/**
@@ -646,6 +650,10 @@ class WP_PostgreSQL_DB extends wpdb {
 		$this->col_meta                                 = array();
 		$this->postgresql_column_charset_metadata_cache = array();
 		$this->postgresql_column_length_cache           = array();
+
+		if ( $this->dbh instanceof WP_PostgreSQL_Driver ) {
+			$this->dbh->clear_metadata_caches();
+		}
 	}
 
 	/**

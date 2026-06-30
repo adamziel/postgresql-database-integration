@@ -754,6 +754,13 @@ class WP_PostgreSQL_Driver {
 	}
 
 	/**
+	 * Clear request-local metadata caches.
+	 */
+	public function clear_metadata_caches(): void {
+		$this->clear_mysql_metadata_caches();
+	}
+
+	/**
 	 * Get the auto-increment value generated for the last query.
 	 *
 	 * @return int|string
@@ -1266,20 +1273,29 @@ class WP_PostgreSQL_Driver {
 		$metadata_schema = ! empty( $create_table_query['temporary'] )
 			? $this->get_temporary_schema_for_metadata_table( $create_table_query['table'] )
 			: $create_table_query['schema'];
+		$metadata_schema_resolver = $metadata_schema;
+		if (
+			empty( $create_table_query['temporary'] )
+			&& 0 === strcasecmp( $metadata_schema, 'public' )
+		) {
+			$metadata_schema_resolver = function ( string $table_name ) use ( $metadata_schema ): string {
+				return $this->get_visible_postgresql_relation_schema( $table_name ) ?? $metadata_schema;
+			};
+		}
 
 		if ( null !== $metadata_query ) {
 			$this->sync_mysql_schema_catalog_side_effects_for_schema(
 				$metadata_tables,
-				! empty( $create_table_query['temporary'] ) ? array( $this, 'get_temporary_schema_for_metadata_table' ) : $metadata_schema
+				! empty( $create_table_query['temporary'] ) ? array( $this, 'get_temporary_schema_for_metadata_table' ) : $metadata_schema_resolver
 			);
 			$this->seed_mysql_column_metadata_introspection_cache_for_created_tables(
 				$metadata_tables,
-				! empty( $create_table_query['temporary'] ) ? array( $this, 'get_temporary_schema_for_metadata_table' ) : $metadata_schema,
+				! empty( $create_table_query['temporary'] ) ? array( $this, 'get_temporary_schema_for_metadata_table' ) : $metadata_schema_resolver,
 				$metadata_query
 			);
 			$this->seed_mysql_show_create_table_metadata_introspection_cache_for_created_tables(
 				$metadata_tables,
-				! empty( $create_table_query['temporary'] ) ? array( $this, 'get_temporary_schema_for_metadata_table' ) : $metadata_schema,
+				! empty( $create_table_query['temporary'] ) ? array( $this, 'get_temporary_schema_for_metadata_table' ) : $metadata_schema_resolver,
 				$metadata_query
 			);
 			if ( ! empty( $create_table_query['temporary'] ) ) {
@@ -3746,7 +3762,12 @@ class WP_PostgreSQL_Driver {
 
 			$table_name = $metadata['table_name'];
 			$this->mysql_show_create_table_metadata_introspection_cache[ $schema_name . "\0" . $table_name ] = $show_create_metadata;
-			if ( 'public' !== $schema_name && ! $this->is_mysql_temporary_schema_name( $schema_name ) ) {
+			$this->mysql_table_schema_introspection_cache[ $schema_name . "\0" . $table_name ] = $schema_name;
+			if (
+				! is_callable( $table_schema )
+				&& 'public' !== $schema_name
+				&& ! $this->is_mysql_temporary_schema_name( $schema_name )
+			) {
 				continue;
 			}
 
@@ -4484,12 +4505,12 @@ $wp_mysql_on_update$',
 			)
 		);
 	}
-	private function get_postgresql_catalog_column_comment( array $column ): string {
+	private function get_postgresql_catalog_column_comment( array $column, bool $force_metadata = false ): string {
 		$comment        = (string) ( $column['comment'] ?? '' );
 		$metadata_lines = array();
 
 		if (
-			$this->mysql_column_extra_has_default_generated( $column['extra'] ?? '' )
+			( $force_metadata || $this->mysql_column_extra_has_default_generated( $column['extra'] ?? '' ) )
 			&& array_key_exists( 'default', $column )
 			&& null !== $column['default']
 		) {
@@ -4497,7 +4518,10 @@ $wp_mysql_on_update$',
 		}
 
 		$column_type = strtolower( trim( (string) ( $column['type'] ?? '' ) ) );
-		if ( 1 === preg_match( '/^year unsigned$|^(?:dec|fixed|numeric|decimal)(?:\(\d+(?:,\d+)?\))? unsigned$|^(?:double|float|real)(?:\(\d+(?:,\d+)?\))? unsigned$/', $column_type ) ) {
+		if (
+			$force_metadata
+			|| 1 === preg_match( '/^year unsigned$|^(?:dec|fixed|numeric|decimal)(?:\(\d+(?:,\d+)?\))? unsigned$|^(?:double|float|real)(?:\(\d+(?:,\d+)?\))? unsigned$/', $column_type )
+		) {
 			$metadata_lines[] = self::MYSQL_COLUMN_COMMENT_TYPE_PREFIX . base64_encode( (string) $column['type'] );
 		}
 
@@ -11755,20 +11779,38 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 		}
 
 		if ( 'public' !== $schema_name && true !== $this->mysql_has_active_temporary_tables ) {
-			$this->mysql_table_schema_introspection_cache[ $cache_key ] = $schema_name;
-			return $schema_name;
+			$resolved_schema = $this->get_visible_postgresql_relation_schema( $table_name ) ?? $schema_name;
+			$this->mysql_table_schema_introspection_cache[ $cache_key ] = $resolved_schema;
+			return $resolved_schema;
 		}
 
 		if ( ! $this->mysql_connection_has_active_temporary_tables() ) {
-			$this->mysql_table_schema_introspection_cache[ $cache_key ] = $schema_name;
-			return $schema_name;
+			$resolved_schema = $this->get_visible_postgresql_relation_schema( $table_name ) ?? $schema_name;
+			$this->mysql_table_schema_introspection_cache[ $cache_key ] = $resolved_schema;
+			return $resolved_schema;
 		}
 
 		$temporary_schema = $this->get_active_temporary_table_schema( $table_name );
-		$resolved_schema  = null === $temporary_schema ? $schema_name : $temporary_schema;
+		$resolved_schema  = $temporary_schema ?? $this->get_visible_postgresql_relation_schema( $table_name ) ?? $schema_name;
 
 		$this->mysql_table_schema_introspection_cache[ $cache_key ] = $resolved_schema;
 		return $resolved_schema;
+	}
+	private function get_visible_postgresql_relation_schema( string $table_name ): ?string {
+		$stmt = $this->connection->query(
+			'SELECT n.nspname
+			FROM pg_catalog.pg_class c
+			INNER JOIN pg_catalog.pg_namespace n
+				ON n.oid = c.relnamespace
+			WHERE lower(c.relname) = lower(?)
+				AND c.relkind IN (\'r\', \'p\', \'v\', \'m\', \'f\')
+				AND pg_catalog.pg_table_is_visible(c.oid)
+			LIMIT 1',
+			array( $table_name )
+		);
+
+		$schema_name = $stmt->fetchColumn();
+		return false === $schema_name ? null : (string) $schema_name;
 	}
 	private function mysql_connection_has_active_temporary_tables(): bool {
 		if ( null !== $this->mysql_has_active_temporary_tables ) {
