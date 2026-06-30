@@ -1,9 +1,9 @@
 {
-	"name": "wordpress/postgresql-database-integration",
+	"name": "adamziel/postgresql-database-integration",
 	"description": "PostgreSQL database integration for WordPress.",
 	"type": "wordpress-plugin",
 	"license": "GPL-2.0-or-later",
-	"homepage": "https://github.com/wordpress/postgresql-database-integration",
+	"homepage": "https://github.com/adamziel/postgresql-database-integration",
 	"keywords": [ "wordpress", "plugin", "database", "postgresql" ],
 	"require": {
 		"php": ">=7.2",
