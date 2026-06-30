@@ -8647,13 +8647,41 @@ $wp_mysql_primary_index_comment$',
 		if ( 0 === strcasecmp( $database_name, 'information_schema' ) ) {
 			return 'information_schema';
 		}
-		if ( 0 === strcasecmp( $database_name, $this->main_db_name ) || 0 === strcasecmp( $database_name, 'public' ) ) {
+		if ( 0 === strcasecmp( $database_name, $this->main_db_name ) ) {
+			return $this->get_current_postgresql_schema();
+		}
+		if ( 0 === strcasecmp( $database_name, 'public' ) ) {
 			return 'public';
 		}
-		if ( ! $this->is_postgresql_internal_schema( $database_name ) ) {
+		if ( ! $this->is_postgresql_internal_schema( $database_name ) && $this->postgresql_schema_exists( $database_name ) ) {
 			return $database_name;
 		}
 		throw new InvalidArgumentException( sprintf( 'Unsupported %s statement.', $statement_type ) );
+	}
+	private function get_current_postgresql_schema(): string {
+		try {
+			$schema_name = $this->connection->query( 'SELECT current_schema()' )->fetchColumn();
+		} catch ( Throwable $e ) {
+			return 'public';
+		}
+		if ( false === $schema_name || null === $schema_name || '' === (string) $schema_name ) {
+			return 'public';
+		}
+		return (string) $schema_name;
+	}
+	private function postgresql_schema_exists( string $schema_name ): bool {
+		try {
+			$stmt = $this->connection->query(
+				'SELECT 1
+				FROM pg_catalog.pg_namespace
+				WHERE nspname = ?
+				LIMIT 1',
+				array( $schema_name )
+			);
+		} catch ( Throwable $e ) {
+			return false;
+		}
+		return false !== $stmt->fetchColumn();
 	}
 	private function is_postgresql_internal_schema( string $schema_name ): bool {
 		return 0 === strcasecmp( $schema_name, 'pg_catalog' ) || 0 === strncasecmp( $schema_name, 'pg_', 3 );
@@ -10193,6 +10221,7 @@ $wp_mysql_primary_index_comment$',
 	}
 	private function get_mysql_catalog_projected_show_statement_descriptor( string $type, array $context ): array {
 		if ( 'columns' === $type ) {
+			$display_schema = $this->get_direct_information_schema_display_schema( $context['resolved_schema'] );
 			return $this->get_mysql_catalog_projected_show_descriptor(
 				$this->get_mysql_show_output_columns( $context['is_full'] ? 'columns_full' : 'columns' ),
 				array(
@@ -10208,7 +10237,7 @@ $wp_mysql_primary_index_comment$',
 				),
 				'(' . $this->get_direct_information_schema_relation_sql( 'columns' ) . ') information_schema_columns',
 				sprintf( '"TABLE_SCHEMA" = COALESCE(NULLIF(?, %s), %s)' . "\n\t" . 'AND "TABLE_NAME" = ?', $this->connection->quote( 'public' ), $this->connection->quote( $this->main_db_name ) ),
-				array( $context['resolved_schema'], $context['table_name'] ),
+				array( $display_schema, $context['table_name'] ),
 				'ORDER BY "ORDINAL_POSITION"',
 				$this->get_mysql_key_value_array( 'filter', $context['where_filter'], 'like', $context['like'], 'like_expression', '"COLUMN_NAME"', 'cache_key', $this->get_mysql_introspection_result_cache_key( 'show_columns', $context['fetch_mode'], array( $context['resolved_schema'], $context['table_name'], $context['is_full'], $context['like'], $context['where_filter'], $context['fetch_mode'], $context['fetch_mode_args'] ) ), 'unsupported_message', 'Unsupported SHOW COLUMNS statement.' )
 			);
@@ -10251,7 +10280,8 @@ $wp_mysql_primary_index_comment$',
 			);
 		}
 		if ( 'index' === $type ) {
-			$columns = $this->get_mysql_show_output_columns( 'index' );
+			$columns        = $this->get_mysql_show_output_columns( 'index' );
+			$display_schema = $this->get_direct_information_schema_display_schema( $context['resolved_schema'] );
 			return $this->get_mysql_catalog_projected_show_descriptor(
 				$columns,
 				array_combine( $columns, array_map( array( $this->connection, 'quote_identifier' ), $columns ) ),
@@ -10283,7 +10313,7 @@ $wp_mysql_primary_index_comment$',
 					$this->connection->quote( $this->main_db_name )
 				),
 				'',
-				array( $context['resolved_schema'], $context['table_name'] ),
+				array( $display_schema, $context['table_name'] ),
 				"ORDER BY\n\t\"Key_name\" = 'PRIMARY' DESC,\n\t\"Non_unique\" = '0' DESC,\n\t\"Index_type\" = 'SPATIAL' DESC,\n\t\"Index_type\" = 'BTREE' DESC,\n\t\"Index_type\" = 'FULLTEXT' DESC,\n\tpostgresql_index_oid,\n\tCAST(\"Seq_in_index\" AS integer)",
 				$this->get_mysql_key_value_array( 'filter', $context['where_filter'], 'filter_prefix', 'WHERE ', 'cache_key', $this->get_mysql_introspection_result_cache_key( 'show_index', $context['fetch_mode'], array( $context['resolved_schema'], $context['table_name'], $context['where_filter'], $context['fetch_mode'], $context['fetch_mode_args'] ) ), 'unsupported_message', 'Unsupported SHOW INDEX statement.' )
 			);
@@ -10633,7 +10663,7 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 				),
 				'(' . $this->get_direct_information_schema_relation_sql( 'statistics', array( 'include_show_create_table_sort_columns' => true ) ) . ') statistics',
 				sprintf( "\"TABLE_SCHEMA\" = COALESCE(NULLIF(?, %s), %s)\n\t\tAND \"TABLE_NAME\" = ?\n\t\tAND \"COLUMN_NAME\" IS NOT NULL", $this->connection->quote( 'public' ), $this->connection->quote( $this->main_db_name ) ),
-				array( $schema_name, $table_name ),
+				array( $display_schema, $table_name ),
 				"ORDER BY\n\t\t\"INDEX_NAME\" = 'PRIMARY' DESC,\n\t\t\"NON_UNIQUE\" = 0 DESC,\n\t\t\"POSTGRESQL_ACCESS_METHOD\" = 'btree' DESC,\n\t\t\"POSTGRESQL_INDEX_OID\",\n\t\t\"SEQ_IN_INDEX\"",
 			),
 			'foreign_keys' => array(
@@ -10886,6 +10916,10 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 		$rows       = is_string( $row_source )
 			? $this->{$row_source}( $show_query, $columns )
 			: $this->get_mysql_dynamic_show_catalog_rows( $row_source, $columns, $show_query );
+		if ( 'databases' === $result_type && null !== $filter ) {
+			$rows   = $this->filter_mysql_show_database_rows( $rows, $filter );
+			$filter = null;
+		}
 		return $this->get_mysql_show_result_descriptor_array( $columns, $rows, is_string( $row_source ) ? null : $filter );
 	}
 	private function get_mysql_dynamic_show_catalog_rows( array $row_source, array $columns, array $show_query ): array {
@@ -11079,6 +11113,38 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 			)
 		);
 	}
+	private function filter_mysql_show_database_rows( array $rows, array $show_filter ): array {
+		return array_values(
+			array_filter(
+				$rows,
+				function ( array $row ) use ( $show_filter ): bool {
+					return $this->is_mysql_show_where_expression_filter( $show_filter )
+						&& is_array( $show_filter['predicate'] ?? null )
+						&& $this->evaluate_mysql_show_where_predicate( $show_filter['predicate'], $this->get_mysql_show_database_filter_row( $row ) );
+				}
+			)
+		);
+	}
+	private function get_mysql_show_database_filter_row( array $row ): array {
+		if ( ! array_key_exists( 'Database', $row ) ) {
+			return $row;
+		}
+
+		$current_schema  = $this->get_current_postgresql_schema();
+		$display_schema  = $this->get_direct_information_schema_display_schema( $current_schema );
+		$row_database    = (string) $row['Database'];
+		$has_alias       = 0 !== strcasecmp( $current_schema, $display_schema );
+		$is_current_row  = 0 === strcasecmp( $row_database, $display_schema );
+		if ( $has_alias && $is_current_row ) {
+			$row['Database'] = $this->get_mysql_show_where_value_aliases( array( $row_database, $current_schema ) );
+		}
+		return $row;
+	}
+	private function get_mysql_show_where_value_aliases( array $aliases ): array {
+		return array(
+			'__mysql_show_value_aliases' => array_values( array_unique( array_map( 'strval', $aliases ) ) ),
+		);
+	}
 	private function evaluate_mysql_show_where_predicate( array $predicate, array $row ): bool {
 		switch ( $predicate['type'] ?? null ) {
 			case 'and':
@@ -11260,6 +11326,24 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 		return null;
 	}
 	private function evaluate_mysql_show_where_comparison( $left, ?string $operator, $right, bool $binary = false, ?string $escape = null, bool $string_compare = false ): bool {
+		$left_values  = $this->get_mysql_show_where_value_candidates( $left );
+		$right_values = $this->get_mysql_show_where_value_candidates( $right );
+		foreach ( $left_values as $left_value ) {
+			foreach ( $right_values as $right_value ) {
+				if ( $this->evaluate_mysql_show_where_scalar_comparison( $left_value, $operator, $right_value, $binary, $escape, $string_compare ) ) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+	private function get_mysql_show_where_value_candidates( $value ): array {
+		if ( is_array( $value ) && isset( $value['__mysql_show_value_aliases'] ) && is_array( $value['__mysql_show_value_aliases'] ) ) {
+			return $value['__mysql_show_value_aliases'];
+		}
+		return array( $value );
+	}
+	private function evaluate_mysql_show_where_scalar_comparison( $left, ?string $operator, $right, bool $binary = false, ?string $escape = null, bool $string_compare = false ): bool {
 		if ( null === $left || null === $right ) {
 			return '<=>' === $operator && null === $left && null === $right;
 		}
@@ -19375,14 +19459,32 @@ FROM ' . $definition['from'];
 	}
 	private function get_direct_information_schema_display_schema_sql( string $schema_sql ): string {
 		return sprintf(
-			'CASE WHEN %1$s = %2$s THEN %3$s ELSE %1$s END',
+			'CASE
+	WHEN %1$s = current_schema() AND current_schema() <> %2$s THEN %3$s
+	WHEN %1$s = %2$s AND current_schema() = %2$s THEN %4$s
+	ELSE %1$s
+END',
 			$schema_sql,
 			$this->connection->quote( 'public' ),
+			$this->connection->quote( $this->get_current_postgresql_schema_display_database_name() ),
 			$this->connection->quote( $this->main_db_name )
 		);
 	}
 	private function get_direct_information_schema_display_schema( string $schema ): string {
-		return 0 === strcasecmp( $schema, 'public' ) ? $this->main_db_name : $schema;
+		$current_schema = $this->get_current_postgresql_schema();
+		if ( 0 === strcasecmp( $schema, $current_schema ) && 0 !== strcasecmp( $current_schema, 'public' ) ) {
+			return $this->get_current_postgresql_schema_display_database_name();
+		}
+		if ( 0 === strcasecmp( $schema, 'public' ) && 0 === strcasecmp( $current_schema, 'public' ) ) {
+			return $this->main_db_name;
+		}
+		return $schema;
+	}
+	private function get_current_postgresql_schema_display_database_name(): string {
+		if ( 0 !== strcasecmp( $this->db_name, 'information_schema' ) && ! $this->is_postgresql_internal_schema( $this->db_name ) ) {
+			return $this->db_name;
+		}
+		return $this->main_db_name;
 	}
 	private function get_direct_information_schema_catalog_data_type_expression( string $alias, bool $include_domain_cases = true, ?string $column_comment_sql = null ): string {
 		$comment_type_sql         = null === $column_comment_sql
