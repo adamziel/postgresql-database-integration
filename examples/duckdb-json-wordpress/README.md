@@ -25,7 +25,7 @@ working database. The external WordPress table storage is the JSON files under
 ## What This Runs
 
 The image is based on `wordpress:php8.3-apache`. It installs PHP FFI, Composer,
-the `satur.io/duckdb-auto` package, and this plugin as
+the `satur.io/duckdb` package, the DuckDB C library, and this plugin as
 `wp-content/plugins/wordpress-databases-support`.
 
 The bundled `wp-config.php` sets:
