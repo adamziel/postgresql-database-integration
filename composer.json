@@ -1,14 +1,13 @@
 {
-	"name": "adamziel/postgresql-database-integration",
-	"description": "PostgreSQL database integration for WordPress.",
+	"name": "adamziel/wordpress-databases-support",
+	"description": "Database backend support for WordPress, including PostgreSQL and DuckDB.",
 	"type": "wordpress-plugin",
 	"license": "GPL-2.0-or-later",
-	"homepage": "https://github.com/adamziel/postgresql-database-integration",
-	"keywords": [ "wordpress", "plugin", "database", "postgresql" ],
+	"homepage": "https://github.com/adamziel/wordpress-databases-support",
+	"keywords": [ "wordpress", "plugin", "database", "postgresql", "duckdb", "sqlite" ],
 	"require": {
 		"php": ">=7.2",
-		"ext-pdo": "*",
-		"ext-pdo_pgsql": "*"
+		"ext-pdo": "*"
 	},
 	"require-dev": {
 		"phpunit/phpunit": "^8.5 || ^9.6 || ^10.5 || ^11.5"
@@ -19,6 +18,9 @@
 		],
 		"test": [
 			"@test-postgresql"
+		],
+		"test-duckdb": [
+			"phpunit --configuration phpunit-duckdb.xml.dist"
 		],
 		"test-postgresql": [
 			"phpunit --configuration phpunit-postgresql.xml.dist"

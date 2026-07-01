@@ -10,8 +10,4 @@
  * @package wordpress-databases-support
  */
 
-require_once __DIR__ . '/wp-includes/database/version.php';
-require_once __DIR__ . '/constants.php';
-
-define( 'WORDPRESS_DATABASES_SUPPORT_MAIN_FILE', __FILE__ );
-define( 'POSTGRESQL_DATABASE_INTEGRATION_MAIN_FILE', __FILE__ );
+require_once __DIR__ . '/load.php';

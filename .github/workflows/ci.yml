@@ -61,6 +61,64 @@ jobs:
           PGSQL_TEST_USER: wordpress
           PGSQL_TEST_PASSWORD: wordpress
 
+  duckdb:
+    name: DuckDB tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: ffi, mbstring
+          ini-values: ffi.enable=true
+          coverage: none
+
+      - name: Validate Composer metadata
+        run: composer validate --strict --no-check-publish
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Install DuckDB PHP client
+        timeout-minutes: 8
+        run: |
+          composer config --no-plugins allow-plugins.satur.io/duckdb-auto true
+          composer require --dev --no-plugins --no-interaction --with-all-dependencies satur.io/duckdb-auto
+          composer dump-autoload
+          ./vendor/bin/install-c-lib
+
+      - name: Verify DuckDB runtime
+        timeout-minutes: 2
+        run: php -d ffi.enable=true -r "require 'vendor/autoload.php'; require 'wp-includes/database/load.php'; WP_DuckDB_Runtime::assert_available( true );"
+
+      - name: Run DuckDB PHPUnit suite
+        timeout-minutes: 10
+        run: composer run test-duckdb
+        env:
+          WP_DUCKDB_TESTS: '1'
+          WP_DUCKDB_AUTOLOAD: ${{ github.workspace }}/vendor/autoload.php
+          DUCKDB_PHP_AUTOLOAD: ${{ github.workspace }}/vendor/autoload.php
+
+  package:
+    name: Plugin package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build plugin zip
+        run: ./bin/build-plugin-zip.sh
+
+      - name: Verify plugin zip
+        run: unzip -t build/wordpress-databases-support.zip
+
   wordpress-core:
     name: WordPress core PHPUnit
     runs-on: ubuntu-latest
@@ -91,7 +149,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
-          path: postgresql-database-integration
+          path: wordpress-databases-support
 
       - name: Check out WordPress core
         uses: actions/checkout@v4
@@ -112,7 +170,7 @@ jobs:
         run: composer update -W --no-interaction --no-progress --prefer-dist
 
       - name: Prepare WordPress core PostgreSQL test harness
-        run: ./postgresql-database-integration/bin/prepare-wordpress-core-tests.sh wordpress postgresql-database-integration
+        run: ./wordpress-databases-support/bin/prepare-wordpress-core-tests.sh wordpress wordpress-databases-support
 
       - name: Run WordPress core PHPUnit suite
         working-directory: wordpress

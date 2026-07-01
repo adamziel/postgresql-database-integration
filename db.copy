@@ -1,35 +1,39 @@
 <?php
 /**
- * Plugin Name: PostgreSQL integration (Drop-in)
+ * Plugin Name: WordPress Databases Support (Drop-in)
  * Version: 0.1.0
  * Author: The WordPress Team
  *
- * Copy this file to wp-content/db.php to load the PostgreSQL database
+ * Copy this file to wp-content/db.php to load the configured database
  * integration before WordPress creates the wpdb instance.
  *
- * @package wp-postgresql-integration
+ * @package wordpress-databases-support
  */
 
-define( 'POSTGRESQL_DB_DROPIN_VERSION', '0.1.0' );
+define( 'WORDPRESS_DATABASES_SUPPORT_DB_DROPIN_VERSION', '0.1.0' );
 
-$postgresql_plugin_implementation_folder_path = '{POSTGRESQL_IMPLEMENTATION_FOLDER_PATH}';
-if ( ! file_exists( $postgresql_plugin_implementation_folder_path ) ) {
-	$postgresql_plugin_implementation_folder_path = realpath( __DIR__ . '/plugins/postgresql-database-integration' );
+$databases_support_plugin_implementation_folder_path = '{WORDPRESS_DATABASES_SUPPORT_IMPLEMENTATION_FOLDER_PATH}';
+if ( ! file_exists( $databases_support_plugin_implementation_folder_path ) ) {
+	$databases_support_plugin_implementation_folder_path = realpath( __DIR__ . '/plugins/wordpress-databases-support' );
 }
 
 if (
-	! $postgresql_plugin_implementation_folder_path
-	|| ! file_exists( $postgresql_plugin_implementation_folder_path . '/wp-includes/db.php' )
+	! $databases_support_plugin_implementation_folder_path
+	|| ! file_exists( $databases_support_plugin_implementation_folder_path . '/wp-includes/db.php' )
 ) {
 	return;
 }
 
 $database_engine = defined( 'DB_ENGINE' )
-	? DB_ENGINE
+	? strtolower( (string) DB_ENGINE )
 	: ( defined( 'DATABASE_ENGINE' ) ? DATABASE_ENGINE : 'postgresql' );
 $database_engine = strtolower( (string) $database_engine );
 if ( in_array( $database_engine, array( 'postgres', 'pgsql', 'postgresql' ), true ) ) {
 	$database_engine = 'postgresql';
+} elseif ( in_array( $database_engine, array( 'duck', 'duckdb' ), true ) ) {
+	$database_engine = 'duckdb';
+} elseif ( in_array( $database_engine, array( 'sqlite', 'sqlite3' ), true ) ) {
+	$database_engine = 'sqlite';
 }
 
 if ( ! defined( 'DATABASE_TYPE' ) ) {
@@ -40,4 +44,4 @@ if ( ! defined( 'DB_ENGINE' ) ) {
 	define( 'DB_ENGINE', $database_engine );
 }
 
-require_once $postgresql_plugin_implementation_folder_path . '/wp-includes/db.php';
+require_once $databases_support_plugin_implementation_folder_path . '/wp-includes/db.php';
