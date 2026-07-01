@@ -39,6 +39,20 @@ class WP_DuckDB_DB extends wpdb {
 	private $last_statement;
 
 	/**
+	 * Configured DuckDB storage backend.
+	 *
+	 * @var WP_DuckDB_Storage_Backend|null
+	 */
+	private $storage_backend;
+
+	/**
+	 * Whether the external storage shutdown flush was registered.
+	 *
+	 * @var bool
+	 */
+	private $storage_backend_shutdown_registered = false;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param string $dbname Database name.
@@ -169,10 +183,28 @@ class WP_DuckDB_DB extends wpdb {
 			return false;
 		}
 
+		try {
+			$this->flush_storage_backend();
+		} catch ( Throwable $e ) {
+			$this->last_error = $e->getMessage();
+			return false;
+		}
+
 		$this->ready         = false;
 		$this->has_connected = false;
 
 		return true;
+	}
+
+	/**
+	 * Flush configured DuckDB external storage, when enabled.
+	 *
+	 * @return void
+	 */
+	public function flush_storage_backend() {
+		if ( $this->storage_backend instanceof WP_DuckDB_Storage_Backend ) {
+			$this->storage_backend->flush();
+		}
 	}
 
 	/**
@@ -303,17 +335,15 @@ class WP_DuckDB_DB extends wpdb {
 			return false;
 		}
 
-		$this->ensure_database_directory( FQDUCKDB );
-
 		try {
 			if ( ! $this->dbh ) {
-				$connection = new WP_DuckDB_Connection( array( 'path' => FQDUCKDB ) );
-				$this->dbh  = new WP_DuckDB_Driver(
-					array(
-						'connection' => $connection,
-						'database'   => $this->dbname,
-					)
-				);
+				$this->storage_backend = WP_DuckDB_Storage_Backend::from_constants();
+				$database_path         = $this->storage_backend->get_database_path();
+				if ( null !== $database_path && ':memory:' !== $database_path ) {
+					$this->ensure_database_directory( $database_path );
+				}
+				$this->dbh = $this->storage_backend->create_driver( $this->dbname );
+				$this->register_storage_backend_shutdown_flush();
 			} elseif ( $this->dbh instanceof WP_DuckDB_Connection ) {
 				$this->dbh = new WP_DuckDB_Driver(
 					array(
@@ -341,6 +371,33 @@ class WP_DuckDB_DB extends wpdb {
 			return false;
 		}
 		return true;
+	}
+
+	/**
+	 * Register a shutdown flush for external DuckDB storage.
+	 *
+	 * @return void
+	 */
+	private function register_storage_backend_shutdown_flush() {
+		if ( $this->storage_backend_shutdown_registered ) {
+			return;
+		}
+		if ( ! $this->storage_backend instanceof WP_DuckDB_Storage_Backend || ! $this->storage_backend->is_external() ) {
+			return;
+		}
+
+		$storage_backend = $this->storage_backend;
+		register_shutdown_function(
+			static function () use ( $storage_backend ) {
+				try {
+					$storage_backend->flush();
+				} catch ( Throwable $e ) {
+					error_log( '[duckdb-storage-backend-flush] ' . $e->getMessage() );
+				}
+			}
+		);
+
+		$this->storage_backend_shutdown_registered = true;
 	}
 
 	/**

@@ -60,6 +60,244 @@ define( 'DUCKDB_FILE', '.ht.duckdb' );
 define( 'DUCKDB_PHP_AUTOLOAD', __DIR__ . '/wp-content/plugins/wordpress-databases-support/vendor/autoload.php' );
 ```
 
+### DuckDB Backend Setup
+
+DuckDB can use many data sources, including file formats, network protocols,
+object storage, lakehouse formats, and attached database systems. See DuckDB's
+[data sources](https://duckdb.org/docs/current/data/data_sources) and
+[extensions](https://duckdb.org/docs/current/extensions/overview) docs for the
+full current surface.
+
+This plugin supports two DuckDB backend modes:
+
+- Native DuckDB file storage: use `DUCKDB_BACKEND` unset, `duckdb`, `duck`,
+  `native`, or `file`.
+- External storage: hydrate WordPress tables into a mutable working DuckDB file,
+  let WordPress write through the normal `wpdb` path, then flush tables back
+  through DuckDB SQL on close and shutdown.
+
+External storage is only a usable WordPress backend when DuckDB can both read
+the source and write a complete table back to it. Plain HTTP(S) files are useful
+for reads, but DuckDB documents them as read-only through `httpfs`; S3-compatible
+object storage supports reads and writes through the S3 API.
+
+Common constants:
+
+| Constant | Purpose |
+| --- | --- |
+| `DUCKDB_BACKEND` | Backend name. Built-in presets: `parquet`, `csv`, `json`. Any other name uses custom SQL templates. |
+| `DUCKDB_EXTERNAL_STORAGE_DIR` | Directory or URI prefix that stores one file per WordPress table, such as `wp_options.parquet`. |
+| `DUCKDB_WORKING_DATABASE_FILE` | Mutable DuckDB working database. Defaults to `FQDUCKDB`; keep this even for external backends. |
+| `DUCKDB_BACKEND_FILE_EXTENSION` | File extension for path-based custom backends, such as `psv` or `parquet`. |
+| `DUCKDB_BACKEND_READ_SQL` | SQL relation template used to hydrate one local working table. |
+| `DUCKDB_BACKEND_WRITE_SQL` | SQL statement template used to flush one local working table. |
+| `DUCKDB_BACKEND_SETUP_SQL` | SQL statements to run after connecting, such as `INSTALL`, `LOAD`, `CREATE SECRET`, or `ATTACH`. |
+| `DUCKDB_BACKEND_TABLES` | Explicit table list. Use this for remote/object/attached backends that PHP cannot discover by scanning a local directory. |
+| `DUCKDB_BACKEND_ATOMIC_FLUSH` | Whether to write local path-based output to a temporary file first. Defaults to on for local paths and off for URIs. |
+
+SQL templates support these placeholders:
+
+| Placeholder | Replaced with |
+| --- | --- |
+| `{table}` or `{table_identifier}` | The local DuckDB table as a quoted identifier, for example `"wp_options"`. |
+| `{table_name}` | The table name as a quoted string literal, for example `'wp_options'`. |
+| `{path}` or `{source}` | The per-table path/URI as a quoted string literal, for example `'s3://bucket/wp/wp_options.parquet'`. |
+
+#### Native DuckDB File
+
+Use this when you want the simplest setup: one DuckDB database file under
+`wp-content/database/`.
+
+```php
+define( 'DB_ENGINE', 'duckdb' );
+define( 'DB_DIR', __DIR__ . '/wp-content/database/' );
+define( 'DUCKDB_FILE', '.ht.duckdb' );
+define( 'DUCKDB_PHP_AUTOLOAD', __DIR__ . '/wp-content/plugins/wordpress-databases-support/vendor/autoload.php' );
+```
+
+#### Local Parquet, CSV, Or JSON Files
+
+Use a built-in preset when each WordPress table should be stored as one local
+file. The directory can start empty for a fresh install; existing files are
+hydrated when WordPress connects.
+
+```php
+define( 'DB_ENGINE', 'duckdb' );
+define( 'DB_DIR', __DIR__ . '/wp-content/database/' );
+define( 'DUCKDB_BACKEND', 'parquet' ); // Also accepts csv or json.
+define( 'DUCKDB_EXTERNAL_STORAGE_DIR', __DIR__ . '/wp-content/database/duckdb-parquet/' );
+define( 'DUCKDB_WORKING_DATABASE_FILE', __DIR__ . '/wp-content/database/.ht.duckdb-working' );
+define( 'DUCKDB_PHP_AUTOLOAD', __DIR__ . '/wp-content/plugins/wordpress-databases-support/vendor/autoload.php' );
+```
+
+That produces files such as:
+
+```text
+wp-content/database/duckdb-parquet/wp_options.parquet
+wp-content/database/duckdb-parquet/wp_posts.parquet
+wp-content/database/duckdb-parquet/wp_postmeta.parquet
+```
+
+Use a matching directory name for CSV or JSON:
+
+```php
+define( 'DUCKDB_BACKEND', 'csv' );
+define( 'DUCKDB_EXTERNAL_STORAGE_DIR', __DIR__ . '/wp-content/database/duckdb-csv/' );
+```
+
+```php
+define( 'DUCKDB_BACKEND', 'json' );
+define( 'DUCKDB_EXTERNAL_STORAGE_DIR', __DIR__ . '/wp-content/database/duckdb-json/' );
+```
+
+#### Custom File Format Or COPY Options
+
+Use custom templates when DuckDB can read and write the storage with SQL but the
+format is not one of the presets. DuckDB's
+[COPY statement](https://duckdb.org/docs/lts/sql/statements/copy) selects common
+formats by extension and can gain more copy functions through extensions. This
+example stores pipe-delimited files with a `.psv` extension.
+
+```php
+define( 'DB_ENGINE', 'duckdb' );
+define( 'DUCKDB_BACKEND', 'pipe_text' );
+define( 'DUCKDB_EXTERNAL_STORAGE_DIR', __DIR__ . '/wp-content/database/pipe-text/' );
+define( 'DUCKDB_BACKEND_FILE_EXTENSION', 'psv' );
+define( 'DUCKDB_BACKEND_READ_SQL', "SELECT * FROM read_csv_auto({path}, HEADER = true, DELIM = '|')" );
+define( 'DUCKDB_BACKEND_WRITE_SQL', "COPY {table} TO {path} (HEADER, DELIMITER '|')" );
+```
+
+#### S3, Cloudflare R2, MinIO, Or Other S3-Compatible Storage
+
+Use [`httpfs`](https://duckdb.org/docs/current/core_extensions/httpfs/overview)
+for S3-compatible object storage. DuckDB's
+[S3 API support](https://duckdb.org/docs/lts/core_extensions/httpfs/s3api)
+handles reading, writing, and globbing files. PHP cannot scan an `s3://` prefix
+like a local directory, so provide the WordPress table list.
+
+```php
+define( 'DB_ENGINE', 'duckdb' );
+define( 'DUCKDB_BACKEND', 's3_parquet' );
+define( 'DUCKDB_EXTERNAL_STORAGE_DIR', 's3://example-bucket/wordpress/' );
+define( 'DUCKDB_BACKEND_FILE_EXTENSION', 'parquet' );
+define( 'DUCKDB_BACKEND_SETUP_SQL', array(
+	'INSTALL httpfs',
+	'LOAD httpfs',
+	"CREATE OR REPLACE SECRET wp_s3 (
+		TYPE s3,
+		PROVIDER credential_chain,
+		REGION 'us-east-1',
+		SCOPE 's3://example-bucket/wordpress/'
+	)",
+) );
+define( 'DUCKDB_BACKEND_TABLES', array(
+	'wp_options',
+	'wp_posts',
+	'wp_postmeta',
+	'wp_terms',
+	'wp_term_taxonomy',
+	'wp_term_relationships',
+	'wp_users',
+	'wp_usermeta',
+) );
+define( 'DUCKDB_BACKEND_READ_SQL', 'SELECT * FROM read_parquet({path})' );
+define( 'DUCKDB_BACKEND_WRITE_SQL', 'COPY {table} TO {path} (FORMAT PARQUET)' );
+define( 'DUCKDB_BACKEND_ATOMIC_FLUSH', false );
+```
+
+The table list above is intentionally short. Add every WordPress and plugin table
+that should survive a fresh connection; tables that are not listed cannot be
+hydrated when PHP cannot scan the backend.
+
+For public HTTPS files, DuckDB can read files through `httpfs`, but regular
+HTTP(S) does not provide a write API. Do not use plain HTTPS as the only mutable
+WordPress storage backend unless your `DUCKDB_BACKEND_WRITE_SQL` writes to a
+different writable target.
+
+#### Attached SQLite Database
+
+Use DuckDB's [SQLite extension](https://duckdb.org/docs/current/core_extensions/sqlite)
+when you want DuckDB to hydrate from and flush to a SQLite database file. The
+write template below replaces each remote table on flush; use a dedicated SQLite
+database, not an unrelated production file.
+
+```php
+define( 'DB_ENGINE', 'duckdb' );
+define( 'DUCKDB_BACKEND', 'sqlite_attach' );
+define( 'DUCKDB_BACKEND_SETUP_SQL', array(
+	'INSTALL sqlite',
+	'LOAD sqlite',
+	"ATTACH '" . __DIR__ . "/wp-content/database/wordpress.sqlite' AS wp_store (TYPE sqlite)",
+) );
+define( 'DUCKDB_BACKEND_TABLES', array( 'wp_options', 'wp_posts', 'wp_postmeta' ) );
+define( 'DUCKDB_BACKEND_READ_SQL', 'SELECT * FROM wp_store.{table}' );
+define( 'DUCKDB_BACKEND_WRITE_SQL', 'CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}' );
+define( 'DUCKDB_BACKEND_ATOMIC_FLUSH', false );
+```
+
+DuckDB's SQLite extension can read and write attached SQLite files, but SQLite
+and DuckDB have different typing rules. Test your schema before using this for
+real WordPress data.
+
+#### Attached PostgreSQL Or MySQL Database
+
+DuckDB's [PostgreSQL](https://duckdb.org/docs/current/core_extensions/postgres/overview)
+and [MySQL](https://duckdb.org/docs/lts/core_extensions/mysql) extensions can
+attach running database servers and read/write through DuckDB SQL. Use this
+pattern only with an isolated schema or database because the example flush
+strategy replaces tables.
+
+The examples below are full-table replacement recipes. They are not incremental
+replication and should not point at unrelated production tables.
+
+PostgreSQL:
+
+```php
+define( 'DB_ENGINE', 'duckdb' );
+define( 'DUCKDB_BACKEND', 'postgres_attach' );
+define( 'DUCKDB_BACKEND_SETUP_SQL', array(
+	'INSTALL postgres',
+	'LOAD postgres',
+	"ATTACH 'host=127.0.0.1 port=5432 dbname=wordpress_duck user=wordpress password=secret' AS wp_store (TYPE postgres, SCHEMA 'public')",
+) );
+define( 'DUCKDB_BACKEND_TABLES', array( 'wp_options', 'wp_posts', 'wp_postmeta' ) );
+define( 'DUCKDB_BACKEND_READ_SQL', 'SELECT * FROM wp_store.{table}' );
+define( 'DUCKDB_BACKEND_WRITE_SQL', 'CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}' );
+define( 'DUCKDB_BACKEND_ATOMIC_FLUSH', false );
+```
+
+MySQL:
+
+```php
+define( 'DB_ENGINE', 'duckdb' );
+define( 'DUCKDB_BACKEND', 'mysql_attach' );
+define( 'DUCKDB_BACKEND_SETUP_SQL', array(
+	'INSTALL mysql',
+	'LOAD mysql',
+	"ATTACH 'host=127.0.0.1 user=wordpress password=secret database=wordpress_duck' AS wp_store (TYPE mysql)",
+) );
+define( 'DUCKDB_BACKEND_TABLES', array( 'wp_options', 'wp_posts', 'wp_postmeta' ) );
+define( 'DUCKDB_BACKEND_READ_SQL', 'SELECT * FROM wp_store.{table}' );
+define( 'DUCKDB_BACKEND_WRITE_SQL', 'CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}' );
+define( 'DUCKDB_BACKEND_ATOMIC_FLUSH', false );
+```
+
+If you want PostgreSQL as the actual WordPress database, prefer the native
+`DB_ENGINE=postgresql` backend instead of routing WordPress through DuckDB and
+then through DuckDB's PostgreSQL extension.
+
+#### Lakehouse And Extension Backends
+
+DuckDB supports [lakehouse formats](https://duckdb.org/docs/lts/lakehouse_formats)
+such as Delta, Iceberg, Lance, and DuckLake through extensions. Configure them
+with the same constants: load the required extension, list the WordPress tables,
+and provide templates that fully hydrate and flush one table.
+
+Do not copy a generic lakehouse block without checking the extension's write
+support. Some formats expose full reads but only limited writes. For WordPress
+storage, the write template must be able to replace or otherwise faithfully
+synchronize each table.
+
 SQLite:
 
 ```php
@@ -71,10 +309,11 @@ define( 'DB_FILE', '.ht.sqlite' );
 `DB_ENGINE` also accepts `postgres`, `pgsql`, `duck`, `sqlite3`, and the
 backward-compatible `DATABASE_ENGINE` constant.
 
-## DuckDB External Storage Proof
+## DuckDB External Storage Backends
 
-The DuckDB suite includes a focused proof that Parquet, CSV, and JSON files can
-act as durable WordPress table storage through DuckDB:
+The DuckDB suite includes focused proof that Parquet, CSV, JSON, and custom
+DuckDB SQL-template backends can act as durable WordPress table storage through
+the configured backend:
 
 - It creates WordPress-shaped `wptests_posts`, `wptests_postmeta`, and
   `wptests_options` data.
@@ -84,6 +323,12 @@ act as durable WordPress table storage through DuckDB:
   and JSON files, mutating them through `WP_DuckDB_Driver`, flushing them back
   to the external files with `COPY`, and reloading fresh DuckDB connections to
   verify the mutations persisted.
+- It proves `DUCKDB_BACKEND`-style configuration by connecting through
+  `WP_DuckDB_Storage_Backend`, mutating WordPress tables and a custom table,
+  flushing the configured backend, and reconnecting from the same external
+  files.
+- It proves an arbitrary custom backend name using custom DuckDB read/write
+  templates, so support is not limited to the built-in presets.
 
 This is a mutable WordPress storage model backed by external files. It is not
 in-place mutation of Parquet/CSV/JSON scan functions.
@@ -103,8 +348,9 @@ DUCKDB_PHP_AUTOLOAD="$PWD/vendor/autoload.php" \
 composer run test-duckdb
 ```
 
-The external-format test class is
-`tests/duckdb/WP_DuckDB_External_Format_Backend_Tests.php`.
+The external-format and configured-backend test classes are
+`tests/duckdb/WP_DuckDB_External_Format_Backend_Tests.php` and
+`tests/duckdb/WP_DuckDB_Storage_Backend_Tests.php`.
 
 ## Development
 
