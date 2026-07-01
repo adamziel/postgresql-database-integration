@@ -60,6 +60,86 @@ class WP_DuckDB_External_Format_Backend_Tests extends WP_DuckDB_TestCase {
 		);
 	}
 
+	public function test_csv_storage_backend_hydrates_with_recorded_wordpress_metadata(): void {
+		$this->requireDuckDBRuntime();
+
+		$temp_dir = $this->create_temp_dir();
+		$database = $temp_dir . '/wordpress.duckdb';
+		$backend  = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'              => 'csv',
+				'database_path'        => $database,
+				'external_storage_dir' => $temp_dir,
+			)
+		);
+		$driver   = $backend->create_driver( 'wp' );
+
+		$driver->query(
+			"CREATE TABLE wptests_posts (
+				ID bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				post_date datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
+				post_date_gmt datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
+				post_title varchar(255) NOT NULL DEFAULT '',
+				post_status varchar(20) NOT NULL DEFAULT 'publish',
+				PRIMARY KEY (ID)
+			)"
+		);
+		$driver->query(
+			"CREATE TABLE wptests_comments (
+				comment_ID bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				comment_approved varchar(20) NOT NULL DEFAULT '1',
+				PRIMARY KEY (comment_ID)
+			)"
+		);
+		$driver->query(
+			"INSERT INTO wptests_posts (post_date, post_date_gmt, post_title, post_status)
+			VALUES ('2026-07-01 12:00:00', '2026-07-01 12:00:00', 'Seed post', 'publish')"
+		);
+		$driver->query( "INSERT INTO wptests_comments (comment_approved) VALUES ('1')" );
+		$backend->flush();
+		unset( $driver, $backend );
+
+		$fresh_backend = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'              => 'csv',
+				'database_path'        => $database,
+				'external_storage_dir' => $temp_dir,
+			)
+		);
+		$fresh_driver  = $fresh_backend->create_driver( 'wp' );
+		$fresh_driver->query( "SET SESSION sql_mode = ''" );
+
+		$this->assertSame(
+			1,
+			$fresh_driver->query(
+				"INSERT INTO wptests_posts (post_date, post_date_gmt, post_title, post_status)
+				VALUES ('2026-07-01 13:00:00', '0000-00-00 00:00:00', 'Auto draft', 'auto-draft')"
+			)->rowCount()
+		);
+		$this->assertSame( 2, $fresh_driver->get_insert_id() );
+		$this->assertSame(
+			array(
+				array(
+					'ID'            => 2,
+					'post_date_gmt' => '0000-00-00 00:00:00',
+				),
+			),
+			$fresh_driver->query(
+				"SELECT ID, post_date_gmt
+				FROM wptests_posts
+				WHERE post_title = 'Auto draft'"
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame(
+			array( array( 'trashed' => 0 ) ),
+			$fresh_driver->query(
+				"SELECT COUNT(*) AS trashed
+				FROM wptests_comments
+				WHERE comment_approved = 'trash'"
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
 	/**
 	 * @dataProvider external_format_provider
 	 *

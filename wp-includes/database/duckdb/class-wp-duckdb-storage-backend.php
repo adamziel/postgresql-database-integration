@@ -533,13 +533,309 @@ class WP_DuckDB_Storage_Backend {
 			if ( $this->is_internal_table_name( $table ) ) {
 				continue;
 			}
+			$this->hydrate_external_table( $table, $source );
+		}
+
+		$this->hydrated = true;
+	}
+
+	/**
+	 * Hydrate one external table into a mutable working table.
+	 *
+	 * @param string      $table  Table name.
+	 * @param string|null $source External source.
+	 * @return void
+	 */
+	private function hydrate_external_table( string $table, ?string $source ): void {
+		$metadata = $this->column_metadata_for_table( $table );
+
+		if ( array() === $metadata ) {
 			$this->connection->query(
 				'CREATE TABLE ' . $this->connection->quote_identifier( $table ) .
 				' AS ' . $this->render_sql_template( $this->read_sql_template, $table, $source )
 			);
+			return;
 		}
 
-		$this->hydrated = true;
+		$this->hydrate_external_table_with_metadata( $table, $source, $metadata );
+	}
+
+	/**
+	 * Hydrate one external table using recorded MySQL column metadata.
+	 *
+	 * External readers such as read_csv_auto() infer native DuckDB types from file
+	 * contents. WordPress schemas need the MySQL-emulation storage types instead:
+	 * temporal columns must remain VARCHAR so zero-date sentinels can round-trip,
+	 * and AUTO_INCREMENT columns need their nextval() defaults restored.
+	 *
+	 * @param string              $table    Table name.
+	 * @param string|null         $source   External source.
+	 * @param array<int,array<string,mixed>> $metadata Column metadata rows.
+	 * @return void
+	 */
+	private function hydrate_external_table_with_metadata( string $table, ?string $source, array $metadata ): void {
+		$columns       = array();
+		$select_values = array();
+		$source_sql    = $this->render_sql_template( $this->read_sql_template, $table, $source );
+		$primary_key   = $this->single_column_primary_key( $metadata );
+
+		foreach ( $metadata as $column ) {
+			$column_name = (string) $column['column_name'];
+			$duck_type   = $this->duckdb_type_for_metadata_column( $column );
+			$source_ref  = $this->connection->quote_identifier( '__src' ) . '.' . $this->connection->quote_identifier( $column_name );
+			$column_sql  = $this->connection->quote_identifier( $column_name ) . ' ' . $duck_type;
+
+			if ( $this->metadata_column_is_auto_increment( $column ) ) {
+				$sequence_name = $this->auto_increment_sequence_name( $table, $column_name );
+				$next_value    = $this->next_auto_increment_value_from_source( $source_sql, $column_name );
+
+				$this->connection->query( 'DROP SEQUENCE IF EXISTS ' . $this->connection->quote_identifier( $sequence_name ) );
+				$this->connection->query(
+					'CREATE SEQUENCE '
+						. $this->connection->quote_identifier( $sequence_name )
+						. ' START '
+						. max( 1, $next_value )
+				);
+
+				$column_sql      = $this->connection->quote_identifier( $column_name )
+					. ' BIGINT DEFAULT nextval('
+					. $this->connection->quote( $sequence_name )
+					. ')';
+				$select_values[] = 'COALESCE(TRY_CAST(' . $source_ref . ' AS BIGINT), nextval(' . $this->connection->quote( $sequence_name ) . '))';
+			} else {
+				$default_sql = $this->default_sql_for_metadata_column( $column, $duck_type );
+				if ( null !== $default_sql ) {
+					$column_sql .= ' DEFAULT ' . $default_sql;
+				}
+
+				$select_values[] = $this->coerce_external_source_value_sql( $source_ref, $duck_type );
+			}
+
+			if ( null !== $primary_key && 0 === strcasecmp( $primary_key, $column_name ) ) {
+				$column_sql .= ' PRIMARY KEY';
+			}
+
+			$columns[] = $column_sql;
+		}
+
+		$this->connection->query(
+			'CREATE TABLE '
+				. $this->connection->quote_identifier( $table )
+				. ' ('
+				. implode( ', ', $columns )
+				. ')'
+		);
+
+		$this->connection->query(
+			'INSERT INTO '
+				. $this->connection->quote_identifier( $table )
+				. ' ('
+				. implode(
+					', ',
+					array_map(
+						function ( array $column ): string {
+							return $this->connection->quote_identifier( (string) $column['column_name'] );
+						},
+						$metadata
+					)
+				)
+				. ') SELECT '
+				. implode( ', ', $select_values )
+				. ' FROM ('
+				. $source_sql
+				. ') AS '
+				. $this->connection->quote_identifier( '__src' )
+		);
+	}
+
+	/**
+	 * Read recorded MySQL column metadata for a table.
+	 *
+	 * @param string $table Table name.
+	 * @return array<int,array<string,mixed>>
+	 */
+	private function column_metadata_for_table( string $table ): array {
+		if ( ! class_exists( 'WP_DuckDB_Driver' ) ) {
+			return array();
+		}
+
+		try {
+			$stmt = $this->connection->query(
+				'SELECT ordinal_position, column_name, column_type, is_nullable, column_key, column_default, extra FROM '
+					. $this->connection->quote_identifier( WP_DuckDB_Driver::COLUMN_METADATA_TABLE )
+					. ' WHERE table_name = '
+					. $this->connection->quote( $table )
+					. ' ORDER BY ordinal_position'
+			);
+		} catch ( Throwable $e ) {
+			return array();
+		}
+
+		$rows = $stmt->fetchAll( PDO::FETCH_ASSOC );
+		foreach ( $rows as $row ) {
+			if ( ! isset( $row['column_name'], $row['column_type'] ) ) {
+				return array();
+			}
+		}
+
+		return $rows;
+	}
+
+	/**
+	 * Return the only primary-key column in a metadata set.
+	 *
+	 * Composite primary keys are left to driver metadata. Recreating them here
+	 * would require table-level constraint synthesis from the index metadata.
+	 *
+	 * @param array<int,array<string,mixed>> $metadata Column metadata rows.
+	 * @return string|null Single primary-key column, or null.
+	 */
+	private function single_column_primary_key( array $metadata ): ?string {
+		$primary_key = null;
+		foreach ( $metadata as $column ) {
+			if ( ! isset( $column['column_key'] ) || 'PRI' !== strtoupper( (string) $column['column_key'] ) ) {
+				continue;
+			}
+			if ( null !== $primary_key ) {
+				return null;
+			}
+			$primary_key = (string) $column['column_name'];
+		}
+
+		return $primary_key;
+	}
+
+	/**
+	 * Map a recorded MySQL column type to the DuckDB storage type used by the driver.
+	 *
+	 * @param array<string,mixed> $column Column metadata.
+	 * @return string DuckDB type.
+	 */
+	private function duckdb_type_for_metadata_column( array $column ): string {
+		$column_type = strtolower( (string) $column['column_type'] );
+		$base_type   = preg_match( '/^([a-z]+)/', $column_type, $matches ) ? $matches[1] : $column_type;
+
+		if ( $this->metadata_column_is_auto_increment( $column ) ) {
+			return 'BIGINT';
+		}
+
+		$map = array(
+			'bit'                => 'BIGINT',
+			'bool'               => 'BOOLEAN',
+			'boolean'            => 'BOOLEAN',
+			'tinyint'            => 'TINYINT',
+			'smallint'           => 'SMALLINT',
+			'mediumint'          => 'INTEGER',
+			'int'                => 'INTEGER',
+			'integer'            => 'INTEGER',
+			'bigint'             => 'BIGINT',
+			'float'              => 'FLOAT',
+			'double'             => 'DOUBLE',
+			'real'               => 'DOUBLE',
+			'decimal'            => 'DECIMAL',
+			'dec'                => 'DECIMAL',
+			'fixed'              => 'DECIMAL',
+			'numeric'            => 'DECIMAL',
+			'blob'               => 'BLOB',
+			'tinyblob'           => 'BLOB',
+			'mediumblob'         => 'BLOB',
+			'longblob'           => 'BLOB',
+			'binary'             => 'BLOB',
+			'varbinary'          => 'BLOB',
+			'serial'             => 'BIGINT',
+		);
+
+		if ( isset( $map[ $base_type ] ) ) {
+			return $map[ $base_type ];
+		}
+
+		return 'VARCHAR';
+	}
+
+	/**
+	 * Check whether a metadata row describes an AUTO_INCREMENT column.
+	 *
+	 * @param array<string,mixed> $column Column metadata.
+	 * @return bool
+	 */
+	private function metadata_column_is_auto_increment( array $column ): bool {
+		return isset( $column['extra'] ) && false !== stripos( (string) $column['extra'], 'auto_increment' );
+	}
+
+	/**
+	 * Build the AUTO_INCREMENT sequence name expected by WP_DuckDB_Driver.
+	 *
+	 * @param string $table  Table name.
+	 * @param string $column Column name.
+	 * @return string Sequence name.
+	 */
+	private function auto_increment_sequence_name( string $table, string $column ): string {
+		$prefix = class_exists( 'WP_DuckDB_Driver' ) ? WP_DuckDB_Driver::SEQUENCE_PREFIX : 'wp_duckdb_ai_';
+		return $prefix . substr( hash( 'sha256', "persistent\0" . $table . "\0" . $column ), 0, 16 );
+	}
+
+	/**
+	 * Read the next AUTO_INCREMENT value from an external source relation.
+	 *
+	 * @param string $source_sql  Source SQL relation.
+	 * @param string $column_name AUTO_INCREMENT column name.
+	 * @return int Next value.
+	 */
+	private function next_auto_increment_value_from_source( string $source_sql, string $column_name ): int {
+		$stmt = $this->connection->query(
+			'SELECT COALESCE(MAX(TRY_CAST('
+				. $this->connection->quote_identifier( $column_name )
+				. ' AS BIGINT)), 0) + 1 AS next_value FROM ('
+				. $source_sql
+				. ') AS '
+				. $this->connection->quote_identifier( '__src' )
+		);
+		$value = $stmt->fetchColumn();
+
+		return false === $value || null === $value ? 1 : max( 1, (int) $value );
+	}
+
+	/**
+	 * Build a DuckDB DEFAULT expression from recorded MySQL metadata.
+	 *
+	 * @param array<string,mixed> $column    Column metadata.
+	 * @param string              $duck_type DuckDB type.
+	 * @return string|null DEFAULT SQL, or null when no default should be emitted.
+	 */
+	private function default_sql_for_metadata_column( array $column, string $duck_type ): ?string {
+		if ( ! array_key_exists( 'column_default', $column ) || null === $column['column_default'] ) {
+			return null;
+		}
+
+		$default = (string) $column['column_default'];
+		if ( 0 === strcasecmp( $default, 'CURRENT_TIMESTAMP' ) ) {
+			return "strftime(current_timestamp, '%Y-%m-%d %H:%M:%S')";
+		}
+
+		if ( in_array( $duck_type, array( 'TINYINT', 'SMALLINT', 'INTEGER', 'BIGINT', 'FLOAT', 'DOUBLE', 'DECIMAL' ), true ) && is_numeric( $default ) ) {
+			return $default;
+		}
+
+		if ( 'BOOLEAN' === $duck_type && in_array( strtolower( $default ), array( '0', '1', 'true', 'false' ), true ) ) {
+			return $default;
+		}
+
+		return $this->connection->quote( $default );
+	}
+
+	/**
+	 * Coerce an external source expression to the target storage type.
+	 *
+	 * @param string $source_ref Source column SQL.
+	 * @param string $duck_type  DuckDB type.
+	 * @return string Coerced SQL.
+	 */
+	private function coerce_external_source_value_sql( string $source_ref, string $duck_type ): string {
+		if ( 'VARCHAR' === $duck_type ) {
+			return 'CAST(' . $source_ref . ' AS VARCHAR)';
+		}
+
+		return 'TRY_CAST(' . $source_ref . ' AS ' . $duck_type . ')';
 	}
 
 	/**
