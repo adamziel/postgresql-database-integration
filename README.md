@@ -352,6 +352,21 @@ The external-format and configured-backend test classes are
 `tests/duckdb/WP_DuckDB_External_Format_Backend_Tests.php` and
 `tests/duckdb/WP_DuckDB_Storage_Backend_Tests.php`.
 
+### Docker Example: WordPress On DuckDB JSON
+
+Run a local WordPress site that stores its tables as JSON files through DuckDB:
+
+```bash
+cd examples/duckdb-json-wordpress
+docker compose up --build
+```
+
+Open `http://localhost:8080` and log in with `admin` / `password`. The JSON
+table files are written under `examples/duckdb-json-wordpress/data/duckdb-json/`.
+
+See [examples/duckdb-json-wordpress/README.md](examples/duckdb-json-wordpress/README.md)
+for options such as changing the port, admin account, and reset behavior.
+
 ## Development
 
 Install Composer metadata and run local checks:

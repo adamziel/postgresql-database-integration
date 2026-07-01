@@ -1,0 +1,16 @@
+services:
+  wordpress:
+    build:
+      context: ../..
+      dockerfile: examples/duckdb-json-wordpress/Dockerfile
+    init: true
+    ports:
+      - "${WORDPRESS_PORT:-8080}:80"
+    environment:
+      WORDPRESS_SITE_URL: "${WORDPRESS_SITE_URL:-http://localhost:8080}"
+      WORDPRESS_SITE_TITLE: "${WORDPRESS_SITE_TITLE:-DuckDB JSON WordPress}"
+      WORDPRESS_ADMIN_USER: "${WORDPRESS_ADMIN_USER:-admin}"
+      WORDPRESS_ADMIN_PASSWORD: "${WORDPRESS_ADMIN_PASSWORD:-password}"
+      WORDPRESS_ADMIN_EMAIL: "${WORDPRESS_ADMIN_EMAIL:-admin@example.test}"
+    volumes:
+      - ./data:/var/www/html/wp-content/database
