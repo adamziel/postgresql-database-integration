@@ -1,0 +1,124 @@
+diff --git a/tests/phpunit/includes/utils.php b/tests/phpunit/includes/utils.php
+index fae2d73..352a6bb 100644
+--- a/tests/phpunit/includes/utils.php
++++ b/tests/phpunit/includes/utils.php
+@@ -550,7 +550,8 @@ function _clean_term_filters() {
+ /**
+  * Special class for exposing protected wpdb methods we need to access
+  */
+-class WpdbExposedMethodsForTesting extends wpdb {
++require_once ABSPATH . 'wp-content/plugins/postgresql-database-integration/wp-includes/postgresql/class-wp-postgresql-db.php';
++class WpdbExposedMethodsForTesting extends WP_PostgreSQL_DB {
+ 	public function __construct() {
+ 		global $wpdb;
+ 		$this->dbh         = $wpdb->dbh;
+diff --git a/tests/phpunit/tests/db.php b/tests/phpunit/tests/db.php
+index 3e06afc..1056955 100644
+--- a/tests/phpunit/tests/db.php
++++ b/tests/phpunit/tests/db.php
+@@ -714,6 +714,10 @@ class Tests_DB extends WP_UnitTestCase {
+ 	public function test_mysqli_flush_sync() {
+ 		global $wpdb;
+ 
++		if ( $wpdb instanceof WP_PostgreSQL_DB ) {
++			$this->markTestSkipped( 'This test exercises MySQLi stored procedure result flushing.' );
++		}
++
+ 		$suppress = $wpdb->suppress_errors( true );
+ 
+ 		$wpdb->query( 'DROP PROCEDURE IF EXISTS `test_mysqli_flush_sync_procedure`' );
+@@ -1845,73 +1849,73 @@ class Tests_DB extends WP_UnitTestCase {
+ 				'SELECT * FROM %i WHERE %i = %d;',
+ 				array( 'my_table', 'my_field', 321 ),
+ 				false,
+-				'SELECT * FROM `my_table` WHERE `my_field` = 321;',
++				'SELECT * FROM "my_table" WHERE "my_field" = 321;',
+ 			),
+ 			array(
+ 				'WHERE %i = %d;',
+ 				array( 'evil_`_field', 321 ),
+ 				false,
+-				'WHERE `evil_``_field` = 321;', // To quote the identifier itself, then you need to double the character, e.g. `a``b`.
++				'WHERE "evil_`_field" = 321;', // To quote the identifier itself, then you need to double the character, e.g. `a``b`.
+ 			),
+ 			array(
+ 				'WHERE %i = %d;',
+ 				array( 'evil_````````_field', 321 ),
+ 				false,
+-				'WHERE `evil_````````````````_field` = 321;',
++				'WHERE "evil_````````_field" = 321;',
+ 			),
+ 			array(
+ 				'WHERE %i = %d;',
+ 				array( '``evil_field``', 321 ),
+ 				false,
+-				'WHERE `````evil_field````` = 321;',
++				'WHERE "``evil_field``" = 321;',
+ 			),
+ 			array(
+ 				'WHERE %i = %d;',
+ 				array( 'evil\'field', 321 ),
+ 				false,
+-				'WHERE `evil\'field` = 321;',
++				'WHERE "evil\'field" = 321;',
+ 			),
+ 			array(
+ 				'WHERE %i = %d;',
+ 				array( 'evil_\``_field', 321 ),
+ 				false,
+-				'WHERE `evil_\````_field` = 321;',
++				'WHERE "evil_\``_field" = 321;',
+ 			),
+ 			array(
+ 				'WHERE %i = %d;',
+ 				array( 'evil_%s_field', 321 ),
+ 				false,
+-				"WHERE `evil_{$placeholder_escape}s_field` = 321;",
++				'WHERE "evil_%s_field" = 321;',
+ 			),
+ 			array(
+ 				'WHERE %i = %d;',
+ 				array( 'value`', 321 ),
+ 				false,
+-				'WHERE `value``` = 321;',
++				'WHERE "value`" = 321;',
+ 			),
+ 			array(
+ 				'WHERE `%i = %d;',
+ 				array( ' AND evil_value', 321 ),
+ 				false,
+-				'WHERE `` AND evil_value` = 321;', // Won't run (SQL parse error: "Unclosed quote").
++				'WHERE `" AND evil_value" = 321;', // Won't run (SQL parse error: "Unclosed quote").
+ 			),
+ 			array(
+ 				'WHERE %i` = %d;',
+ 				array( 'evil_value -- ', 321 ),
+ 				false,
+-				'WHERE `evil_value -- `` = 321;', // Won't run (SQL parse error: "Unclosed quote").
++				'WHERE "evil_value -- "` = 321;', // Won't run (SQL parse error: "Unclosed quote").
+ 			),
+ 			array(
+ 				'WHERE `%i`` = %d;',
+ 				array( ' AND true -- ', 321 ),
+ 				false,
+-				'WHERE `` AND true -- ``` = 321;', // Won't run (Unknown column '').
++				'WHERE `" AND true -- "`` = 321;', // Won't run (Unknown column '').
+ 			),
+ 			array(
+ 				'WHERE ``%i` = %d;',
+ 				array( ' AND true -- ', 321 ),
+ 				false,
+-				'WHERE ``` AND true -- `` = 321;', // Won't run (SQL parse error: "Unclosed quote").
++				'WHERE ``" AND true -- "` = 321;', // Won't run (SQL parse error: "Unclosed quote").
+ 			),
+ 			array(
+ 				'WHERE %2$i = %1$d;',
+@@ -1935,7 +1939,7 @@ class Tests_DB extends WP_UnitTestCase {
+ 				'WHERE %i LIKE %s LIMIT 1',
+ 				array( "field' -- ", "field' -- " ),
+ 				false,
+-				"WHERE `field' -- ` LIKE 'field\' -- ' LIMIT 1", // In contrast to the above, Identifier vs String escaping is used.
++				"WHERE \"field' -- \" LIKE 'field\' -- ' LIMIT 1", // In contrast to the above, Identifier vs String escaping is used.
+ 			),
+ 			array(
+ 				'WHERE %2$i IN ( %s , %s ) LIMIT 1',

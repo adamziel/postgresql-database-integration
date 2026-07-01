@@ -60,3 +60,60 @@ jobs:
           PGSQL_TEST_DSN: pgsql:host=127.0.0.1;port=5432;dbname=wordpress_test
           PGSQL_TEST_USER: wordpress
           PGSQL_TEST_PASSWORD: wordpress
+
+  wordpress-core:
+    name: WordPress core PHPUnit
+    runs-on: ubuntu-latest
+
+    env:
+      WORDPRESS_REF: '6.7.2'
+      WP_CORE_TEST_DB_NAME: wordpress_develop_tests
+      WP_CORE_TEST_DB_USER: wordpress
+      WP_CORE_TEST_DB_PASSWORD: wordpress
+      WP_CORE_TEST_DB_HOST: 127.0.0.1:5432
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: wordpress_develop_tests
+          POSTGRES_USER: wordpress
+          POSTGRES_PASSWORD: wordpress
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          path: postgresql-database-integration
+
+      - name: Check out WordPress core
+        uses: actions/checkout@v4
+        with:
+          repository: WordPress/wordpress-develop
+          ref: ${{ env.WORDPRESS_REF }}
+          path: wordpress
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_pgsql, mysqli, gd, zip, mbstring
+          coverage: none
+
+      - name: Install WordPress Composer dependencies
+        working-directory: wordpress
+        run: composer update -W --no-interaction --no-progress --prefer-dist
+
+      - name: Prepare WordPress core PostgreSQL test harness
+        run: ./postgresql-database-integration/bin/prepare-wordpress-core-tests.sh wordpress postgresql-database-integration
+
+      - name: Run WordPress core PHPUnit suite
+        working-directory: wordpress
+        run: ./vendor/bin/phpunit --configuration phpunit.xml.dist --colors=never
