@@ -19,7 +19,7 @@ trait WP_PostgreSQL_Driver_Rewrite_Rules {
 		return null;
 	}
 	private function get_mysql_top_level_query_dispatch_rules(): array {
-		return array( array( 'result', 'execute_mysql_runtime_setting_query' ), array( 'parse_result', 'get_mysql_use_database_name', 'execute_mysql_use_statement' ), array( 'parse_result', 'get_mysql_transaction_control_query', 'execute_mysql_transaction_control_query' ), array( 'parse_result', 'get_mysql_savepoint_query', 'execute_mysql_savepoint_query' ), array( 'fetch_result', 'execute_mysql_static_select_query' ), array( 'fetch_result', 'execute_mysql_show_query' ), array( 'reject', 'reject_unsupported_mysql_constructs', array( array( 'contains_unsupported_mysql_group_concat_function_query', 'Unsupported MySQL runtime function form.' ), array( 'contains_unsupported_mysql_extract_function_query', 'Unsupported MySQL runtime function form.' ), array( 'contains_unsupported_mysql_fulltext_search_query', 'Unsupported MySQL full-text search syntax.' ) ) ), array( 'translate_first', array( 'translate_direct_information_schema_cte_select_query', 'translate_direct_information_schema_select_query', 'translate_application_select_with_direct_information_schema_nested_selects' ) ), array( 'reject_untranslated', 'should_reject_information_schema_backend_query', 'Unsupported information_schema query.' ), array( 'parse_result', 'get_mysql_lock_tables_query', 'execute_mysql_lock_tables_query' ), array( 'parse_noop', 'get_mysql_flush_query' ), array( 'parse_result', 'get_mysql_truncate_table_query', 'execute_mysql_truncate_table_query' ), array( 'parse_result', 'get_found_rows_query_column_name', 'execute_mysql_found_rows_query' ), array( 'parse_result', 'translate_mysql_create_table_select_query', 'execute_mysql_translated_create_table_query' ), array( 'parse_result', 'translate_mysql_create_table_like_query', 'execute_mysql_translated_create_table_query' ), array( 'reject_if', 'contains_unsupported_mysql_create_table_column_attribute_query', 'Unsupported CREATE TABLE column attribute.' ), array( 'result', 'execute_mysql_create_table_query' ), array( 'parse_statements', 'translate_mysql_view_query', null, array( WP_MySQL_Lexer::CREATE_SYMBOL, 'CREATE VIEW' ) ), array( 'parse_result', 'translate_mysql_create_index_query', 'execute_mysql_create_index_query' ), array( 'message', 'get_unsupported_mysql_create_statement_message' ), array( 'parse_result', 'translate_mysql_dbdelta_alter_table_query', 'execute_mysql_dbdelta_alter_query' ), array( 'reject', 'reject_mysql_statement_prefix', array( WP_MySQL_Lexer::ALTER_SYMBOL, WP_MySQL_Lexer::TABLE_SYMBOL ), 'Unsupported ALTER TABLE statement.' ), array( 'parse_statements', 'translate_mysql_view_query', null, array( WP_MySQL_Lexer::ALTER_SYMBOL, 'ALTER VIEW' ) ), array( 'parse_admin', 'translate_mysql_drop_table_query', true ), array( 'parse_admin', 'translate_mysql_drop_view_query', false ), array( 'parse_admin', 'translate_mysql_drop_index_query', true ), array( 'message', 'get_unsupported_mysql_drop_statement_message' ), array( 'parse_admin', 'translate_mysql_rename_table_query', true ), array( 'reject', 'reject_mysql_statement_prefix', array( WP_MySQL_Lexer::RENAME_SYMBOL, WP_MySQL_Lexer::TABLE_SYMBOL ), 'Unsupported RENAME TABLE statement.' ), array( 'fetch_result', 'execute_mysql_metadata_show_query' ) );
+			return array( array( 'result', 'execute_mysql_runtime_setting_query' ), array( 'parse_result', 'get_mysql_use_database_name', 'execute_mysql_use_statement' ), array( 'parse_result', 'get_mysql_transaction_control_query', 'execute_mysql_transaction_control_query' ), array( 'parse_result', 'get_mysql_savepoint_query', 'execute_mysql_savepoint_query' ), array( 'fetch_result', 'execute_mysql_static_select_query' ), array( 'fetch_result', 'execute_mysql_show_query' ), array( 'reject', 'reject_unsupported_mysql_constructs', array( array( 'contains_unsupported_mysql_group_concat_function_query', 'Unsupported MySQL runtime function form.' ), array( 'contains_unsupported_mysql_extract_function_query', 'Unsupported MySQL runtime function form.' ), array( 'contains_unsupported_mysql_fulltext_search_query', 'Unsupported MySQL full-text search syntax.' ) ) ), array( 'translate_first', array( 'translate_direct_information_schema_cte_select_query', 'translate_direct_information_schema_select_query', 'translate_application_select_with_direct_information_schema_nested_selects' ) ), array( 'reject_untranslated', 'should_reject_information_schema_backend_query', 'Unsupported information_schema query.' ), array( 'parse_result', 'get_mysql_lock_tables_query', 'execute_mysql_lock_tables_query' ), array( 'parse_noop', 'get_mysql_flush_query' ), array( 'parse_result', 'get_mysql_truncate_table_query', 'execute_mysql_truncate_table_query' ), array( 'parse_result', 'get_found_rows_query_column_name', 'execute_mysql_found_rows_query' ), array( 'parse_result', 'translate_mysql_create_table_select_query', 'execute_mysql_translated_create_table_query' ), array( 'parse_result', 'translate_mysql_create_table_like_query', 'execute_mysql_translated_create_table_query' ), array( 'reject_if', 'contains_unsupported_mysql_create_table_column_attribute_query', 'Unsupported CREATE TABLE column attribute.' ), array( 'result', 'execute_mysql_create_table_query' ), array( 'parse_statements', 'translate_mysql_view_query', null, array( WP_MySQL_Lexer::CREATE_SYMBOL, 'CREATE VIEW' ) ), array( 'parse_result', 'translate_mysql_create_index_query', 'execute_mysql_create_index_query' ), array( 'message', 'get_unsupported_mysql_create_statement_message' ), array( 'parse_result', 'translate_mysql_dbdelta_alter_table_query', 'execute_mysql_dbdelta_alter_query' ), array( 'reject', 'reject_mysql_statement_prefix', array( WP_MySQL_Lexer::ALTER_SYMBOL, WP_MySQL_Lexer::TABLE_SYMBOL ), 'Unsupported ALTER TABLE statement.' ), array( 'parse_statements', 'translate_mysql_view_query', null, array( WP_MySQL_Lexer::ALTER_SYMBOL, 'ALTER VIEW' ) ), array( 'parse_admin', 'translate_mysql_drop_table_query', true ), array( 'parse_admin', 'translate_mysql_drop_view_query', false ), array( 'parse_admin', 'translate_mysql_drop_index_query', true ), array( 'message', 'get_unsupported_mysql_drop_statement_message' ), array( 'parse_admin', 'translate_mysql_rename_table_query', true ), array( 'reject', 'reject_mysql_statement_prefix', array( WP_MySQL_Lexer::RENAME_SYMBOL, WP_MySQL_Lexer::TABLE_SYMBOL ), 'Unsupported RENAME TABLE statement.' ), array( 'fetch_result', 'execute_mysql_metadata_show_query' ) );
 	}
 	private function apply_mysql_top_level_query_dispatch_rule( array $rule, string &$query, bool &$translated_for_postgresql, $fetch_mode, array $fetch_mode_args, ?array &$query_context = null ) {
 		switch ( $rule[0] ) {
@@ -86,8 +86,14 @@ trait WP_PostgreSQL_Driver_Rewrite_Rules {
 		return $this->$guard_name( $query );
 	}
 
-	private function get_mysql_post_translation_unsupported_construct_guards(): array {
-		return array( array( 'contains_mysql_index_hint_syntax', 'Unsupported MySQL index hint syntax.' ), array( 'contains_unsupported_mysql_date_arithmetic_function_query', 'Unsupported MySQL date arithmetic statement.' ), array( 'contains_unsupported_mysql_range_scanner_query', 'Unsupported MySQL runtime function form.', array( 'contains_unsupported_mysql_date_format_function' ) ), array( 'contains_unsupported_mysql_range_scanner_query', 'Unsupported MySQL runtime function form.', array( 'contains_unsupported_mysql_rand_function' ) ), array( 'contains_unsupported_mysql_range_scanner_query', 'Unsupported MySQL runtime function form.', array( 'contains_unsupported_mysql_convert_function' ) ), array( 'contains_unsupported_mysql_fulltext_search_query', 'Unsupported MySQL full-text search syntax.' ), array( 'contains_unsupported_mysql_range_scanner_query', 'Unsupported MySQL runtime function form.', array( 'contains_unsupported_mysql_common_function' ) ), array( 'contains_unsupported_mysql_group_concat_function_query', 'Unsupported MySQL runtime function form.' ), array( 'contains_unsupported_mysql_week_function_query', 'Unsupported MySQL WEEK() mode.' ) );
+	private function get_mysql_post_translation_unsupported_construct_guards( bool $translated_for_postgresql = false ): array {
+			$guards = array( array( 'contains_mysql_index_hint_syntax', 'Unsupported MySQL index hint syntax.' ), array( 'contains_unsupported_mysql_date_arithmetic_function_query', 'Unsupported MySQL date arithmetic statement.' ), array( 'contains_unsupported_mysql_range_scanner_query', 'Unsupported MySQL runtime function form.', array( 'contains_unsupported_mysql_date_format_function' ) ), array( 'contains_unsupported_mysql_range_scanner_query', 'Unsupported MySQL runtime function form.', array( 'contains_unsupported_mysql_rand_function' ) ), array( 'contains_unsupported_mysql_range_scanner_query', 'Unsupported MySQL runtime function form.', array( 'contains_unsupported_mysql_convert_function' ) ), array( 'contains_unsupported_mysql_fulltext_search_query', 'Unsupported MySQL full-text search syntax.' ) );
+			if ( ! $translated_for_postgresql ) {
+				$guards[] = array( 'contains_unsupported_mysql_range_scanner_query', 'Unsupported MySQL runtime function form.', array( 'contains_unsupported_mysql_common_function' ) );
+			}
+			$guards[] = array( 'contains_unsupported_mysql_group_concat_function_query', 'Unsupported MySQL runtime function form.' );
+			$guards[] = array( 'contains_unsupported_mysql_week_function_query', 'Unsupported MySQL WEEK() mode.' );
+			return $guards;
 	}
 
 	private function execute_mysql_savepoint_query( string $savepoint_query ): int {
@@ -172,14 +178,14 @@ trait WP_PostgreSQL_Driver_Rewrite_Rules {
 				continue;
 			}
 
-			$result = $this->apply_mysql_dml_rewrite_result( $rule[3], $translated_query, $query, $translated_for_postgresql, $dml_identity_repair_query, $replace_return_value, $mysql_update_ignore_query );
-			if ( null !== $result ) {
-				return $result;
+				$result = $this->apply_mysql_dml_rewrite_result( $rule[3], $translated_query, $query, $translated_for_postgresql, $dml_identity_repair_query, $replace_return_value, $mysql_update_ignore_query );
+				if ( null !== $result ) {
+					return $result;
+				}
+				return null;
 			}
-			$first_token = $this->get_mysql_query_context_first_token_id( $query, $query_context );
+			return null;
 		}
-		return null;
-	}
 
 	private function get_mysql_dml_rewrite_rules(): array {
 		return array( array( WP_MySQL_Lexer::DELETE_SYMBOL, 'REGEXP', 'translate_wordpress_options_regexp_delete_query', 'sql' ), array( WP_MySQL_Lexer::DELETE_SYMBOL, 'SUBSTRING', 'translate_wordpress_expired_transients_delete_query', 'execute_statement' ), array( WP_MySQL_Lexer::DELETE_SYMBOL, 'LEFT', 'translate_mysql_left_join_orphan_delete_query', 'sql' ), array( WP_MySQL_Lexer::DELETE_SYMBOL, null, 'translate_mysql_multi_target_delete_query', 'execute_multi_target_delete' ), array( WP_MySQL_Lexer::DELETE_SYMBOL, 'JOIN', 'translate_mysql_single_target_join_delete_query', 'sql' ), array( WP_MySQL_Lexer::DELETE_SYMBOL, null, 'translate_simple_mysql_delete_query', 'sql' ), array( WP_MySQL_Lexer::DELETE_SYMBOL, null, null, 'Unsupported DELETE statement.', true ), array( WP_MySQL_Lexer::INSERT_SYMBOL, 'DUPLICATE', 'translate_mysql_on_duplicate_key_update_query', 'upsert' ), array( WP_MySQL_Lexer::INSERT_SYMBOL, 'DUPLICATE', null, 'Unsupported ON DUPLICATE KEY UPDATE statement.', 'is_unsupported_mysql_on_duplicate_key_update_query' ), array( WP_MySQL_Lexer::REPLACE_SYMBOL, null, 'translate_simple_mysql_replace_query', 'replace' ), array( WP_MySQL_Lexer::REPLACE_SYMBOL, null, null, 'Unsupported REPLACE statement.', 'is_mysql_replace_query' ), array( WP_MySQL_Lexer::INSERT_SYMBOL, null, 'translate_simple_mysql_insert_query', 'dml' ), array( WP_MySQL_Lexer::INSERT_SYMBOL, null, null, 'Unsupported INSERT statement.', 'is_unsupported_mysql_insert_set_query', true ), array( WP_MySQL_Lexer::INSERT_SYMBOL, null, 'translate_simple_mysql_insert_select_query', 'dml' ), array( WP_MySQL_Lexer::INSERT_SYMBOL, null, null, 'Unsupported INSERT statement.', 'is_unsupported_mysql_insert_query', true ), array( WP_MySQL_Lexer::WITH_SYMBOL, 'UPDATE', 'translate_mysql_cte_prefixed_update_query', 'sql' ), array( WP_MySQL_Lexer::UPDATE_SYMBOL, null, 'translate_mysql_multi_target_update_query', 'multi_target_update' ), array( WP_MySQL_Lexer::UPDATE_SYMBOL, null, 'translate_simple_mysql_update_query', 'update' ), array( array( WP_MySQL_Lexer::UPDATE_SYMBOL, WP_MySQL_Lexer::WITH_SYMBOL ), null, null, 'Unsupported UPDATE statement.', 'is_unsupported_mysql_update_rewrite_query', true ) );
@@ -610,20 +616,57 @@ WHERE option_name IN (
 			return $this->get_direct_information_schema_dml_source_translation( $query, $tokens, $source_start, $source_end );
 		}
 
-		$scope = $this->get_mysql_select_scope( $tokens, $source_start, $source_end );
-		if ( null === $scope || ! empty( $scope['unknown'] ) ) {
-			return null;
-		}
-		$source_sql = $translate_non_public_schema && $this->mysql_scope_references_non_public_schema( $scope )
-			? $this->translate_mysql_table_reference_range_to_postgresql( $tokens, $source_start, $source_end )
-			: $this->translate_mysql_token_sequence_to_postgresql( $tokens, $source_start, $source_end );
+			$scope = $this->get_mysql_select_scope( $tokens, $source_start, $source_end );
+			if ( null === $scope || ! empty( $scope['unknown'] ) ) {
+				return null;
+			}
+			if ( ! $this->mysql_joined_dml_source_range_targets_supported_writable_schemas( $tokens, $source_start, $source_end ) ) {
+				return null;
+			}
+			$source_sql = $translate_non_public_schema && $this->mysql_scope_references_non_public_schema( $scope )
+				? $this->translate_mysql_table_reference_range_to_postgresql( $tokens, $source_start, $source_end )
+				: $this->translate_mysql_token_sequence_to_postgresql( $tokens, $source_start, $source_end );
 		return null === $source_sql ? null : array(
 			'scope' => $scope,
-			'sql'   => $source_sql,
-		);
-	}
-	private function translate_direct_information_schema_dml_predicate_to_postgresql( ?string $query, array $tokens, int $start, int $end, array $context ): ?string {
-		return $this->translate_direct_information_schema_range_to_postgresql(
+				'sql'   => $source_sql,
+			);
+		}
+		private function mysql_joined_dml_source_range_targets_supported_writable_schemas( array $tokens, int $start, int $end ): bool {
+			$position    = $start;
+			$expect_next = true;
+
+			while ( $position < $end ) {
+				if ( WP_MySQL_Lexer::OPEN_PAR_SYMBOL === ( $tokens[ $position ]->id ?? null ) ) {
+					return false;
+				}
+
+				if ( $expect_next ) {
+					$reference = $this->parse_mysql_table_reference( $tokens, $position, $end );
+					if ( null === $reference ) {
+						return false;
+					}
+					if ( ! empty( $reference['schema_qualified'] ) && ! $this->is_explicit_main_database_table_reference( $reference ) ) {
+						return false;
+					}
+
+					$position    = $reference['position'];
+					$expect_next = false;
+					continue;
+				}
+
+				if (
+					WP_MySQL_Lexer::COMMA_SYMBOL === ( $tokens[ $position ]->id ?? null )
+					|| $this->is_mysql_join_token( $tokens[ $position ] )
+				) {
+					$expect_next = true;
+				}
+
+				++$position;
+			}
+			return ! $expect_next;
+		}
+		private function translate_direct_information_schema_dml_predicate_to_postgresql( ?string $query, array $tokens, int $start, int $end, array $context ): ?string {
+			return $this->translate_direct_information_schema_range_to_postgresql(
 			$query,
 			$tokens,
 			$start,

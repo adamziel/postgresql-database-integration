@@ -141,7 +141,7 @@ class WP_PostgreSQL_Driver {
 	 */
 	private const MYSQL_QUERY_TRANSLATION_CACHE_LIMIT = 256;
 
-	private const MYSQL_TOKEN_SEQUENCE_TRANSLATION_RULES                 = array( 'translate_mysql_dual_table_reference_to_postgresql', 'translate_mysql_index_hint_to_postgresql', 'translate_mysql_limit_offset_count_to_postgresql', 'translate_mysql_field_function_to_postgresql', 'translate_mysql_typed_cast_or_convert_to_postgresql', 'translate_mysql_regexp_operator_to_postgresql', 'translate_mysql_group_concat_function_to_postgresql', 'translate_mysql_rand_function_to_postgresql', 'translate_mysql_session_user_function_to_postgresql', 'translate_mysql_infix_interval_expression_to_postgresql', 'translate_mysql_date_arithmetic_to_postgresql', 'translate_mysql_nonparenthesized_timestamp_function_to_postgresql', 'translate_mysql_common_function_to_postgresql', 'translate_mysql_week_function_to_postgresql', 'translate_mysql_weekday_index_function_to_postgresql', 'translate_mysql_date_format_to_postgresql', 'translate_mysql_date_time_extract_to_postgresql', 'translate_mysql_convert_using_to_postgresql', 'translate_mysql_variable_reference_to_postgresql:without_end', 'translate_mysql_select_row_locking_clause_to_empty_postgresql' );
+	private const MYSQL_TOKEN_SEQUENCE_TRANSLATION_RULES                 = array( 'translate_mysql_dual_table_reference_to_postgresql', 'translate_mysql_index_hint_to_postgresql', 'translate_mysql_limit_offset_count_to_postgresql', 'translate_mysql_projection_logical_or_expression_to_postgresql', 'translate_mysql_field_function_to_postgresql', 'translate_mysql_typed_cast_or_convert_to_postgresql', 'translate_mysql_regexp_operator_to_postgresql', 'translate_mysql_group_concat_function_to_postgresql', 'translate_mysql_rand_function_to_postgresql', 'translate_mysql_session_user_function_to_postgresql', 'translate_mysql_infix_interval_expression_to_postgresql', 'translate_mysql_date_arithmetic_to_postgresql', 'translate_mysql_nonparenthesized_timestamp_function_to_postgresql', 'translate_mysql_common_function_to_postgresql', 'translate_mysql_week_function_to_postgresql', 'translate_mysql_weekday_index_function_to_postgresql', 'translate_mysql_date_format_to_postgresql', 'translate_mysql_date_time_extract_to_postgresql', 'translate_mysql_convert_using_to_postgresql', 'translate_mysql_variable_reference_to_postgresql:without_end', 'translate_mysql_select_row_locking_clause_to_empty_postgresql' );
 	private const MYSQL_COMPATIBLE_REWRITE_STATEMENT_TOKENS              = array( WP_MySQL_Lexer::DELETE_SYMBOL, WP_MySQL_Lexer::INSERT_SYMBOL, WP_MySQL_Lexer::REPLACE_SYMBOL, WP_MySQL_Lexer::SELECT_SYMBOL, WP_MySQL_Lexer::UPDATE_SYMBOL );
 	private const MYSQL_COMPATIBLE_REWRITE_UNSUPPORTED_FUNCTION_SCANNERS = array( 'contains_unsupported_mysql_date_arithmetic_function', 'contains_unsupported_mysql_timestampadd_function', 'contains_unsupported_mysql_date_format_function', 'contains_unsupported_mysql_rand_function', 'contains_unsupported_mysql_week_function', 'contains_unsupported_mysql_extract_function', 'contains_unsupported_mysql_convert_function', 'contains_unsupported_mysql_common_function' );
 
@@ -1007,7 +1007,7 @@ class WP_PostgreSQL_Driver {
 			}
 		}
 
-		$this->reject_unsupported_mysql_constructs( $query, $this->get_mysql_post_translation_unsupported_construct_guards() );
+		$this->reject_unsupported_mysql_constructs( $query, $this->get_mysql_post_translation_unsupported_construct_guards( $translated_for_postgresql ) );
 
 		$unsupported_mysql_administration_statement = $this->get_unsupported_mysql_administration_statement_message( $query );
 		if ( null !== $unsupported_mysql_administration_statement ) {
@@ -1359,11 +1359,6 @@ class WP_PostgreSQL_Driver {
 			return $this->get_unsupported_mysql_create_table_statement_message( $tokens, $position + 1 );
 		}
 
-		$statement_end = $this->get_mysql_statement_end_position( $tokens, 1 );
-		if ( null === $statement_end ) {
-			return 'Unsupported CREATE statement.';
-		}
-
 		if ( null !== $this->consume_mysql_table_administration_token_sequence( $tokens, $position, self::MYSQL_SPATIAL_REFERENCE_SYSTEM_STATEMENT_TOKENS ) ) {
 			return 'Unsupported CREATE SPATIAL REFERENCE SYSTEM statement.';
 		}
@@ -1372,6 +1367,11 @@ class WP_PostgreSQL_Driver {
 		$known_message   = $this->get_mysql_unsupported_statement_message( 'create', $statement_token->id ?? null );
 		if ( null !== $known_message ) {
 			return $known_message;
+		}
+
+		$statement_end = $this->get_mysql_statement_end_position( $tokens, 1 );
+		if ( null === $statement_end ) {
+			return 'Unsupported CREATE statement.';
 		}
 
 		return 'Unsupported CREATE statement.';
@@ -6136,21 +6136,25 @@ $wp_mysql_primary_index_comment$',
 	}
 	private function get_mysql_standalone_index_table_backend_schema( array $table_reference, string $statement_type ): string {
 		$requested_schema = $table_reference['schema'];
-		if ( null !== $requested_schema ) {
-			if ( 0 === strcasecmp( $requested_schema, 'information_schema' ) ) {
-				throw new InvalidArgumentException( 'Unsupported information_schema query.' );
-			}
+			if ( null !== $requested_schema ) {
+				if ( 0 === strcasecmp( $requested_schema, 'information_schema' ) ) {
+					throw new InvalidArgumentException( 'Unsupported information_schema query.' );
+				}
 
 			if (
 				0 !== strcasecmp( $requested_schema, $this->main_db_name )
 				&& 0 !== strcasecmp( $requested_schema, 'public' )
 				&& 0 !== strcasecmp( $requested_schema, $this->db_name )
-			) {
-				throw new InvalidArgumentException( sprintf( 'Unsupported %s statement.', $statement_type ) );
+				) {
+					throw new InvalidArgumentException( sprintf( 'Unsupported %s statement.', $statement_type ) );
+				}
+
+				if ( 0 === strcasecmp( $requested_schema, $this->main_db_name ) && 0 !== strcasecmp( $requested_schema, 'public' ) ) {
+					return $this->resolve_mysql_table_schema_for_introspection( 'public', $table_reference['table'] );
+				}
 			}
+			return $this->get_mysql_schema_aware_table_backend_schema( $table_reference, $statement_type );
 		}
-		return $this->get_mysql_schema_aware_table_backend_schema( $table_reference, $statement_type );
-	}
 	private function get_mysql_schema_aware_table_backend_schema( array $table_reference, string $statement_type ): string {
 		$requested_schema = $table_reference['schema'];
 
@@ -11919,16 +11923,15 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 		}
 
 		$cache_key = $schema_name . "\0" . $table_name;
-		if ( isset( $this->mysql_table_schema_introspection_cache[ $cache_key ] ) ) {
-			$cached_schema = $this->mysql_table_schema_introspection_cache[ $cache_key ];
-			if (
-				'public' !== $schema_name
-				|| true !== $this->mysql_has_active_temporary_tables
-				|| $this->is_mysql_temporary_schema_name( $cached_schema )
-			) {
-				return $cached_schema;
+			if ( isset( $this->mysql_table_schema_introspection_cache[ $cache_key ] ) ) {
+				$cached_schema = $this->mysql_table_schema_introspection_cache[ $cache_key ];
+				if (
+					true !== $this->mysql_has_active_temporary_tables
+					|| $this->is_mysql_temporary_schema_name( $cached_schema )
+				) {
+					return $cached_schema;
+				}
 			}
-		}
 
 		if ( 'public' !== $schema_name && true !== $this->mysql_has_active_temporary_tables ) {
 			$resolved_schema = $this->get_visible_postgresql_relation_schema( $table_name ) ?? $schema_name;
@@ -13952,11 +13955,7 @@ INNER JOIN (' . $this->get_direct_information_schema_relation_sql( 'referential_
 			return null;
 		}
 
-		if ( ! $this->mysql_scope_references_non_public_schema( $scope ) ) {
-			$source_range_sql = $this->translate_mysql_token_sequence_to_postgresql( $tokens, $statement_parts['source_start'], $statement_parts['set_position'] );
-		} else {
-			$source_range_sql = $this->translate_mysql_table_reference_range_to_postgresql( $tokens, $statement_parts['source_start'], $statement_parts['set_position'] );
-		}
+		$source_range_sql = $this->translate_mysql_table_reference_range_to_postgresql( $tokens, $statement_parts['source_start'], $statement_parts['set_position'] );
 		if ( null === $source_range_sql ) {
 			return null;
 		}
@@ -27402,9 +27401,9 @@ END',
 		}
 		return isset( $tokens[ $position ] ) && WP_MySQL_Lexer::EOF === $tokens[ $position ]->id;
 	}
-	private function translate_mysql_token_sequence_to_postgresql( array $tokens, int $start, int $end ): string {
-		$sql               = '';
-		$previous_token_id = null;
+		private function translate_mysql_token_sequence_to_postgresql( array $tokens, int $start, int $end ): string {
+			$sql               = '';
+			$previous_token_id = null;
 
 		for ( $i = $start; $i < $end; $i++ ) {
 			$fragment_token_id = $tokens[ $i ]->id;
@@ -27451,12 +27450,141 @@ END',
 			$sql .= ( '' === $sql || $this->should_join_mysql_tokens_without_space( $previous_token_id, $fragment_token_id ) ? '' : ' ' ) . $fragment;
 
 			$previous_token_id = $fragment_token_id;
+			}
+			return $sql;
 		}
-		return $sql;
-	}
-	private function translate_mysql_dual_table_reference_to_postgresql( array $tokens, int $position, int $end ): ?array {
-		if (
-			! isset( $tokens[ $position ], $tokens[ $position + 1 ] )
+		private function translate_mysql_projection_logical_or_expression_to_postgresql( array $tokens, int $position, int $end ): ?array {
+			if ( ! $this->is_mysql_select_projection_expression_start( $tokens, $position, $end ) ) {
+				return null;
+			}
+
+			$expression_end = $this->find_first_top_level_mysql_token(
+				$tokens,
+				array_merge(
+					array( WP_MySQL_Lexer::AS_SYMBOL, WP_MySQL_Lexer::COMMA_SYMBOL ),
+					self::MYSQL_SELECT_PROJECTION_BOUNDARY_TOKENS
+				),
+				$position,
+				$end
+			) ?? $end;
+			if ( $position >= $expression_end ) {
+				return null;
+			}
+
+			$ranges = $this->split_top_level_mysql_logical_or_expression_ranges( $tokens, $position, $expression_end );
+			if ( null === $ranges ) {
+				return null;
+			}
+
+			$true_sql = array();
+			$null_sql = array();
+			foreach ( $ranges as $range ) {
+				$operand_sql = $this->translate_mysql_token_sequence_to_postgresql( $tokens, $range['start'], $range['end'] );
+				if ( $this->is_mysql_boolean_condition_expression( $tokens, $range['start'], $range['end'] ) ) {
+					$true_sql[] = '(' . $operand_sql . ')';
+					$null_sql[] = '(' . $operand_sql . ') IS NULL';
+					continue;
+				}
+
+				$numeric_sql = $this->get_postgresql_mysql_numeric_cast_sql( $operand_sql );
+				$true_sql[]  = '(' . $numeric_sql . ' <> 0)';
+				$null_sql[]  = '(' . $numeric_sql . ' IS NULL)';
+			}
+
+			return array(
+				'sql'      => sprintf(
+					'CASE WHEN %s THEN 1 WHEN %s THEN NULL ELSE 0 END',
+					implode( ' OR ', $true_sql ),
+					implode( ' OR ', $null_sql )
+				),
+				'token_id' => $tokens[ $position ]->id,
+				'position' => $expression_end - 1,
+			);
+		}
+		private function is_mysql_select_projection_expression_start( array $tokens, int $position, int $end ): bool {
+			if ( ! isset( $tokens[ $position ] ) || $position >= $end ) {
+				return false;
+			}
+
+			$depth               = 0;
+			$previous_boundary   = null;
+			$inside_projection   = false;
+			$projection_boundary = array_flip( self::MYSQL_SELECT_PROJECTION_BOUNDARY_TOKENS );
+			for ( $i = 0; $i < $position; $i++ ) {
+				if ( WP_MySQL_Lexer::OPEN_PAR_SYMBOL === $tokens[ $i ]->id ) {
+					++$depth;
+					continue;
+				}
+				if ( WP_MySQL_Lexer::CLOSE_PAR_SYMBOL === $tokens[ $i ]->id ) {
+					--$depth;
+					continue;
+				}
+				if ( 0 !== $depth ) {
+					continue;
+				}
+
+				if ( WP_MySQL_Lexer::SELECT_SYMBOL === $tokens[ $i ]->id ) {
+					$inside_projection = true;
+					$previous_boundary = WP_MySQL_Lexer::SELECT_SYMBOL;
+				} elseif ( WP_MySQL_Lexer::COMMA_SYMBOL === $tokens[ $i ]->id && $inside_projection ) {
+					$previous_boundary = WP_MySQL_Lexer::COMMA_SYMBOL;
+				} elseif ( isset( $projection_boundary[ $tokens[ $i ]->id ] ) ) {
+					$inside_projection = false;
+					$previous_boundary = $tokens[ $i ]->id;
+				}
+			}
+
+			return 0 === $depth
+				&& $inside_projection
+				&& in_array( $previous_boundary, array( WP_MySQL_Lexer::SELECT_SYMBOL, WP_MySQL_Lexer::COMMA_SYMBOL ), true );
+		}
+		private function split_top_level_mysql_logical_or_expression_ranges( array $tokens, int $start, int $end ): ?array {
+			$ranges        = array();
+			$segment_start = $start;
+			$depth         = 0;
+			$found_or      = false;
+			for ( $i = $start; $i < $end; $i++ ) {
+				if ( WP_MySQL_Lexer::OPEN_PAR_SYMBOL === $tokens[ $i ]->id ) {
+					++$depth;
+					continue;
+				}
+				if ( WP_MySQL_Lexer::CLOSE_PAR_SYMBOL === $tokens[ $i ]->id ) {
+					--$depth;
+					continue;
+				}
+				if ( 0 !== $depth || ! $this->is_mysql_logical_or_operator_token( $tokens[ $i ] ) ) {
+					continue;
+				}
+
+				if ( $segment_start >= $i ) {
+					return null;
+				}
+
+				$ranges[]      = array(
+					'start' => $segment_start,
+					'end'   => $i,
+				);
+				$segment_start = $i + 1;
+				$found_or      = true;
+			}
+
+			if ( ! $found_or || $segment_start >= $end ) {
+				return null;
+			}
+
+			$ranges[] = array(
+				'start' => $segment_start,
+				'end'   => $end,
+			);
+			return $ranges;
+		}
+		private function is_mysql_logical_or_operator_token( WP_MySQL_Token $token ): bool {
+			return WP_MySQL_Lexer::LOGICAL_OR_OPERATOR === $token->id
+				&& ( '||' !== $token->get_bytes() || ! $this->is_sql_mode_active( 'PIPES_AS_CONCAT' ) );
+		}
+		private function translate_mysql_dual_table_reference_to_postgresql( array $tokens, int $position, int $end ): ?array {
+			if (
+				! isset( $tokens[ $position ], $tokens[ $position + 1 ] )
 			|| WP_MySQL_Lexer::FROM_SYMBOL !== $tokens[ $position ]->id
 			|| WP_MySQL_Lexer::DUAL_SYMBOL !== $tokens[ $position + 1 ]->id
 		) {
@@ -30674,9 +30802,9 @@ $wp_mysql_%1$s_domain$',
 			return $this->connection->quote( $token->get_value() );
 		}
 
-		if ( WP_MySQL_Lexer::LOGICAL_OR_OPERATOR === $token->id ) {
-			return 'OR';
-		}
+			if ( WP_MySQL_Lexer::LOGICAL_OR_OPERATOR === $token->id ) {
+				return '||' === $token->get_bytes() && $this->is_sql_mode_active( 'PIPES_AS_CONCAT' ) ? '||' : 'OR';
+			}
 
 		if ( WP_MySQL_Lexer::LOGICAL_AND_OPERATOR === $token->id ) {
 			return 'AND';
