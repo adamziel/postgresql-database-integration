@@ -578,6 +578,7 @@ class WP_DuckDB_Storage_Backend {
 		$select_values = array();
 		$source_sql    = $this->render_sql_template( $this->read_sql_template, $table, $source );
 		$primary_key   = $this->single_column_primary_key( $metadata );
+		$empty_source  = $this->source_is_empty_local_file( $source );
 
 		foreach ( $metadata as $column ) {
 			$column_name = (string) $column['column_name'];
@@ -587,7 +588,7 @@ class WP_DuckDB_Storage_Backend {
 
 			if ( $this->metadata_column_is_auto_increment( $column ) ) {
 				$sequence_name = $this->auto_increment_sequence_name( $table, $column_name );
-				$next_value    = $this->next_auto_increment_value_from_source( $source_sql, $column_name );
+				$next_value    = $empty_source ? 1 : $this->next_auto_increment_value_from_source( $source_sql, $column_name );
 
 				$this->connection->query( 'DROP SEQUENCE IF EXISTS ' . $this->connection->quote_identifier( $sequence_name ) );
 				$this->connection->query(
@@ -626,6 +627,10 @@ class WP_DuckDB_Storage_Backend {
 				. ')'
 		);
 
+		if ( $empty_source ) {
+			return;
+		}
+
 		$this->connection->query(
 			'INSERT INTO '
 				. $this->connection->quote_identifier( $table )
@@ -646,6 +651,23 @@ class WP_DuckDB_Storage_Backend {
 				. ') AS '
 				. $this->connection->quote_identifier( '__src' )
 		);
+	}
+
+	/**
+	 * Check whether an external source is an empty local file.
+	 *
+	 * DuckDB JSON COPY writes a zero-byte file for empty tables. read_json_auto()
+	 * then exposes a synthetic "json" column instead of the WordPress columns, so
+	 * metadata-backed hydration must recreate an empty table from metadata.
+	 *
+	 * @param string|null $source External source path.
+	 * @return bool Whether the source is an empty local file.
+	 */
+	private function source_is_empty_local_file( ?string $source ): bool {
+		return null !== $source
+			&& 1 !== preg_match( '#^[a-z][a-z0-9+.-]*://#i', $source )
+			&& is_file( $source )
+			&& 0 === filesize( $source );
 	}
 
 	/**
