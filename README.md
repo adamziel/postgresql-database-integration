@@ -11,6 +11,29 @@ Current backends:
 - SQLite, routed through the upstream WordPress SQLite Database Integration
   project included as a Git submodule.
 
+## Quick Start: WordPress On DuckDB JSON
+
+Try the DuckDB backend without setting up MySQL, PostgreSQL, PHP extensions, or
+WordPress by hand. This Docker example starts WordPress with `DB_ENGINE=duckdb`
+and `DUCKDB_BACKEND=json`, then stores each WordPress table as a JSON file.
+
+```bash
+git clone --recurse-submodules https://github.com/adamziel/wordpress-databases-support.git
+cd wordpress-databases-support/examples/duckdb-json-wordpress
+docker compose up --build
+```
+
+Open `http://localhost:8080` and log in with `admin` / `password`.
+
+The JSON table files are written under:
+
+```text
+examples/duckdb-json-wordpress/data/duckdb-json/
+```
+
+See [examples/duckdb-json-wordpress/README.md](examples/duckdb-json-wordpress/README.md)
+for port, admin-account, and reset options.
+
 ## Requirements
 
 - PHP 7.2 or newer for the plugin shell and PostgreSQL/SQLite drivers.
@@ -352,20 +375,8 @@ The external-format and configured-backend test classes are
 `tests/duckdb/WP_DuckDB_External_Format_Backend_Tests.php` and
 `tests/duckdb/WP_DuckDB_Storage_Backend_Tests.php`.
 
-### Docker Example: WordPress On DuckDB JSON
-
-Run a local WordPress site that stores its tables as JSON files through DuckDB:
-
-```bash
-cd examples/duckdb-json-wordpress
-docker compose up --build
-```
-
-Open `http://localhost:8080` and log in with `admin` / `password`. The JSON
-table files are written under `examples/duckdb-json-wordpress/data/duckdb-json/`.
-
-See [examples/duckdb-json-wordpress/README.md](examples/duckdb-json-wordpress/README.md)
-for options such as changing the port, admin account, and reset behavior.
+For a runnable WordPress site using DuckDB JSON storage, start with the
+[Docker quick start](#quick-start-wordpress-on-duckdb-json).
 
 ## Development
 
