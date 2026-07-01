@@ -7,7 +7,7 @@ index fae2d73..352a6bb 100644
   * Special class for exposing protected wpdb methods we need to access
   */
 -class WpdbExposedMethodsForTesting extends wpdb {
-+require_once ABSPATH . 'wp-content/plugins/postgresql-database-integration/wp-includes/postgresql/class-wp-postgresql-db.php';
++require_once ABSPATH . 'wp-content/plugins/wordpress-databases-support/wp-includes/postgresql/class-wp-postgresql-db.php';
 +class WpdbExposedMethodsForTesting extends WP_PostgreSQL_DB {
  	public function __construct() {
  		global $wpdb;

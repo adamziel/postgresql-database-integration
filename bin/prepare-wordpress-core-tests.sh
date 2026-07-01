@@ -2,14 +2,14 @@
 set -euo pipefail
 
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
-	echo "Usage: $0 <wordpress-develop-dir> [postgresql-database-integration-dir]" >&2
+	echo "Usage: $0 <wordpress-develop-dir> [wordpress-databases-support-dir]" >&2
 	exit 2
 fi
 
 wp_dir=$(cd "$1" && pwd)
 plugin_dir=${2:-$(cd "$(dirname "$0")/.." && pwd)}
 plugin_dir=$(cd "$plugin_dir" && pwd)
-plugin_dest="$wp_dir/src/wp-content/plugins/postgresql-database-integration"
+plugin_dest="$wp_dir/src/wp-content/plugins/wordpress-databases-support"
 patch_file="$plugin_dir/tests/wordpress-core-phpunit-postgresql-6.7.2.patch"
 
 if [ ! -f "$wp_dir/wp-tests-config-sample.php" ] || [ ! -f "$wp_dir/phpunit.xml.dist" ]; then
@@ -18,7 +18,7 @@ if [ ! -f "$wp_dir/wp-tests-config-sample.php" ] || [ ! -f "$wp_dir/phpunit.xml.
 fi
 
 if [ ! -f "$plugin_dir/db.copy" ] || [ ! -f "$patch_file" ]; then
-	echo "Expected a postgresql-database-integration checkout at $plugin_dir." >&2
+	echo "Expected a wordpress-databases-support checkout at $plugin_dir." >&2
 	exit 2
 fi
 
