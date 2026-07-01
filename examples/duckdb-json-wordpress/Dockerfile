@@ -14,6 +14,8 @@ RUN { \
 		echo 'memory_limit=512M'; \
 	} > /usr/local/etc/php/conf.d/zz-duckdb-json-example.ini
 
+RUN echo 'ServerName localhost' >> /etc/apache2/apache2.conf
+
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 
 WORKDIR /usr/src/wordpress/wp-content/plugins/wordpress-databases-support
