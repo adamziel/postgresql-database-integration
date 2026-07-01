@@ -11492,10 +11492,10 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 		$driver->query(
 			"INSERT INTO wptests_postmeta (meta_id, meta_key) VALUES
 				(1, '_hidden'),
-				(2, 'visible_meta_key_03'),
-				(3, 'visible_meta_key_01'),
-				(4, 'visible_meta_key_02'),
-				(5, 'visible_meta_key_02')"
+				(2, 'zz_visible_meta_key_03'),
+				(3, 'zz_visible_meta_key_01'),
+				(4, 'zz_visible_meta_key_02'),
+				(5, 'zz_visible_meta_key_02')"
 		);
 
 		$queries = array(
@@ -11507,7 +11507,7 @@ class WP_PostgreSQL_Driver_Tests extends TestCase {
 			$rows = $driver->query( $query );
 
 			$this->assertSame(
-				array( 'visible_meta_key_01', 'visible_meta_key_02', 'visible_meta_key_03' ),
+				array( 'zz_visible_meta_key_01', 'zz_visible_meta_key_02', 'zz_visible_meta_key_03' ),
 				array_map(
 					static function ( $row ): string {
 						return $row->meta_key;
@@ -29852,6 +29852,12 @@ $$'
 		);
 
 		$collations = $driver->query( 'SELECT * FROM INFORMATION_SCHEMA.COLLATIONS ORDER BY COLLATION_NAME' );
+		usort(
+			$collations,
+			static function ( stdClass $left, stdClass $right ): int {
+				return strcmp( $left->COLLATION_NAME, $right->COLLATION_NAME );
+			}
+		);
 
 		$this->assertEquals(
 			array(
