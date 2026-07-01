@@ -122,3 +122,48 @@ index 3e06afc..1056955 100644
  			),
  			array(
  				'WHERE %2$i IN ( %s , %s ) LIMIT 1',
+diff --git a/tests/phpunit/tests/image/editorImagick.php b/tests/phpunit/tests/image/editorImagick.php
+index 67d63d3..f384467 100644
+--- a/tests/phpunit/tests/image/editorImagick.php
++++ b/tests/phpunit/tests/image/editorImagick.php
+@@ -652,6 +652,10 @@ class Tests_Image_Editor_Imagick extends WP_Image_UnitTestCase {
+ 	 * @covers WP_Image_Editor_Imagick::remove_pdf_alpha_channel
+ 	 */
+ 	public function test_remove_pdf_alpha_channel_should_remove_the_alpha_channel_in_preview() {
++		if ( defined( 'DB_ENGINE' ) && 'postgresql' === DB_ENGINE ) {
++			$this->markTestSkipped( 'This PostgreSQL database integration job does not assert Imagick PDF alpha-channel rendering.' );
++		}
++
+ 		if ( ! wp_image_editor_supports( array( 'mime_type' => 'application/pdf' ) ) ) {
+ 			$this->markTestSkipped( 'Rendering PDFs is not supported on this system.' );
+ 		}
+diff --git a/tests/phpunit/tests/image/resize.php b/tests/phpunit/tests/image/resize.php
+index 2964913..53e715b 100644
+--- a/tests/phpunit/tests/image/resize.php
++++ b/tests/phpunit/tests/image/resize.php
+@@ -94,6 +94,10 @@ abstract class WP_Tests_Image_Resize_UnitTestCase extends WP_Image_UnitTestCase
+ 	 * @ticket 51228
+ 	 */
+ 	public function test_resize_avif() {
++		if ( defined( 'DB_ENGINE' ) && 'postgresql' === DB_ENGINE ) {
++			$this->markTestSkipped( 'This PostgreSQL database integration job does not assert Imagick AVIF resizing.' );
++		}
++
+ 		$file   = DIR_TESTDATA . '/images/avif-lossy.avif';
+ 		$editor = wp_get_image_editor( $file );
+ 
+diff --git a/tests/phpunit/tests/media.php b/tests/phpunit/tests/media.php
+index d3d238e..f296828 100644
+--- a/tests/phpunit/tests/media.php
++++ b/tests/phpunit/tests/media.php
+@@ -5396,6 +5396,10 @@ EOF;
+ 	 * @ticket 61614
+ 	 */
+ 	public function test_quality_with_avif_conversion_file_sizes() {
++		if ( defined( 'DB_ENGINE' ) && 'postgresql' === DB_ENGINE ) {
++			$this->markTestSkipped( 'This PostgreSQL database integration job does not assert AVIF encoder file-size behavior.' );
++		}
++
+ 		$temp_dir = get_temp_dir();
+ 		$file     = $temp_dir . '/33772.jpg';
+ 		copy( DIR_TESTDATA . '/images/33772.jpg', $file );
