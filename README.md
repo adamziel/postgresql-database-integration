@@ -509,8 +509,10 @@ SQLite extension.
 
 An experimental full WordPress core PHPUnit job also runs against DuckDB. That
 job runs with debug output, has bounded PHPUnit and DuckDB lock timeouts, and
-uploads the full PHPUnit log plus JUnit output for compatibility discovery; it
-is not yet a passing support gate.
+uploads the full PHPUnit log plus JUnit output for compatibility discovery. It
+uses the same database-integration scope as the PostgreSQL core job and skips
+non-database image-stack assertions for PDF/AVIF rendering. It is not
+yet a production support gate for every WordPress core subsystem.
 
 ## Releases
 
