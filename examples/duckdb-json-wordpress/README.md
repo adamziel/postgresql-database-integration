@@ -41,6 +41,11 @@ On container startup, `entrypoint.sh` copies the drop-in to `wp-content/db.php`,
 runs the WordPress installer if needed, and flushes the DuckDB working tables
 back to JSON storage.
 
+The Apache container is intentionally configured with one request worker and
+WP-Cron is disabled. DuckDB uses a mutable working database while hydrating and
+flushing the JSON files, so this local example serializes web requests instead
+of opening the same working file from multiple PHP processes.
+
 ## Options
 
 Change the exposed port:

@@ -77,6 +77,13 @@ class WP_DuckDB_Storage_Backend {
 	private $connection;
 
 	/**
+	 * File handle for the local working database lock.
+	 *
+	 * @var resource|null
+	 */
+	private $lock_handle = null;
+
+	/**
 	 * Whether external files were already hydrated.
 	 *
 	 * @var bool
@@ -123,6 +130,13 @@ class WP_DuckDB_Storage_Backend {
 		if ( null === $this->external_storage_dir || ! $this->is_local_storage_dir() ) {
 			$this->atomic_flush = false;
 		}
+	}
+
+	/**
+	 * Destructor.
+	 */
+	public function __destruct() {
+		$this->release_database_lock();
 	}
 
 	/**
@@ -223,6 +237,7 @@ class WP_DuckDB_Storage_Backend {
 	 * @throws WP_DuckDB_Driver_Exception When DuckDB cannot connect or hydrate.
 	 */
 	public function create_driver( string $database ): WP_DuckDB_Driver {
+		$this->acquire_database_lock();
 		$this->connection = new WP_DuckDB_Connection( array( 'path' => $this->database_path ) );
 		$this->run_setup_sql();
 
@@ -254,6 +269,76 @@ class WP_DuckDB_Storage_Backend {
 		foreach ( $this->list_mutable_tables() as $table ) {
 			$this->copy_table_to_external_storage( $table, $this->source_for_table( $table ) );
 		}
+	}
+
+	/**
+	 * Acquire an exclusive lock for local DuckDB working database access.
+	 *
+	 * DuckDB permits multiple readers, but WordPress requests mutate the working
+	 * database while hydrating and flushing external storage. Serializing local
+	 * working database access avoids cross-process lock failures under Apache.
+	 *
+	 * @return void
+	 *
+	 * @throws WP_DuckDB_Driver_Exception When the lock cannot be acquired.
+	 */
+	private function acquire_database_lock(): void {
+		if ( null !== $this->lock_handle ) {
+			return;
+		}
+
+		$lock_path = $this->database_lock_path();
+		if ( null === $lock_path ) {
+			return;
+		}
+
+		$lock_dir = dirname( $lock_path );
+		if ( ! is_dir( $lock_dir ) && ! mkdir( $lock_dir, 0777, true ) && ! is_dir( $lock_dir ) ) {
+			throw new WP_DuckDB_Driver_Exception( 'Failed to create DuckDB lock directory: ' . $lock_dir );
+		}
+
+		$handle = fopen( $lock_path, 'c' );
+		if ( false === $handle ) {
+			throw new WP_DuckDB_Driver_Exception( 'Failed to open DuckDB lock file: ' . $lock_path );
+		}
+
+		if ( ! flock( $handle, LOCK_EX ) ) {
+			fclose( $handle );
+			throw new WP_DuckDB_Driver_Exception( 'Failed to acquire DuckDB lock file: ' . $lock_path );
+		}
+
+		$this->lock_handle = $handle;
+	}
+
+	/**
+	 * Release the local DuckDB working database lock.
+	 *
+	 * @return void
+	 */
+	private function release_database_lock(): void {
+		if ( null === $this->lock_handle ) {
+			return;
+		}
+
+		flock( $this->lock_handle, LOCK_UN );
+		fclose( $this->lock_handle );
+		$this->lock_handle = null;
+	}
+
+	/**
+	 * Get the lock path for a local DuckDB working database.
+	 *
+	 * @return string|null Local lock path, or null when no lock is needed.
+	 */
+	private function database_lock_path(): ?string {
+		if ( null === $this->database_path || '' === $this->database_path || ':memory:' === $this->database_path ) {
+			return null;
+		}
+		if ( 1 === preg_match( '#^[a-z][a-z0-9+.-]*://#i', $this->database_path ) ) {
+			return null;
+		}
+
+		return $this->database_path . '.lock';
 	}
 
 	/**

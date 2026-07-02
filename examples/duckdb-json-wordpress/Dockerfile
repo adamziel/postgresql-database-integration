@@ -15,6 +15,16 @@ RUN { \
 	} > /usr/local/etc/php/conf.d/zz-duckdb-json-example.ini
 
 RUN echo 'ServerName localhost' >> /etc/apache2/apache2.conf
+RUN { \
+		echo '<IfModule mpm_prefork_module>'; \
+		echo 'StartServers 1'; \
+		echo 'MinSpareServers 1'; \
+		echo 'MaxSpareServers 1'; \
+		echo 'MaxRequestWorkers 1'; \
+		echo 'MaxConnectionsPerChild 0'; \
+		echo '</IfModule>'; \
+	} > /etc/apache2/conf-available/duckdb-json-single-worker.conf \
+	&& a2enconf duckdb-json-single-worker
 
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 

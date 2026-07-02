@@ -26,6 +26,7 @@ define( 'WP_SITEURL', $duckdb_json_site_url );
 define( 'WP_ENVIRONMENT_TYPE', 'local' );
 define( 'WP_DEBUG', false );
 define( 'WP_DEBUG_DISPLAY', false );
+define( 'DISABLE_WP_CRON', true );
 define( 'FS_METHOD', 'direct' );
 
 define( 'AUTH_KEY', 'duckdb-json-example-auth-key-change-me' );
