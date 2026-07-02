@@ -1,0 +1,29 @@
+diff --git a/tests/phpunit/includes/utils.php b/tests/phpunit/includes/utils.php
+index fae2d73..3703dc1 100644
+--- a/tests/phpunit/includes/utils.php
++++ b/tests/phpunit/includes/utils.php
+@@ -550,7 +550,8 @@ function _clean_term_filters() {
+ /**
+  * Special class for exposing protected wpdb methods we need to access
+  */
+-class WpdbExposedMethodsForTesting extends wpdb {
++require_once ABSPATH . 'wp-content/plugins/wordpress-databases-support/wp-includes/duckdb/class-wp-duckdb-db.php';
++class WpdbExposedMethodsForTesting extends WP_DuckDB_DB {
+ 	public function __construct() {
+ 		global $wpdb;
+ 		$this->dbh         = $wpdb->dbh;
+diff --git a/tests/phpunit/tests/db.php b/tests/phpunit/tests/db.php
+index 3e06afc..1f88ac1 100644
+--- a/tests/phpunit/tests/db.php
++++ b/tests/phpunit/tests/db.php
+@@ -714,6 +714,10 @@ class Tests_DB extends WP_UnitTestCase {
+ 	public function test_mysqli_flush_sync() {
+ 		global $wpdb;
+ 
++		if ( $wpdb instanceof WP_DuckDB_DB ) {
++			$this->markTestSkipped( 'This test exercises MySQLi stored procedure result flushing.' );
++		}
++
+ 		$suppress = $wpdb->suppress_errors( true );
+ 
+ 		$wpdb->query( 'DROP PROCEDURE IF EXISTS `test_mysqli_flush_sync_procedure`' );

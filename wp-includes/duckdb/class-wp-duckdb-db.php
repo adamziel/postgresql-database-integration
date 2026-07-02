@@ -301,6 +301,29 @@ class WP_DuckDB_DB extends wpdb {
 	}
 
 	/**
+	 * Wrap errors in a WordPress error page without consulting mysqli state.
+	 *
+	 * The parent wpdb implementation calls mysqli_connect_errno() when the
+	 * database handle is not a mysqli instance. DuckDB does not use mysqli, and
+	 * the extension is not required for this backend.
+	 *
+	 * @param string $message    Error message.
+	 * @param string $error_code Optional error code.
+	 * @return void|false Void when showing errors, false when suppressed.
+	 */
+	public function bail( $message, $error_code = '500' ) {
+		if ( $this->show_errors ) {
+			if ( $this->last_error ) {
+				$message = '<p><code>' . $this->last_error . "</code></p>\n" . $message;
+			}
+
+			wp_die( $message );
+		}
+
+		return false;
+	}
+
+	/**
 	 * Flush cached query state.
 	 */
 	public function flush() {

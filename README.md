@@ -415,6 +415,19 @@ DUCKDB_PHP_AUTOLOAD="$PWD/vendor/autoload.php" \
 composer run test-duckdb
 ```
 
+Run the focused WordPress core DB tests against DuckDB:
+
+```bash
+git clone https://github.com/WordPress/wordpress-develop.git ../wordpress
+( cd ../wordpress && git checkout 6.7.2 && composer update -W --no-interaction --no-progress --prefer-dist )
+./bin/prepare-wordpress-core-duckdb-tests.sh ../wordpress "$PWD" duckdb
+( cd ../wordpress && php -d ffi.enable=1 ./vendor/bin/phpunit --configuration phpunit.xml.dist --filter '^Tests_DB' )
+```
+
+The DuckDB core harness installs an isolated production DuckDB PHP runtime under
+the copied plugin in the WordPress checkout. This avoids loading this
+repository's dev dependencies into WordPress core's PHPUnit process.
+
 ## CI
 
 GitHub Actions workflow: `.github/workflows/ci.yml`.
@@ -422,7 +435,8 @@ GitHub Actions workflow: `.github/workflows/ci.yml`.
 The workflow runs on `trunk` and pull requests. It validates Composer metadata,
 lints root-owned PHP files, runs the PostgreSQL PHPUnit suite and smoke test
 against PostgreSQL 16, runs the DuckDB PHPUnit suite with the native DuckDB PHP
-client, and keeps the existing WordPress core PostgreSQL PHPUnit job.
+client, keeps the existing WordPress core PostgreSQL PHPUnit job, and runs the
+focused WordPress core DB test class against DuckDB.
 
 ## Releases
 
