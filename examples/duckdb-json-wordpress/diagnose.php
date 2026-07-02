@@ -18,6 +18,7 @@ $working_db     = $database_dir . '/.ht.duckdb-working';
 $lock_file      = $working_db . '.lock';
 $autoload       = $plugin_root . '/vendor/autoload.php';
 $loader         = $plugin_root . '/wp-includes/database/load.php';
+$backend_file   = $plugin_root . '/wp-includes/database/duckdb/class-wp-duckdb-storage-backend.php';
 $exit_code      = 0;
 
 function duckdb_json_diag_bool( bool $value ): string {
@@ -114,7 +115,18 @@ duckdb_json_diag_path( 'database_dir', $database_dir );
 duckdb_json_diag_path( 'json_dir', $json_dir );
 duckdb_json_diag_path( 'working_db', $working_db );
 duckdb_json_diag_path( 'lock_file', $lock_file );
+duckdb_json_diag_path( 'storage_backend', $backend_file );
 duckdb_json_diag_json_files( $json_dir );
+
+echo "[source]\n";
+if ( is_file( $backend_file ) ) {
+	$backend_source = file_get_contents( $backend_file );
+	echo 'storage_backend_sha256=' . hash_file( 'sha256', $backend_file ) . "\n";
+	echo 'zero_row_json_hydration_fix=' . duckdb_json_diag_bool( false !== strpos( $backend_source, 'source_relation_missing_metadata_columns' ) ) . "\n";
+	echo 'source_relation_row_count_probe=' . duckdb_json_diag_bool( false !== strpos( $backend_source, 'source_relation_row_count' ) ) . "\n";
+} else {
+	echo "storage_backend_missing=yes\n";
+}
 
 echo "[duckdb]\n";
 if ( ! file_exists( $autoload ) ) {

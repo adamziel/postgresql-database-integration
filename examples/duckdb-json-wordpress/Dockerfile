@@ -31,6 +31,8 @@ COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 WORKDIR /usr/src/wordpress/wp-content/plugins/wordpress-databases-support
 COPY . /usr/src/wordpress/wp-content/plugins/wordpress-databases-support
 
+RUN grep -q 'source_relation_missing_metadata_columns' wp-includes/database/duckdb/class-wp-duckdb-storage-backend.php
+
 RUN COMPOSER_NO_DEV=1 composer require --no-interaction --no-progress --with-all-dependencies satur.io/duckdb \
 	&& php -r 'require "vendor/autoload.php"; Saturio\DuckDB\CLib\Installer::install();' \
 	&& composer dump-autoload --no-dev --no-interaction --optimize
