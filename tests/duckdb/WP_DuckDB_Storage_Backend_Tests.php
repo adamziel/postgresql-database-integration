@@ -466,6 +466,111 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		);
 	}
 
+	public function test_native_backend_exposes_mysql_metadata_shapes_for_wordpress_tables(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+		$driver->query(
+			"CREATE TABLE wptests_options (
+				option_id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				option_name varchar(191) NOT NULL DEFAULT '',
+				option_value longtext NOT NULL,
+				autoload varchar(20) NOT NULL DEFAULT 'yes',
+				PRIMARY KEY (option_id),
+				UNIQUE KEY option_name (option_name),
+				KEY autoload (autoload)
+			)"
+		);
+
+		$this->assertSame(
+			array(
+				array(
+					'Field'   => 'option_id',
+					'Type'    => 'bigint(20) unsigned',
+					'Null'    => 'NO',
+					'Key'     => 'PRI',
+					'Default' => null,
+					'Extra'   => 'auto_increment',
+				),
+				array(
+					'Field'   => 'option_name',
+					'Type'    => 'varchar(191)',
+					'Null'    => 'NO',
+					'Key'     => 'UNI',
+					'Default' => '',
+					'Extra'   => '',
+				),
+				array(
+					'Field'   => 'option_value',
+					'Type'    => 'longtext',
+					'Null'    => 'NO',
+					'Key'     => '',
+					'Default' => null,
+					'Extra'   => '',
+				),
+				array(
+					'Field'   => 'autoload',
+					'Type'    => 'varchar(20)',
+					'Null'    => 'NO',
+					'Key'     => 'MUL',
+					'Default' => 'yes',
+					'Extra'   => '',
+				),
+			),
+			$driver->query( 'SHOW COLUMNS FROM `wptests_options`' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$create_table = $driver->query( 'SHOW CREATE TABLE `wptests_options`' )->fetch( PDO::FETCH_ASSOC );
+		$this->assertSame( 'wptests_options', $create_table['Table'] );
+		$this->assertStringContainsString( 'CREATE TABLE `wptests_options`', $create_table['Create Table'] );
+		$this->assertStringContainsString( '`option_id` bigint(20) unsigned NOT NULL AUTO_INCREMENT', $create_table['Create Table'] );
+		$this->assertStringContainsString( 'PRIMARY KEY (`option_id`)', $create_table['Create Table'] );
+		$this->assertStringContainsString( 'UNIQUE KEY `option_name` (`option_name`)', $create_table['Create Table'] );
+		$this->assertStringContainsString( 'KEY `autoload` (`autoload`)', $create_table['Create Table'] );
+
+		$this->assertSame(
+			array(
+				array(
+					'COLUMN_NAME' => 'option_id',
+					'COLUMN_TYPE' => 'bigint(20) unsigned',
+					'COLUMN_KEY'  => 'PRI',
+					'EXTRA'       => 'auto_increment',
+				),
+				array(
+					'COLUMN_NAME' => 'option_name',
+					'COLUMN_TYPE' => 'varchar(191)',
+					'COLUMN_KEY'  => 'UNI',
+					'EXTRA'       => '',
+				),
+				array(
+					'COLUMN_NAME' => 'option_value',
+					'COLUMN_TYPE' => 'longtext',
+					'COLUMN_KEY'  => '',
+					'EXTRA'       => '',
+				),
+				array(
+					'COLUMN_NAME' => 'autoload',
+					'COLUMN_TYPE' => 'varchar(20)',
+					'COLUMN_KEY'  => 'MUL',
+					'EXTRA'       => '',
+				),
+			),
+			$driver->query(
+				"SELECT COLUMN_NAME, COLUMN_TYPE, COLUMN_KEY, EXTRA
+				FROM information_schema.COLUMNS
+				WHERE TABLE_SCHEMA = 'wp'
+					AND TABLE_NAME = 'wptests_options'
+				ORDER BY ORDINAL_POSITION"
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
 	public function test_native_backend_aliases_use_duckdb_file_backend(): void {
 		foreach ( array( 'duckdb', 'duck', 'native', 'file' ) as $alias ) {
 			$backend = new WP_DuckDB_Storage_Backend(
