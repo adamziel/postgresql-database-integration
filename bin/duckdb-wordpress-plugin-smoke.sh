@@ -82,8 +82,17 @@ prepare_databases_support_plugin() {
 	local wp_root=$1
 	local plugin_dest="$wp_root/wp-content/plugins/wordpress-databases-support"
 
-	copy_dir "$repo_dir" "$plugin_dest"
-	rm -rf "$plugin_dest/.git" "$plugin_dest/vendor" "$plugin_dest/.phpunit.result.cache"
+	mkdir -p "$plugin_dest"
+	rsync -a --delete \
+		--exclude='.git' \
+		--exclude='.github' \
+		--exclude='.phpunit.result.cache' \
+		--exclude='build' \
+		--exclude='examples' \
+		--exclude='external' \
+		--exclude='tests' \
+		--exclude='vendor' \
+		"$repo_dir"/ "$plugin_dest"/
 	cp "$plugin_dest/db.copy" "$wp_root/wp-content/db.php"
 
 	(
@@ -478,6 +487,65 @@ assert_http_ok() {
 	fi
 }
 
+assert_query_monitor_admin_page() {
+	local wp_root=$1
+	local url=$2
+	local output=$3
+	local cookie_jar=$4
+	local login_file="$wp_root/duckdb-smoke-login.php"
+	local status
+	local curl_status
+
+	cat >"$login_file" <<'PHP'
+<?php
+require __DIR__ . '/wp-load.php';
+
+$user = get_user_by( 'login', 'admin' );
+if ( ! $user ) {
+	status_header( 500 );
+	echo 'DuckDB smoke admin user was not found.';
+	exit;
+}
+
+wp_set_current_user( $user->ID );
+wp_set_auth_cookie( $user->ID, false, is_ssl() );
+wp_safe_redirect( admin_url( 'index.php' ) );
+exit;
+PHP
+
+	: >"$cookie_jar"
+	set +e
+	status=$(curl --max-time 20 -fsS -L -c "$cookie_jar" -b "$cookie_jar" -o "$output" -w '%{http_code}' "$url/duckdb-smoke-login.php")
+	curl_status=$?
+	set -e
+	rm -f "$login_file"
+
+	if [ "$curl_status" -ne 0 ]; then
+		echo "Failed to fetch authenticated admin page for Query Monitor check." >&2
+		return 1
+	fi
+	if [ "$status" != "200" ]; then
+		echo "Expected HTTP 200 for authenticated admin page, got $status" >&2
+		return 1
+	fi
+	if grep -Eiq 'Error establishing a database connection|One or more database tables are unavailable|Database Error|WordPress &rsaquo; Error|Fatal error' "$output"; then
+		echo "Authenticated admin response contains a WordPress/PHP error." >&2
+		return 1
+	fi
+	if ! grep -Eq 'id=["'\'']wp-admin-bar-query-monitor["'\'']|wp-admin-bar-query-monitor' "$output"; then
+		echo "Authenticated admin response does not include the Query Monitor admin-bar item." >&2
+		return 1
+	fi
+	if ! grep -q 'query-monitor-container' "$output"; then
+		echo "Authenticated admin response does not include the Query Monitor application container." >&2
+		return 1
+	fi
+	if ! grep -q 'Database Queries' "$output" || ! grep -q 'SELECT option_name' "$output"; then
+		echo "Authenticated admin response does not include Query Monitor database query output." >&2
+		return 1
+	fi
+}
+
 check_logs() {
 	local wp_root=$1
 	local server_log=$2
@@ -527,6 +595,7 @@ run_backend() {
 	assert_http_ok "$site_url" '/' "$work_root/$backend_slug/front-page.html"
 	assert_http_ok "$site_url" '/wp-login.php' "$work_root/$backend_slug/login.html"
 	assert_http_ok "$site_url" '/?post_type=product' "$work_root/$backend_slug/products.html"
+	assert_query_monitor_admin_page "$wp_root" "$site_url" "$work_root/$backend_slug/admin.html" "$work_root/$backend_slug/cookies.txt"
 	check_logs "$wp_root" "$server_log"
 	kill "$server_pid" >/dev/null 2>&1 || true
 	wait "$server_pid" 2>/dev/null || true
