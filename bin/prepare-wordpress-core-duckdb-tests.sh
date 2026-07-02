@@ -72,8 +72,11 @@ php -d ffi.enable=1 -r 'require $argv[1]; if (! class_exists("Saturio\\DuckDB\\D
 database_dir="$wp_dir/src/wp-content/database"
 mkdir -p "$database_dir"
 rm -f "$database_dir/.ht.duckdb-core-tests" "$database_dir/.ht.duckdb-core-tests.lock"
+rm -f "$database_dir"/.ht.duckdb-core-tests-isolated-* "$database_dir"/.ht.duckdb-core-tests-isolated-*.lock
 rm -f "$database_dir/.ht.duckdb-core-${backend_slug}-working" "$database_dir/.ht.duckdb-core-${backend_slug}-working.lock"
+rm -f "$database_dir"/.ht.duckdb-core-"${backend_slug}"-working-isolated-* "$database_dir"/.ht.duckdb-core-"${backend_slug}"-working-isolated-*.lock
 rm -rf "$database_dir/duckdb-core-${backend_slug}"
+rm -rf "$database_dir"/duckdb-core-"${backend_slug}"-isolated-*
 
 export WP_CORE_DIR="$wp_dir"
 export WP_CORE_TEST_DB_NAME="${WP_CORE_TEST_DB_NAME:-wordpress_develop_tests}"
@@ -124,7 +127,48 @@ $config = str_replace(
 $config .= "\ndefine( 'DB_ENGINE', 'duckdb' );\n";
 $config .= "define( 'DATABASE_ENGINE', 'duckdb' );\n";
 $config .= 'define( \'DB_DIR\', ' . var_export( $database_dir, true ) . " );\n";
-$config .= "define( 'DUCKDB_FILE', '.ht.duckdb-core-tests' );\n";
+$config .= <<<'PHP'
+
+if ( ! function_exists( 'wp_core_duckdb_tests_isolated_process' ) ) {
+	function wp_core_duckdb_tests_isolated_process(): bool {
+		return isset( $_SERVER['argv'][0] ) && 'Standard input code' === $_SERVER['argv'][0];
+	}
+}
+
+if ( ! function_exists( 'wp_core_duckdb_tests_cleanup_path' ) ) {
+	function wp_core_duckdb_tests_cleanup_path( string $path ): void {
+		register_shutdown_function(
+			static function () use ( $path ): void {
+				if ( is_file( $path ) ) {
+					@unlink( $path );
+				}
+				if ( is_file( $path . '.lock' ) ) {
+					@unlink( $path . '.lock' );
+				}
+			}
+		);
+	}
+}
+
+$duckdb_file = '.ht.duckdb-core-tests';
+if ( wp_core_duckdb_tests_isolated_process() ) {
+	$source_duckdb_file = DB_DIR . $duckdb_file;
+	$duckdb_file        = '.ht.duckdb-core-tests-isolated-' . getmypid();
+	$target_duckdb_file = DB_DIR . $duckdb_file;
+
+	if ( is_file( $source_duckdb_file ) && ! is_file( $target_duckdb_file ) ) {
+		copy( $source_duckdb_file, $target_duckdb_file );
+	}
+
+	wp_core_duckdb_tests_cleanup_path( $target_duckdb_file );
+	putenv( 'WP_TESTS_SKIP_INSTALL=1' );
+	$_ENV['WP_TESTS_SKIP_INSTALL']    = '1';
+	$_SERVER['WP_TESTS_SKIP_INSTALL'] = '1';
+}
+define( 'DUCKDB_FILE', $duckdb_file );
+unset( $duckdb_file );
+
+PHP;
 $config .= 'define( \'DUCKDB_PHP_AUTOLOAD\', ' . var_export( $autoload, true ) . " );\n";
 $config .= "define( 'FS_METHOD', 'direct' );\n";
 
@@ -133,8 +177,57 @@ if ( 'duckdb' !== $backend ) {
 	$working_db   = $database_dir . '.ht.duckdb-core-' . $backend_slug . '-working';
 
 	$config .= 'define( \'DUCKDB_BACKEND\', ' . var_export( $backend, true ) . " );\n";
-	$config .= 'define( \'DUCKDB_EXTERNAL_STORAGE_DIR\', ' . var_export( $external_dir, true ) . " );\n";
-	$config .= 'define( \'DUCKDB_WORKING_DATABASE_FILE\', ' . var_export( $working_db, true ) . " );\n";
+	$config .= '$duckdb_external_storage_dir = ' . var_export( $external_dir, true ) . ";\n";
+	$config .= '$duckdb_working_database_file = ' . var_export( $working_db, true ) . ";\n";
+	$config .= <<<'PHP'
+if ( wp_core_duckdb_tests_isolated_process() ) {
+	$source_external_storage_dir = $duckdb_external_storage_dir;
+	$duckdb_external_storage_dir = rtrim( $duckdb_external_storage_dir, '/\\' ) . '-isolated-' . getmypid() . '/';
+	if ( is_dir( $source_external_storage_dir ) && ! is_dir( $duckdb_external_storage_dir ) ) {
+		mkdir( $duckdb_external_storage_dir, 0777, true );
+		$iterator = new RecursiveIteratorIterator(
+			new RecursiveDirectoryIterator( $source_external_storage_dir, FilesystemIterator::SKIP_DOTS ),
+			RecursiveIteratorIterator::SELF_FIRST
+		);
+		foreach ( $iterator as $path ) {
+			$target = $duckdb_external_storage_dir . $iterator->getSubPathName();
+			if ( $path->isDir() ) {
+				if ( ! is_dir( $target ) ) {
+					mkdir( $target, 0777, true );
+				}
+			} else {
+				copy( $path->getPathname(), $target );
+			}
+		}
+	}
+
+	$duckdb_working_database_file .= '-isolated-' . getmypid();
+	wp_core_duckdb_tests_cleanup_path( $duckdb_working_database_file );
+	register_shutdown_function(
+		static function () use ( $duckdb_external_storage_dir ): void {
+			if ( ! is_dir( $duckdb_external_storage_dir ) ) {
+				return;
+			}
+			$iterator = new RecursiveIteratorIterator(
+				new RecursiveDirectoryIterator( $duckdb_external_storage_dir, FilesystemIterator::SKIP_DOTS ),
+				RecursiveIteratorIterator::CHILD_FIRST
+			);
+			foreach ( $iterator as $path ) {
+				if ( $path->isDir() ) {
+					@rmdir( $path->getPathname() );
+				} else {
+					@unlink( $path->getPathname() );
+				}
+			}
+			@rmdir( $duckdb_external_storage_dir );
+		}
+	);
+}
+define( 'DUCKDB_EXTERNAL_STORAGE_DIR', $duckdb_external_storage_dir );
+define( 'DUCKDB_WORKING_DATABASE_FILE', $duckdb_working_database_file );
+unset( $duckdb_external_storage_dir, $duckdb_working_database_file );
+
+PHP;
 
 	$custom_constants = array(
 		'DUCKDB_BACKEND_FILE_EXTENSION' => getenv( 'WP_CORE_DUCKDB_BACKEND_FILE_EXTENSION' ),
