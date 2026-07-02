@@ -612,9 +612,10 @@ class WP_DuckDB_Storage_Backend {
 		}
 
 		$this->ensure_external_storage_dir();
+		$sources = $this->external_sources();
 		$this->clear_mutable_tables();
 
-		foreach ( $this->external_sources() as $table => $source ) {
+		foreach ( $sources as $table => $source ) {
 			if ( $this->is_internal_table_name( $table ) ) {
 				continue;
 			}
@@ -1224,6 +1225,14 @@ class WP_DuckDB_Storage_Backend {
 		$sources = array();
 		foreach ( $this->external_table_files() as $path ) {
 			$sources[ basename( $path, '.' . $this->file_extension ) ] = $path;
+		}
+
+		if ( array() !== $sources || $this->is_local_storage_dir() ) {
+			return $sources;
+		}
+
+		foreach ( $this->list_mutable_tables() as $table ) {
+			$sources[ $table ] = $this->source_for_table( $table );
 		}
 
 		return $sources;

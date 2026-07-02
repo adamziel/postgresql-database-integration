@@ -91,6 +91,21 @@ object storage, lakehouse formats, and attached database systems. See DuckDB's
 [extensions](https://duckdb.org/docs/current/extensions/overview) docs for the
 full current surface.
 
+This repository's automated WordPress-site smoke currently proves these DuckDB
+storage backends with WordPress 7.0, WooCommerce, and Query Monitor:
+
+| Backend | Status | Notes |
+| --- | --- | --- |
+| Native DuckDB file | Proven in CI | One mutable DuckDB database file. |
+| Local JSON files | Proven in CI | One JSON file per WordPress table. |
+| Local CSV files | Proven in CI | One CSV file per WordPress table. |
+| Local Parquet files | Proven in CI | One Parquet file per WordPress table. |
+| Custom file templates | Proven in CI | The CI smoke uses pipe-delimited `.psv` files through custom read/write SQL. |
+| Attached SQLite via DuckDB | Proven in CI | DuckDB hydrates from and flushes to an attached SQLite database file. |
+| S3-compatible object storage | Configurable, not CI-proven yet | Requires `httpfs`, writable S3 credentials, a table source strategy, and backend-specific testing. |
+| Attached PostgreSQL/MySQL via DuckDB | Configurable, not CI-proven yet | Prefer the native PostgreSQL backend when PostgreSQL should be the actual WordPress database. |
+| Lakehouse/extension backends | Configurable, not CI-proven yet | Only usable when the extension can fully hydrate and flush every WordPress table. |
+
 This plugin supports two DuckDB backend modes:
 
 - Native DuckDB file storage: use `DUCKDB_BACKEND` unset, `duckdb`, `duck`,
@@ -230,7 +245,8 @@ define( 'DUCKDB_BACKEND_ATOMIC_FLUSH', false );
 
 The table list above is intentionally short. Add every WordPress and plugin table
 that should survive a fresh connection; tables that are not listed cannot be
-hydrated when PHP cannot scan the backend.
+hydrated when PHP cannot scan the backend and the persistent working DuckDB file
+does not already know about them.
 
 For public HTTPS files, DuckDB can read files through `httpfs`, but regular
 HTTP(S) does not provide a write API. Do not use plain HTTPS as the only mutable
@@ -438,10 +454,37 @@ QUERY_MONITOR_VERSION=4.0.7 \
 ./bin/duckdb-wordpress-plugin-smoke.sh duckdb json csv parquet
 ```
 
+Run the same smoke against a custom file backend:
+
+```bash
+WORDPRESS_VERSION=7.0 \
+WOOCOMMERCE_VERSION=10.9.1 \
+QUERY_MONITOR_VERSION=4.0.7 \
+WP_DUCKDB_BACKEND_FILE_EXTENSION=psv \
+WP_DUCKDB_BACKEND_READ_SQL="SELECT * FROM read_csv_auto({path}, HEADER = true, DELIM = '|')" \
+WP_DUCKDB_BACKEND_WRITE_SQL="COPY {table} TO {path} (HEADER, DELIMITER '|')" \
+./bin/duckdb-wordpress-plugin-smoke.sh pipe_text
+```
+
+Run it against DuckDB's SQLite extension:
+
+```bash
+WORDPRESS_VERSION=7.0 \
+WOOCOMMERCE_VERSION=10.9.1 \
+QUERY_MONITOR_VERSION=4.0.7 \
+WP_DUCKDB_BACKEND_SETUP_SQL_JSON='["INSTALL sqlite","LOAD sqlite","ATTACH '\''{database_dir}/wordpress.sqlite'\'' AS wp_store (TYPE sqlite)"]' \
+WP_DUCKDB_BACKEND_READ_SQL='SELECT * FROM wp_store.{table}' \
+WP_DUCKDB_BACKEND_WRITE_SQL='CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}' \
+WP_DUCKDB_BACKEND_ATOMIC_FLUSH=0 \
+./bin/duckdb-wordpress-plugin-smoke.sh sqlite_attach
+```
+
 The smoke installs WordPress, activates WooCommerce and Query Monitor, creates a
 simple WooCommerce product, verifies WooCommerce custom tables, performs HTTP
 requests against the front page, login page, and product archive, and fails if
-WordPress logs DuckDB/database errors.
+WordPress logs DuckDB/database errors. Custom backend setup SQL can use
+`{root}`, `{database_dir}`, `{backend}`, and `{backend_slug}` placeholders in
+this smoke harness.
 
 ## CI
 
@@ -453,7 +496,8 @@ against PostgreSQL 16, runs the DuckDB PHPUnit suite with the native DuckDB PHP
 client, keeps the existing WordPress core PostgreSQL PHPUnit job, and runs the
 focused WordPress core DB test class against DuckDB. It also runs the
 WooCommerce and Query Monitor smoke matrix against native DuckDB, JSON, CSV, and
-Parquet storage.
+Parquet storage, a custom pipe-delimited file backend, and DuckDB's attached
+SQLite extension.
 
 ## Releases
 
@@ -473,6 +517,9 @@ runs and publishes that zip to GitHub Releases for tags matching `v*`.
 - DuckDB support requires a separately installed PHP client and native library.
 - DuckDB external file storage currently uses an explicit hydrate/mutate/flush
   cycle for Parquet, CSV, and JSON.
+- External DuckDB storage depends on the persistent working DuckDB database for
+  schema metadata and table discovery. The external files or attached database
+  hold table data, but the working database is still part of the backend state.
 - SQLite support is routed to the upstream submodule rather than imported as
   root-owned source.
 - Full browser/editor E2E coverage for DuckDB and SQLite is not included yet.

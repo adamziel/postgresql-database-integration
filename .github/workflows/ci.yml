@@ -226,11 +226,43 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend:
-          - duckdb
-          - json
-          - csv
-          - parquet
+        include:
+          - backend: duckdb
+            file_extension: ''
+            read_sql: ''
+            write_sql: ''
+            setup_sql_json: ''
+            atomic_flush: ''
+          - backend: json
+            file_extension: ''
+            read_sql: ''
+            write_sql: ''
+            setup_sql_json: ''
+            atomic_flush: ''
+          - backend: csv
+            file_extension: ''
+            read_sql: ''
+            write_sql: ''
+            setup_sql_json: ''
+            atomic_flush: ''
+          - backend: parquet
+            file_extension: ''
+            read_sql: ''
+            write_sql: ''
+            setup_sql_json: ''
+            atomic_flush: ''
+          - backend: pipe_text
+            file_extension: psv
+            read_sql: 'SELECT * FROM read_csv_auto({path}, HEADER = true, DELIM = ''|'')'
+            write_sql: 'COPY {table} TO {path} (HEADER, DELIMITER ''|'')'
+            setup_sql_json: ''
+            atomic_flush: ''
+          - backend: sqlite_attach
+            file_extension: ''
+            read_sql: 'SELECT * FROM wp_store.{table}'
+            write_sql: 'CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}'
+            setup_sql_json: '["INSTALL sqlite","LOAD sqlite","ATTACH ''{database_dir}/wordpress.sqlite'' AS wp_store (TYPE sqlite)"]'
+            atomic_flush: '0'
 
     env:
       WORDPRESS_VERSION: '7.0'
@@ -251,3 +283,9 @@ jobs:
 
       - name: Run WordPress plugin smoke on DuckDB
         run: ./bin/duckdb-wordpress-plugin-smoke.sh ${{ matrix.backend }}
+        env:
+          WP_DUCKDB_BACKEND_FILE_EXTENSION: ${{ matrix.file_extension }}
+          WP_DUCKDB_BACKEND_READ_SQL: ${{ matrix.read_sql }}
+          WP_DUCKDB_BACKEND_WRITE_SQL: ${{ matrix.write_sql }}
+          WP_DUCKDB_BACKEND_SETUP_SQL_JSON: ${{ matrix.setup_sql_json }}
+          WP_DUCKDB_BACKEND_ATOMIC_FLUSH: ${{ matrix.atomic_flush }}

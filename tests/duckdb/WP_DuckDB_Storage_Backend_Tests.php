@@ -237,6 +237,62 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		);
 	}
 
+	public function test_non_scannable_backend_uses_working_database_tables_as_source_registry(): void {
+		$this->requireDuckDBRuntime();
+
+		$temp_dir     = $this->create_temp_dir();
+		$database     = $temp_dir . '/working.duckdb';
+		$store        = $temp_dir . '/attached-store.duckdb';
+		$attach_store = "ATTACH '" . str_replace( "'", "''", $store ) . "' AS wp_store";
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'            => 'attached_duckdb',
+				'database_path'      => $database,
+				'setup_sql'          => array( $attach_store ),
+				'read_sql_template'  => 'SELECT * FROM wp_store.{table}',
+				'write_sql_template' => 'CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+		$driver->query(
+			'CREATE TABLE wptests_plugin_log (
+				id bigint(20),
+				message varchar(255)
+			)'
+		);
+		$driver->query(
+			"INSERT INTO wptests_plugin_log (id, message)
+			VALUES (1, 'flushed through attached backend')"
+		);
+		$storage->flush();
+		unset( $driver, $storage );
+
+		$fresh_storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'            => 'attached_duckdb',
+				'database_path'      => $database,
+				'setup_sql'          => array( $attach_store ),
+				'read_sql_template'  => 'SELECT * FROM wp_store.{table}',
+				'write_sql_template' => 'CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}',
+			)
+		);
+		$fresh_driver  = $fresh_storage->create_driver( 'wp' );
+
+		$this->assertSame(
+			array(
+				array(
+					'id'      => 1,
+					'message' => 'flushed through attached backend',
+				),
+			),
+			$fresh_driver->query(
+				'SELECT id, message
+				FROM wptests_plugin_log'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
 	public function test_json_backend_hydrates_empty_metadata_backed_tables(): void {
 		$this->requireDuckDBRuntime();
 

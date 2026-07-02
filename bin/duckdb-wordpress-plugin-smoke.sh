@@ -105,6 +105,85 @@ $root     = rtrim( getenv( 'WORDPRESS_ROOT' ), '/\\' );
 $backend  = strtolower( getenv( 'BACKEND' ) ?: 'duckdb' );
 $site_url = getenv( 'SITE_URL' ) ?: 'http://127.0.0.1:8080';
 
+function duckdb_smoke_env_first( array $names ): ?string {
+	foreach ( $names as $name ) {
+		$value = getenv( $name );
+		if ( false !== $value && '' !== $value ) {
+			return $value;
+		}
+	}
+
+	return null;
+}
+
+function duckdb_smoke_env_json_array( string $name ): ?array {
+	$value = getenv( $name );
+	if ( false === $value || '' === $value ) {
+		return null;
+	}
+
+	$decoded = json_decode( $value, true );
+	if ( ! is_array( $decoded ) ) {
+		fwrite( STDERR, "Expected $name to be a JSON array.\n" );
+		exit( 1 );
+	}
+
+	foreach ( $decoded as $item ) {
+		if ( ! is_string( $item ) || '' === trim( $item ) ) {
+			fwrite( STDERR, "Expected $name to contain only non-empty strings.\n" );
+			exit( 1 );
+		}
+	}
+
+	return array_values( $decoded );
+}
+
+function duckdb_smoke_env_table_list(): ?array {
+	$tables = duckdb_smoke_env_json_array( 'WP_DUCKDB_BACKEND_TABLES_JSON' );
+	if ( null !== $tables ) {
+		return $tables;
+	}
+
+	$tables_file = duckdb_smoke_env_first( array( 'WP_DUCKDB_BACKEND_TABLES_FILE', 'DUCKDB_BACKEND_TABLES_FILE' ) );
+	if ( null !== $tables_file && is_file( $tables_file ) ) {
+		$tables = file( $tables_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES );
+		return is_array( $tables ) ? array_values( array_unique( array_map( 'trim', $tables ) ) ) : array();
+	}
+
+	$tables = duckdb_smoke_env_first( array( 'WP_DUCKDB_BACKEND_TABLES', 'DUCKDB_BACKEND_TABLES' ) );
+	if ( null === $tables ) {
+		return null;
+	}
+
+	return array_values(
+		array_unique(
+			array_filter(
+				array_map( 'trim', preg_split( '/[\r\n,]+/', $tables ) ?: array() ),
+				static function ( string $table ): bool {
+					return '' !== $table;
+				}
+			)
+		)
+	);
+}
+
+function duckdb_smoke_bool_env( array $names ): ?bool {
+	$value = duckdb_smoke_env_first( $names );
+	if ( null === $value ) {
+		return null;
+	}
+
+	return in_array( strtolower( $value ), array( '1', 'true', 'yes', 'on' ), true );
+}
+
+function duckdb_smoke_expand_placeholders( ?string $value, array $placeholders ): ?string {
+	if ( null === $value ) {
+		return null;
+	}
+
+	return strtr( $value, $placeholders );
+}
+
 $database_dir = $root . '/wp-content/database/';
 $config       = <<<'CONFIG'
 <?php
@@ -144,10 +223,70 @@ $config .= "define( 'DUCKDB_FILE', '.ht.duckdb-plugin-smoke' );\n";
 $config .= 'define( \'DUCKDB_PHP_AUTOLOAD\', ' . var_export( $root . '/wp-content/plugins/wordpress-databases-support/vendor/autoload.php', true ) . " );\n";
 
 if ( ! in_array( $backend, array( 'duckdb', 'duck', 'native', 'file' ), true ) ) {
-	$backend_slug = preg_replace( '/[^a-z0-9_-]+/', '-', $backend );
-	$config      .= 'define( \'DUCKDB_BACKEND\', ' . var_export( $backend, true ) . " );\n";
-	$config      .= 'define( \'DUCKDB_EXTERNAL_STORAGE_DIR\', ' . var_export( $database_dir . 'duckdb-' . $backend_slug . '/', true ) . " );\n";
-	$config      .= 'define( \'DUCKDB_WORKING_DATABASE_FILE\', ' . var_export( $database_dir . '.ht.duckdb-plugin-smoke-' . $backend_slug . '-working', true ) . " );\n";
+	$backend_slug         = preg_replace( '/[^a-z0-9_-]+/', '-', $backend );
+	$placeholders         = array(
+		'{root}'         => $root,
+		'{database_dir}' => $database_dir,
+		'{backend}'      => $backend,
+		'{backend_slug}' => $backend_slug,
+	);
+	$external_storage_dir = duckdb_smoke_expand_placeholders( duckdb_smoke_env_first( array( 'WP_DUCKDB_EXTERNAL_STORAGE_DIR', 'DUCKDB_EXTERNAL_STORAGE_DIR' ) ), $placeholders );
+	$working_database     = duckdb_smoke_expand_placeholders( duckdb_smoke_env_first( array( 'WP_DUCKDB_WORKING_DATABASE_FILE', 'DUCKDB_WORKING_DATABASE_FILE' ) ), $placeholders );
+	$file_extension       = duckdb_smoke_env_first( array( 'WP_DUCKDB_BACKEND_FILE_EXTENSION', 'DUCKDB_BACKEND_FILE_EXTENSION' ) );
+
+	if ( null === $external_storage_dir && ( in_array( $backend, array( 'csv', 'json', 'parquet' ), true ) || null !== $file_extension ) ) {
+		$external_storage_dir = $database_dir . 'duckdb-' . $backend_slug . '/';
+	}
+	if ( null === $working_database ) {
+		$working_database = $database_dir . '.ht.duckdb-plugin-smoke-' . $backend_slug . '-working';
+	}
+
+	$config .= 'define( \'DUCKDB_BACKEND\', ' . var_export( $backend, true ) . " );\n";
+	if ( null !== $external_storage_dir ) {
+		$config .= 'define( \'DUCKDB_EXTERNAL_STORAGE_DIR\', ' . var_export( $external_storage_dir, true ) . " );\n";
+	}
+	$config .= 'define( \'DUCKDB_WORKING_DATABASE_FILE\', ' . var_export( $working_database, true ) . " );\n";
+
+	if ( null !== $file_extension ) {
+		$config .= 'define( \'DUCKDB_BACKEND_FILE_EXTENSION\', ' . var_export( $file_extension, true ) . " );\n";
+	}
+
+	$read_sql = duckdb_smoke_env_first( array( 'WP_DUCKDB_BACKEND_READ_SQL', 'DUCKDB_BACKEND_READ_SQL' ) );
+	if ( null !== $read_sql ) {
+		$config .= 'define( \'DUCKDB_BACKEND_READ_SQL\', ' . var_export( $read_sql, true ) . " );\n";
+	}
+
+	$write_sql = duckdb_smoke_env_first( array( 'WP_DUCKDB_BACKEND_WRITE_SQL', 'DUCKDB_BACKEND_WRITE_SQL' ) );
+	if ( null !== $write_sql ) {
+		$config .= 'define( \'DUCKDB_BACKEND_WRITE_SQL\', ' . var_export( $write_sql, true ) . " );\n";
+	}
+
+	$setup_sql = duckdb_smoke_env_json_array( 'WP_DUCKDB_BACKEND_SETUP_SQL_JSON' );
+	if ( null !== $setup_sql ) {
+		$setup_sql = array_map(
+			static function ( string $statement ) use ( $placeholders ): string {
+				return duckdb_smoke_expand_placeholders( $statement, $placeholders );
+			},
+			$setup_sql
+		);
+		$config .= 'define( \'DUCKDB_BACKEND_SETUP_SQL\', ' . var_export( $setup_sql, true ) . " );\n";
+	} else {
+		$setup_sql = duckdb_smoke_env_first( array( 'WP_DUCKDB_BACKEND_SETUP_SQL', 'DUCKDB_BACKEND_SETUP_SQL' ) );
+		if ( null !== $setup_sql ) {
+			$setup_sql = duckdb_smoke_expand_placeholders( $setup_sql, $placeholders );
+			$config .= 'define( \'DUCKDB_BACKEND_SETUP_SQL\', ' . var_export( $setup_sql, true ) . " );\n";
+		}
+	}
+
+	$tables = duckdb_smoke_env_table_list();
+	if ( null !== $tables ) {
+		$config .= 'define( \'DUCKDB_BACKEND_TABLES\', ' . var_export( $tables, true ) . " );\n";
+	}
+
+	$atomic_flush = duckdb_smoke_bool_env( array( 'WP_DUCKDB_BACKEND_ATOMIC_FLUSH', 'DUCKDB_BACKEND_ATOMIC_FLUSH' ) );
+	if ( null !== $atomic_flush ) {
+		$config .= 'define( \'DUCKDB_BACKEND_ATOMIC_FLUSH\', ' . ( $atomic_flush ? 'true' : 'false' ) . " );\n";
+	}
 }
 
 $config .= "\nif ( ! defined( 'ABSPATH' ) ) {\n";
@@ -220,6 +359,27 @@ if ( function_exists( 'wc_get_product' ) && class_exists( 'WC_Product_Simple' ) 
 		$product->set_manage_stock( false );
 		$product_id = $product->save();
 		update_option( 'duckdb_smoke_product_id', $product_id );
+	}
+}
+
+$tables_file = getenv( 'WP_DUCKDB_SMOKE_TABLES_FILE' );
+if ( false !== $tables_file && '' !== $tables_file ) {
+	$tables = $wpdb->get_col( 'SHOW TABLES' );
+	if ( is_array( $tables ) ) {
+		$tables = array_values(
+			array_filter(
+				array_unique( $tables ),
+				static function ( $table ): bool {
+					return is_string( $table ) && 0 !== stripos( $table, '__wp_duckdb_' );
+				}
+			)
+		);
+		sort( $tables, SORT_STRING );
+		$tables_dir = dirname( $tables_file );
+		if ( ! is_dir( $tables_dir ) ) {
+			mkdir( $tables_dir, 0777, true );
+		}
+		file_put_contents( $tables_file, implode( "\n", $tables ) . "\n" );
 	}
 }
 
@@ -344,6 +504,7 @@ run_backend() {
 	local port=$(( 8100 + ( RANDOM % 800 ) ))
 	local site_url="http://127.0.0.1:$port"
 	local server_log="$work_root/$backend_slug/server.log"
+	local tables_file="$work_root/$backend_slug/tables.txt"
 	local server_pid=''
 
 	echo "==> DuckDB plugin smoke: backend=$backend"
@@ -353,7 +514,10 @@ run_backend() {
 	prepare_plugin_from_zip query-monitor "$query_monitor_version" "$wp_root/wp-content/plugins"
 	prepare_plugin_from_zip woocommerce "$woocommerce_version" "$wp_root/wp-content/plugins"
 	write_wp_config "$wp_root" "$backend" "$site_url"
-	php_install_and_activate "$wp_root"
+	WP_DUCKDB_SMOKE_TABLES_FILE="$tables_file" php_install_and_activate "$wp_root"
+	if [ "${WP_DUCKDB_SMOKE_REWRITE_CONFIG_WITH_TABLES:-0}" = "1" ]; then
+		WP_DUCKDB_BACKEND_TABLES_FILE="$tables_file" write_wp_config "$wp_root" "$backend" "$site_url"
+	fi
 	php_verify_site "$wp_root"
 
 	start_server "$wp_root" "$port" "$server_log"
