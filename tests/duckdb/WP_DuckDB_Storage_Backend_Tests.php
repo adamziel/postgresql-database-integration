@@ -155,7 +155,7 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 				'SELECT id, message
 				FROM wptests_plugin_log
 				ORDER BY id'
-			)->fetchAll( PDO::FETCH_ASSOC )
+				)->fetchAll( PDO::FETCH_ASSOC )
 		);
 	}
 
@@ -568,7 +568,102 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 					AND TABLE_NAME = 'wptests_options'
 				ORDER BY ORDINAL_POSITION"
 			)->fetchAll( PDO::FETCH_ASSOC )
+			);
+	}
+
+	public function test_insert_select_on_duplicate_key_update_uses_unique_metadata_conflict_target(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
 		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query(
+			'CREATE TABLE wptests_plugin_lookup (
+				source varchar(64) NOT NULL,
+				external_id varchar(64) NOT NULL,
+				attempts int(11) NOT NULL DEFAULT 0,
+				payload longtext NOT NULL,
+				UNIQUE KEY source_external_id (source, external_id)
+			)'
+		);
+
+		$insert = "INSERT INTO `wptests_plugin_lookup` (`source`, `external_id`, `attempts`, `payload`)
+			SELECT 'feed', 'abc', 1, 'first' FROM DUAL
+			ON DUPLICATE KEY UPDATE `attempts` = `attempts` + VALUES(`attempts`),
+			                        `payload` = VALUES(`payload`)";
+
+		$this->assertSame( 1, $driver->query( $insert )->rowCount() );
+
+		$update = "INSERT INTO `wptests_plugin_lookup` (`source`, `external_id`, `attempts`, `payload`)
+			SELECT 'feed', 'abc', 3, 'second' FROM DUAL
+			ON DUPLICATE KEY UPDATE `attempts` = `attempts` + VALUES(`attempts`),
+			                        `payload` = VALUES(`payload`)";
+
+		$this->assertSame( 1, $driver->query( $update )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'attempts' => 4,
+					'payload'  => 'second',
+				),
+			),
+			$driver->query(
+				"SELECT attempts, payload
+				FROM wptests_plugin_lookup
+				WHERE source = 'feed' AND external_id = 'abc'"
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_woocommerce_reserved_stock_insert_select_on_duplicate_key_update(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query(
+			'CREATE TABLE wptests_wc_reserved_stock (
+				`order_id` bigint(20) unsigned NOT NULL,
+				`product_id` bigint(20) unsigned NOT NULL,
+				`stock_quantity` double NOT NULL DEFAULT 0,
+				`timestamp` datetime NOT NULL DEFAULT "0000-00-00 00:00:00",
+				`expires` datetime NOT NULL DEFAULT "0000-00-00 00:00:00",
+				PRIMARY KEY (`order_id`, `product_id`)
+			)'
+		);
+
+		$insert = 'INSERT INTO wptests_wc_reserved_stock (order_id, product_id, stock_quantity, timestamp, expires)
+			SELECT 5001, 89, 2, NOW(), ( NOW() + INTERVAL 10 MINUTE ) FROM DUAL
+			WHERE ( SELECT 12 FOR UPDATE ) - ( SELECT IFNULL(SUM(stock_quantity), 0) FROM wptests_wc_reserved_stock WHERE product_id = 89 FOR UPDATE ) >= 2
+			ON DUPLICATE KEY UPDATE expires = VALUES(expires), stock_quantity = VALUES(stock_quantity)';
+
+		$this->assertSame( 1, $driver->query( $insert )->rowCount() );
+
+		$update = 'INSERT INTO wptests_wc_reserved_stock (order_id, product_id, stock_quantity, timestamp, expires)
+			SELECT 5001, 89, 4, NOW(), ( NOW() + INTERVAL 10 MINUTE ) FROM DUAL
+			WHERE ( SELECT 12 FOR UPDATE ) - ( SELECT IFNULL(SUM(stock_quantity), 0) FROM wptests_wc_reserved_stock WHERE product_id = 89 FOR UPDATE ) >= 4
+			ON DUPLICATE KEY UPDATE expires = VALUES(expires), stock_quantity = VALUES(stock_quantity)';
+
+		$this->assertSame( 1, $driver->query( $update )->rowCount() );
+		$rows = $driver->query(
+			'SELECT stock_quantity, expires
+			FROM wptests_wc_reserved_stock
+			WHERE order_id = 5001 AND product_id = 89'
+		)->fetchAll( PDO::FETCH_ASSOC );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 4, (int) $rows[0]['stock_quantity'] );
+		$this->assertGreaterThan( 0, strtotime( $rows[0]['expires'] ) );
 	}
 
 	public function test_native_backend_aliases_use_duckdb_file_backend(): void {

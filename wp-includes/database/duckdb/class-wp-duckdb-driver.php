@@ -11167,8 +11167,12 @@ class WP_DuckDB_Driver {
 
 		$select_index = $this->find_insert_select_index( $tokens, $index );
 		if ( null !== $select_index ) {
-			if ( null !== $this->find_on_duplicate_key_update_index( $tokens ) ) {
-				throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT statement in DuckDB driver. INSERT ... SELECT ... ON DUPLICATE KEY UPDATE is not supported.' );
+			$on_duplicate_index = $this->find_on_duplicate_key_update_index( $tokens );
+			if ( null !== $on_duplicate_index ) {
+				if ( $ignore ) {
+					throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT statement in DuckDB driver. INSERT IGNORE ... ON DUPLICATE KEY UPDATE is not supported.' );
+				}
+				return $this->execute_insert_select_on_duplicate_key_update( $tokens, $index, $select_index, $on_duplicate_index );
 			}
 			return $this->execute_insert_select_with_write_coercion( $tokens, $index, $select_index, $ignore );
 		}
@@ -11236,6 +11240,79 @@ class WP_DuckDB_Driver {
 			$table_index,
 			true
 		);
+	}
+
+	/**
+	 * Execute MySQL INSERT ... SELECT ... ON DUPLICATE KEY UPDATE.
+	 *
+	 * DuckDB needs one ON CONFLICT target for the whole statement. This supports
+	 * SELECT writes whose projected target columns identify exactly one unique key.
+	 *
+	 * @param WP_Parser_Token[] $tokens             MySQL tokens.
+	 * @param int               $table_index        Index of the table token.
+	 * @param int               $select_index       Index of the SELECT token.
+	 * @param int               $on_duplicate_index Index of the ON token.
+	 * @return WP_DuckDB_Result_Statement
+	 */
+	private function execute_insert_select_on_duplicate_key_update( array $tokens, int $table_index, int $select_index, int $on_duplicate_index ): WP_DuckDB_Result_Statement {
+		$insert_tokens           = array_slice( $tokens, 0, $on_duplicate_index );
+		$shape                   = $this->parse_insert_select_target_shape( $insert_tokens, $table_index, $select_index );
+		$shape['source_tokens']  = $this->normalize_select_helper_tokens( $shape['source_tokens'] );
+		$text_blob_write_plan    = $this->insert_select_text_blob_coercion_plan( $shape );
+		$source_sql              = null === $text_blob_write_plan
+			? $this->translate_tokens_to_duckdb_sql( $shape['source_tokens'] )
+			: $text_blob_write_plan['source_sql'];
+		$stage                   = $this->create_select_write_stage( $source_sql, 'insert_select_odku_src' );
+		$update_sql              = $this->translate_on_duplicate_update_tokens_to_duckdb_sql(
+			array_slice( $tokens, $on_duplicate_index + 4 ),
+			$this->write_column_metadata_map( $shape['table_name'], $shape['temporary'] ),
+			$shape['table_name'],
+			$shape['requested_table_name']
+		);
+
+		if ( '' === $update_sql ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... ON DUPLICATE KEY UPDATE statement in DuckDB driver. UPDATE list is required.' );
+		}
+
+		try {
+			$projection = $this->build_insert_select_projection(
+				$shape,
+				$stage['columns'],
+				true,
+				'INSERT',
+				null === $text_blob_write_plan ? array() : $text_blob_write_plan['precoerced_offsets']
+			);
+			$this->validate_staged_write( $stage['table_name'], $projection['validations'], 'Failed to validate DuckDB INSERT SELECT values' );
+
+			$target = $this->select_insert_select_on_duplicate_conflict_target(
+				$shape['table_name'],
+				$shape['temporary'],
+				$projection['columns']
+			);
+
+			return $this->execute_auto_increment_write(
+				$shape['requested_table_name'],
+				'INSERT INTO '
+					. $this->connection->quote_identifier( $shape['table_name'] )
+					. ' ('
+					. $this->quote_identifier_list( $projection['columns'] )
+					. ') SELECT '
+					. implode( ', ', $projection['expressions'] )
+					. ' FROM '
+					. $this->connection->quote_identifier( $stage['table_name'] )
+					. ' AS '
+					. $this->connection->quote_identifier( '__src' )
+					. ' ON CONFLICT ('
+					. $this->quote_identifier_list( $target )
+					. ') DO UPDATE SET '
+					. $update_sql,
+				'Failed to execute DuckDB INSERT',
+				$tokens,
+				$table_index
+			);
+		} finally {
+			$this->drop_select_write_stage( $stage['table_name'] );
+		}
 	}
 
 	/**
@@ -22585,6 +22662,22 @@ class WP_DuckDB_Driver {
 				continue;
 			}
 
+			$current_timestamp_interval = $this->translate_current_timestamp_interval_expression(
+				$tokens,
+				$index,
+				$rewrite_information_schema_tables,
+				$rewrite_information_schema_columns,
+				$rewrite_information_schema_statistics,
+				$rewrite_information_schema_table_constraints,
+				$rewrite_information_schema_key_column_usage,
+				$rewrite_information_schema_referential_constraints,
+				$rewrite_information_schema_check_constraints
+			);
+			if ( null !== $current_timestamp_interval ) {
+				$pieces[] = $current_timestamp_interval;
+				continue;
+			}
+
 			if (
 				$this->is_empty_function_call( $tokens, $index, 'NOW' )
 				|| $this->is_empty_function_call( $tokens, $index, 'CURRENT_TIMESTAMP' )
@@ -24160,6 +24253,31 @@ class WP_DuckDB_Driver {
 		}
 
 		return $evaluable_unique_sets;
+	}
+
+	/**
+	 * Select the one ON CONFLICT target available to an INSERT ... SELECT ODKU.
+	 *
+	 * @param string   $table_name    Resolved target table name.
+	 * @param bool     $temporary     Whether the target is a temporary table.
+	 * @param string[] $write_columns Columns available in the staged write.
+	 * @return string[] Conflict target columns.
+	 */
+	private function select_insert_select_on_duplicate_conflict_target( string $table_name, bool $temporary, array $write_columns ): array {
+		$evaluable_unique_sets = $this->replace_select_evaluable_unique_sets(
+			$this->unique_key_column_sets( $table_name, $temporary ),
+			$write_columns
+		);
+
+		if ( 0 === count( $evaluable_unique_sets ) ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... SELECT ... ON DUPLICATE KEY UPDATE statement in DuckDB driver. SELECT target columns do not include a unique key target.' );
+		}
+
+		if ( count( $evaluable_unique_sets ) > 1 ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... SELECT ... ON DUPLICATE KEY UPDATE statement in DuckDB driver. SELECT target columns identify multiple unique key targets.' );
+		}
+
+		return $evaluable_unique_sets[0];
 	}
 
 	/**
@@ -27214,6 +27332,131 @@ class WP_DuckDB_Driver {
 		}
 
 		return $token->get_bytes();
+	}
+
+	/**
+	 * Translate NOW()/CURRENT_TIMESTAMP()/UTC_TIMESTAMP() +/- INTERVAL.
+	 *
+	 * @param WP_Parser_Token[] $tokens Token stream.
+	 * @param int               $index  Current token index, advanced on match.
+	 * @return string|null DuckDB SQL, or null when the pattern does not match.
+	 */
+	private function translate_current_timestamp_interval_expression(
+		array $tokens,
+		int &$index,
+		bool $rewrite_information_schema_tables,
+		bool $rewrite_information_schema_columns,
+		bool $rewrite_information_schema_statistics,
+		bool $rewrite_information_schema_table_constraints,
+		bool $rewrite_information_schema_key_column_usage,
+		bool $rewrite_information_schema_referential_constraints,
+		bool $rewrite_information_schema_check_constraints
+	): ?string {
+		if (
+			! $this->is_empty_function_call( $tokens, $index, 'NOW' )
+			&& ! $this->is_empty_function_call( $tokens, $index, 'CURRENT_TIMESTAMP' )
+			&& ! $this->is_empty_function_call( $tokens, $index, 'UTC_TIMESTAMP' )
+		) {
+			return null;
+		}
+
+		$operator_index = $index + 3;
+		if (
+			! isset( $tokens[ $operator_index ] )
+			|| (
+				WP_MySQL_Lexer::PLUS_OPERATOR !== $tokens[ $operator_index ]->id
+				&& WP_MySQL_Lexer::MINUS_OPERATOR !== $tokens[ $operator_index ]->id
+			)
+		) {
+			return null;
+		}
+
+		$interval = $this->translate_mysql_interval_tokens_at(
+			$tokens,
+			$operator_index + 1,
+			$rewrite_information_schema_tables,
+			$rewrite_information_schema_columns,
+			$rewrite_information_schema_statistics,
+			$rewrite_information_schema_table_constraints,
+			$rewrite_information_schema_key_column_usage,
+			$rewrite_information_schema_referential_constraints,
+			$rewrite_information_schema_check_constraints
+		);
+		if ( null === $interval ) {
+			return null;
+		}
+
+		$index = $interval['next_index'] - 1;
+		$sign  = WP_MySQL_Lexer::MINUS_OPERATOR === $tokens[ $operator_index ]->id ? '-' : '+';
+
+		return 'strftime(current_timestamp '
+			. $sign
+			. ' '
+			. $interval['sql']
+			. ", '%Y-%m-%d %H:%M:%S')";
+	}
+
+	/**
+	 * Translate a MySQL INTERVAL value at a known token index.
+	 *
+	 * @param WP_Parser_Token[] $tokens Token stream.
+	 * @param int               $index  Index of the INTERVAL token.
+	 * @return array{sql:string,next_index:int}|null Interval SQL and index after the unit.
+	 */
+	private function translate_mysql_interval_tokens_at(
+		array $tokens,
+		int $index,
+		bool $rewrite_information_schema_tables,
+		bool $rewrite_information_schema_columns,
+		bool $rewrite_information_schema_statistics,
+		bool $rewrite_information_schema_table_constraints,
+		bool $rewrite_information_schema_key_column_usage,
+		bool $rewrite_information_schema_referential_constraints,
+		bool $rewrite_information_schema_check_constraints
+	): ?array {
+		if ( ! isset( $tokens[ $index + 2 ] ) || WP_MySQL_Lexer::INTERVAL_SYMBOL !== $tokens[ $index ]->id ) {
+			return null;
+		}
+
+		$unit_index = null;
+		$unit       = null;
+		for ( $scan = $index + 2; $scan < count( $tokens ); ++$scan ) {
+			$candidate = strtoupper( $tokens[ $scan ]->get_value() );
+			if ( in_array( $candidate, array( 'SECOND', 'MINUTE', 'HOUR', 'DAY', 'WEEK', 'MONTH', 'YEAR' ), true ) ) {
+				$unit_index = $scan;
+				$unit       = $candidate;
+				break;
+			}
+		}
+
+		if ( null === $unit_index || null === $unit ) {
+			return null;
+		}
+
+		$value_tokens = array_slice( $tokens, $index + 1, $unit_index - $index - 1 );
+		if ( count( $value_tokens ) === 0 ) {
+			return null;
+		}
+
+		$value_sql = $this->translate_tokens_to_duckdb_sql(
+			$value_tokens,
+			$rewrite_information_schema_tables,
+			$rewrite_information_schema_columns,
+			$rewrite_information_schema_statistics,
+			$rewrite_information_schema_table_constraints,
+			$rewrite_information_schema_key_column_usage,
+			$rewrite_information_schema_referential_constraints,
+			$rewrite_information_schema_check_constraints
+		);
+		if ( 'WEEK' === $unit ) {
+			$unit      = 'DAY';
+			$value_sql = '7 * (' . $value_sql . ')';
+		}
+
+		return array(
+			'sql'        => 'CAST((' . $value_sql . ') AS BIGINT) * INTERVAL 1 ' . $unit,
+			'next_index' => $unit_index + 1,
+		);
 	}
 
 	/**
