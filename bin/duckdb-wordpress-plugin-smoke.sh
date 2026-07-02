@@ -444,6 +444,50 @@ echo 'woocommerce_tables=' . count( $order_tables ) . "\n";
 PHP
 }
 
+php_smoke_product_id() {
+	local wp_root=$1
+
+	WORDPRESS_ROOT="$wp_root" php -d ffi.enable=1 <<'PHP'
+<?php
+$root = rtrim( getenv( 'WORDPRESS_ROOT' ), '/\\' );
+require_once $root . '/wp-load.php';
+
+echo (int) get_option( 'duckdb_smoke_product_id', 0 ) . "\n";
+PHP
+}
+
+php_verify_woocommerce_session() {
+	local wp_root=$1
+
+	WORDPRESS_ROOT="$wp_root" php -d ffi.enable=1 <<'PHP'
+<?php
+$root = rtrim( getenv( 'WORDPRESS_ROOT' ), '/\\' );
+require_once $root . '/wp-load.php';
+
+global $wpdb;
+
+$sessions_table = $wpdb->prefix . 'woocommerce_sessions';
+$session_count  = (int) $wpdb->get_var( "SELECT COUNT(*) FROM $sessions_table" );
+$cart_sessions  = (int) $wpdb->get_var( "SELECT COUNT(*) FROM $sessions_table WHERE session_value LIKE '%cart%'" );
+
+if ( $session_count < 1 ) {
+	fwrite( STDERR, "Expected at least one persisted WooCommerce session.\n" );
+	exit( 1 );
+}
+if ( $cart_sessions < 1 ) {
+	fwrite( STDERR, "Expected at least one WooCommerce session containing cart data.\n" );
+	exit( 1 );
+}
+
+if ( isset( $GLOBALS['wpdb'] ) && method_exists( $GLOBALS['wpdb'], 'flush_storage_backend' ) ) {
+	$GLOBALS['wpdb']->flush_storage_backend();
+}
+
+echo 'woocommerce_sessions=' . $session_count . "\n";
+echo 'woocommerce_cart_sessions=' . $cart_sessions . "\n";
+PHP
+}
+
 start_server() {
 	local wp_root=$1
 	local port=$2
@@ -483,6 +527,35 @@ assert_http_ok() {
 	fi
 	if grep -Eiq 'Error establishing a database connection|One or more database tables are unavailable|Database Error|WordPress &rsaquo; Error|Fatal error' "$output"; then
 		echo "HTTP response for $path contains a WordPress/PHP error." >&2
+		return 1
+	fi
+}
+
+assert_http_ok_with_cookies() {
+	local url=$1
+	local path=$2
+	local output=$3
+	local cookie_jar=$4
+
+	local status
+	status=$(curl --max-time 20 -fsS -L -c "$cookie_jar" -b "$cookie_jar" -o "$output" -w '%{http_code}' "$url$path")
+	if [ "$status" != "200" ]; then
+		echo "Expected HTTP 200 for $path, got $status" >&2
+		return 1
+	fi
+	if grep -Eiq 'Error establishing a database connection|One or more database tables are unavailable|Database Error|WordPress &rsaquo; Error|Fatal error' "$output"; then
+		echo "HTTP response for $path contains a WordPress/PHP error." >&2
+		return 1
+	fi
+}
+
+assert_response_contains() {
+	local output=$1
+	local needle=$2
+	local context=$3
+
+	if ! grep -Fq "$needle" "$output"; then
+		echo "$context does not contain expected text: $needle" >&2
 		return 1
 	fi
 }
@@ -595,12 +668,21 @@ run_backend() {
 	assert_http_ok "$site_url" '/' "$work_root/$backend_slug/front-page.html"
 	assert_http_ok "$site_url" '/wp-login.php' "$work_root/$backend_slug/login.html"
 	assert_http_ok "$site_url" '/?post_type=product' "$work_root/$backend_slug/products.html"
+	product_id=$(php_smoke_product_id "$wp_root")
+	if [ -z "$product_id" ] || [ "$product_id" = "0" ]; then
+		echo "Expected a WooCommerce smoke product ID." >&2
+		return 1
+	fi
+	assert_http_ok_with_cookies "$site_url" "/?add-to-cart=$product_id" "$work_root/$backend_slug/add-to-cart.html" "$work_root/$backend_slug/cart-cookies.txt"
+	assert_http_ok_with_cookies "$site_url" '/cart/' "$work_root/$backend_slug/cart.html" "$work_root/$backend_slug/cart-cookies.txt"
+	assert_response_contains "$work_root/$backend_slug/cart.html" 'woocommerce' 'WooCommerce cart response'
 	assert_query_monitor_admin_page "$wp_root" "$site_url" "$work_root/$backend_slug/admin.html" "$work_root/$backend_slug/cookies.txt"
-	check_logs "$wp_root" "$server_log"
 	kill "$server_pid" >/dev/null 2>&1 || true
 	wait "$server_pid" 2>/dev/null || true
 	server_pid=''
 	trap - EXIT
+	php_verify_woocommerce_session "$wp_root"
+	check_logs "$wp_root" "$server_log"
 
 	echo "PASS backend=$backend root=$wp_root"
 }

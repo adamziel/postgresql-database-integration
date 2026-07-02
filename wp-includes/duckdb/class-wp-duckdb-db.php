@@ -53,6 +53,17 @@ class WP_DuckDB_DB extends wpdb {
 	private $storage_backend_shutdown_registered = false;
 
 	/**
+	 * Whether the PHP shutdown fallback flush was registered.
+	 *
+	 * WordPress' `shutdown` action is preferred because it runs after plugins
+	 * have saved request state, but the drop-in can connect before add_action()
+	 * is available.
+	 *
+	 * @var bool
+	 */
+	private $storage_backend_php_shutdown_registered = false;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param string $dbname Database name.
@@ -404,10 +415,19 @@ class WP_DuckDB_DB extends wpdb {
 	 * @return void
 	 */
 	private function register_storage_backend_shutdown_flush() {
-		if ( $this->storage_backend_shutdown_registered ) {
+		if ( ! $this->storage_backend instanceof WP_DuckDB_Storage_Backend || ! $this->storage_backend->is_external() ) {
 			return;
 		}
-		if ( ! $this->storage_backend instanceof WP_DuckDB_Storage_Backend || ! $this->storage_backend->is_external() ) {
+
+		if ( function_exists( 'add_action' ) ) {
+			if ( ! $this->storage_backend_shutdown_registered ) {
+				add_action( 'shutdown', array( $this, 'flush_storage_backend' ), PHP_INT_MAX );
+				$this->storage_backend_shutdown_registered = true;
+			}
+			return;
+		}
+
+		if ( $this->storage_backend_php_shutdown_registered ) {
 			return;
 		}
 
@@ -422,7 +442,7 @@ class WP_DuckDB_DB extends wpdb {
 			}
 		);
 
-		$this->storage_backend_shutdown_registered = true;
+		$this->storage_backend_php_shutdown_registered = true;
 	}
 
 	/**
@@ -732,6 +752,8 @@ class WP_DuckDB_DB extends wpdb {
 			}
 			return false;
 		}
+
+		$this->register_storage_backend_shutdown_flush();
 
 		$query = apply_filters( 'query', $query );
 		if ( ! $query ) {

@@ -490,10 +490,11 @@ WP_DUCKDB_BACKEND_ATOMIC_FLUSH=0 \
 The smoke installs WordPress, activates WooCommerce and Query Monitor, creates a
 simple WooCommerce product, verifies WooCommerce custom tables, performs HTTP
 requests against the front page, login page, product archive, and an
-authenticated admin dashboard, verifies Query Monitor renders database query
-output, and fails if WordPress logs DuckDB/database errors. Custom backend setup
-SQL can use `{root}`, `{database_dir}`, `{backend}`, and `{backend_slug}`
-placeholders in this smoke harness.
+authenticated admin dashboard, adds the product to a WooCommerce cart, verifies
+the cart response and persisted WooCommerce session row, verifies Query Monitor
+renders database query output, and fails if WordPress logs DuckDB/database
+errors. Custom backend setup SQL can use `{root}`, `{database_dir}`, `{backend}`,
+and `{backend_slug}` placeholders in this smoke harness.
 
 ## CI
 
