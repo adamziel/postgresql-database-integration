@@ -37,6 +37,7 @@ RUN COMPOSER_NO_DEV=1 composer require --no-interaction --no-progress --with-all
 
 COPY examples/duckdb-json-wordpress/wp-config.php /usr/src/wordpress/wp-config.php
 COPY examples/duckdb-json-wordpress/install.php /usr/local/bin/duckdb-json-install.php
+COPY examples/duckdb-json-wordpress/diagnose.php /usr/local/bin/duckdb-json-diagnose.php
 COPY examples/duckdb-json-wordpress/smoke.php /usr/local/bin/duckdb-json-smoke.php
 COPY examples/duckdb-json-wordpress/entrypoint.sh /usr/local/bin/duckdb-json-entrypoint
 

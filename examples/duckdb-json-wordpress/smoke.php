@@ -34,7 +34,7 @@ require $wordpress_root . '/wp-blog-header.php';
 $output = ob_get_clean();
 
 if ( preg_match( '/Error establishing a database connection|One or more database tables are unavailable|Database Error|WordPress &rsaquo; Error/i', $output ) ) {
-	fwrite( STDERR, $output );
+	fwrite( STDERR, "WordPress front page returned a database error page.\n" );
 	exit( 1 );
 }
 

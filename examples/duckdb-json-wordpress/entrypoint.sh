@@ -64,6 +64,20 @@ run_as_web_user() {
 	sh -c "$command_to_run"
 }
 
+print_compact_output() {
+	output_file="$1"
+
+	if php -r '$text = html_entity_decode(strip_tags(file_get_contents($argv[1])), ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5); $text = trim(preg_replace("/[[:space:]]+/", " ", $text)); if ($text === "") { exit(1); } echo substr($text, 0, 1200), PHP_EOL;' "$output_file"; then
+		return
+	fi
+
+	sed -n '1,80p' "$output_file"
+}
+
+run_diagnostics() {
+	run_as_web_user "php -d ffi.enable=1 /usr/local/bin/duckdb-json-diagnose.php"
+}
+
 run_installer() {
 	failure_output="${1:-summary}"
 	installer_output=$(mktemp)
@@ -76,9 +90,14 @@ run_installer() {
 	fi
 
 	if [ "$failure_output" = "full" ]; then
-		cat "$installer_output"
+		echo "DuckDB JSON installer failed. Captured output:"
+		print_compact_output "$installer_output"
+		echo "DuckDB JSON diagnostics:"
+		run_diagnostics || true
 	else
 		echo "DuckDB JSON installer could not load the current example storage."
+		echo "DuckDB JSON diagnostics before reset:"
+		run_diagnostics || true
 	fi
 	rm -f "$installer_output"
 	return 1
@@ -96,9 +115,14 @@ run_front_page_check() {
 	fi
 
 	if [ "$failure_output" = "full" ]; then
-		cat "$check_output"
+		echo "DuckDB JSON front-page check failed. Captured output:"
+		print_compact_output "$check_output"
+		echo "DuckDB JSON diagnostics:"
+		run_diagnostics || true
 	else
 		echo "DuckDB JSON front-page check failed against the current example storage."
+		echo "DuckDB JSON diagnostics before reset:"
+		run_diagnostics || true
 	fi
 	rm -f "$check_output"
 	return 1

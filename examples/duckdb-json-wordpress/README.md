@@ -66,3 +66,11 @@ Reset the example:
 docker compose down
 rm -rf data
 ```
+
+## Troubleshooting
+
+If startup fails, the container prints a `DuckDB JSON diagnostics` block before
+it exits. That block includes the PHP/FFI runtime state, the user running the
+check, database path permissions, JSON table file sizes, DuckDB connection
+status, table count, `wp_options` count, and `siteurl`. Include that diagnostic
+block when reporting a failure.
