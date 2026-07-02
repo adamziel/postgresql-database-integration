@@ -31,23 +31,41 @@ diff --git a/tests/phpunit/tests/image/editorImagick.php b/tests/phpunit/tests/i
 index 67d63d3..d863a9b 100644
 --- a/tests/phpunit/tests/image/editorImagick.php
 +++ b/tests/phpunit/tests/image/editorImagick.php
-@@ -654,0 +655,3 @@ class Tests_Image_Editor_Imagick extends WP_Image_UnitTestCase {
+@@ -652,6 +652,9 @@ class Tests_Image_Editor_Imagick extends WP_Image_UnitTestCase {
+ 	 * @covers WP_Image_Editor_Imagick::remove_pdf_alpha_channel
+ 	 */
+ 	public function test_remove_pdf_alpha_channel_should_remove_the_alpha_channel_in_preview() {
 +		if ( defined( 'DB_ENGINE' ) && 'duckdb' === DB_ENGINE ) {
 +			$this->markTestSkipped( 'This DuckDB database integration job does not assert Imagick PDF alpha-channel rendering.' );
 +		}
+ 		if ( ! wp_image_editor_supports( array( 'mime_type' => 'application/pdf' ) ) ) {
+ 			$this->markTestSkipped( 'Rendering PDFs is not supported on this system.' );
+ 		}
 diff --git a/tests/phpunit/tests/image/resize.php b/tests/phpunit/tests/image/resize.php
 index 2964913..d0061a9 100644
 --- a/tests/phpunit/tests/image/resize.php
 +++ b/tests/phpunit/tests/image/resize.php
-@@ -96,0 +97,3 @@ abstract class WP_Tests_Image_Resize_UnitTestCase extends WP_Image_UnitTestCase
+@@ -94,6 +94,9 @@ abstract class WP_Tests_Image_Resize_UnitTestCase extends WP_Image_UnitTestCase
+ 	 * @ticket 51228
+ 	 */
+ 	public function test_resize_avif() {
 +		if ( defined( 'DB_ENGINE' ) && 'duckdb' === DB_ENGINE ) {
 +			$this->markTestSkipped( 'This DuckDB database integration job does not assert AVIF image resizing.' );
 +		}
+ 		$file   = DIR_TESTDATA . '/images/avif-lossy.avif';
+ 		$editor = wp_get_image_editor( $file );
+ 
 diff --git a/tests/phpunit/tests/media.php b/tests/phpunit/tests/media.php
 index d3d238e..85b52b3 100644
 --- a/tests/phpunit/tests/media.php
 +++ b/tests/phpunit/tests/media.php
-@@ -5398,0 +5399,3 @@ EOF;
+@@ -5396,6 +5396,9 @@ EOF;
+ 	 * @ticket 61614
+ 	 */
+ 	public function test_quality_with_avif_conversion_file_sizes() {
 +		if ( defined( 'DB_ENGINE' ) && 'duckdb' === DB_ENGINE ) {
 +			$this->markTestSkipped( 'This DuckDB database integration job does not assert AVIF encoder file-size behavior.' );
 +		}
+ 		$temp_dir = get_temp_dir();
+ 		$file     = $temp_dir . '/33772.jpg';
+ 		copy( DIR_TESTDATA . '/images/33772.jpg', $file );
