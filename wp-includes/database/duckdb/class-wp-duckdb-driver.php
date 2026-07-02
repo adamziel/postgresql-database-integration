@@ -11923,13 +11923,22 @@ class WP_DuckDB_Driver {
 		$first_clause_pos = $clauses['where'] ?? count( $tokens );
 
 		$table_ref_tokens = array_slice( $tokens, $table_ref_start, $first_clause_pos - $table_ref_start );
+		$where_tokens     = array();
+		if ( null !== $clauses['where'] ) {
+			$where_tokens = array_slice( $tokens, $clauses['where'] + 1 );
+		}
 		if ( count( $target_tokens ) === 0 || count( $table_ref_tokens ) === 0 ) {
 			throw new WP_DuckDB_Driver_Exception( 'Unsupported DELETE statement in DuckDB driver. Multi-table DELETE requires target aliases and table references.' );
 		}
 
-		$target_aliases = $this->parse_multi_delete_target_aliases( $target_tokens );
-		$references     = $this->parse_multi_delete_table_references( $table_ref_tokens );
-		$targets        = array();
+		$target_aliases          = $this->parse_multi_delete_target_aliases( $target_tokens );
+		$left_join_orphan_delete = $this->parse_left_join_orphan_multi_delete_shape( $target_aliases, $table_ref_tokens, $where_tokens );
+		if ( null !== $left_join_orphan_delete ) {
+			return $left_join_orphan_delete;
+		}
+
+		$references = $this->parse_multi_delete_table_references( $table_ref_tokens );
+		$targets    = array();
 		foreach ( $target_aliases as $offset => $target_alias ) {
 			$key = strtolower( $target_alias );
 			if ( ! isset( $references['by_alias'][ $key ] ) ) {
@@ -11948,11 +11957,6 @@ class WP_DuckDB_Driver {
 				'table_name' => $reference['table_name'],
 				'temporary'  => $reference['temporary'],
 			);
-		}
-
-		$where_tokens = array();
-		if ( null !== $clauses['where'] ) {
-			$where_tokens = array_slice( $tokens, $clauses['where'] + 1 );
 		}
 
 		return array(
@@ -12100,6 +12104,110 @@ class WP_DuckDB_Driver {
 		}
 
 		return array_values( $aliases );
+	}
+
+	/**
+	 * Parse WooCommerce-style orphan cleanup DELETE ... LEFT JOIN ... IS NULL.
+	 *
+	 * @param string[]          $target_aliases   DELETE target aliases.
+	 * @param WP_Parser_Token[] $table_ref_tokens Table reference tokens.
+	 * @param WP_Parser_Token[] $where_tokens     WHERE tokens.
+	 * @return array{targets:array<int,array{alias:string,column:string,table_name:string,temporary:bool}>,from_sql:string,join_predicates:array<int,array<int,WP_Parser_Token>|string>,where_tokens:array<int,WP_Parser_Token>,temp_table:string}|null Parsed shape.
+	 */
+	private function parse_left_join_orphan_multi_delete_shape( array $target_aliases, array $table_ref_tokens, array $where_tokens ): ?array {
+		if ( 1 !== count( $target_aliases ) ) {
+			return null;
+		}
+
+		$where_tokens = $this->trim_trailing_semicolon_tokens( $where_tokens );
+		if ( count( $where_tokens ) === 0 ) {
+			return null;
+		}
+
+		$target_factor = $this->parse_joined_update_table_factor( $table_ref_tokens, 0, false, true, 'DELETE' );
+		$target        = $target_factor['reference'];
+		if ( 0 !== strcasecmp( $target_aliases[0], $target['alias'] ) ) {
+			return null;
+		}
+
+		$index = $target_factor['next_index'];
+		if ( ! isset( $table_ref_tokens[ $index ] ) || WP_MySQL_Lexer::LEFT_SYMBOL !== $table_ref_tokens[ $index ]->id ) {
+			return null;
+		}
+		++$index;
+		if ( isset( $table_ref_tokens[ $index ] ) && WP_MySQL_Lexer::OUTER_SYMBOL === $table_ref_tokens[ $index ]->id ) {
+			++$index;
+		}
+		if ( ! isset( $table_ref_tokens[ $index ] ) || WP_MySQL_Lexer::JOIN_SYMBOL !== $table_ref_tokens[ $index ]->id ) {
+			return null;
+		}
+		++$index;
+
+		$source_factor = $this->parse_joined_update_table_factor( $table_ref_tokens, $index, false, false, 'DELETE' );
+		$source        = $source_factor['reference'];
+		$index         = $source_factor['next_index'];
+		if ( ! isset( $table_ref_tokens[ $index ] ) || WP_MySQL_Lexer::ON_SYMBOL !== $table_ref_tokens[ $index ]->id ) {
+			return null;
+		}
+		++$index;
+
+		$on_tokens = array_slice( $table_ref_tokens, $index );
+		if ( count( $on_tokens ) === 0 || ! $this->is_joined_delete_source_null_where( $where_tokens, $source['alias'] ) ) {
+			return null;
+		}
+
+		$this->assert_dml_rowid_rewrite_supported( $target['table_name'], 'DELETE', $target['temporary'] );
+
+		return array(
+			'targets'         => array(
+				array(
+					'alias'      => $target['alias'],
+					'column'     => '__target_0_rowid',
+					'table_name' => $target['table_name'],
+					'temporary'  => $target['temporary'],
+				),
+			),
+			'from_sql'        => $target['sql'],
+			'join_predicates' => array(
+				'NOT EXISTS ( SELECT 1 FROM '
+					. $source['sql']
+					. ' WHERE '
+					. $this->translate_tokens_to_duckdb_sql( $on_tokens )
+					. ' )',
+			),
+			'where_tokens'    => array(),
+			'temp_table'      => '__wp_duckdb_dml_delete_' . substr( hash( 'sha256', (string) $this->last_mysql_query ), 0, 16 ),
+		);
+	}
+
+	/**
+	 * Strip trailing semicolons from a token list.
+	 *
+	 * @param WP_Parser_Token[] $tokens Tokens.
+	 * @return WP_Parser_Token[] Trimmed tokens.
+	 */
+	private function trim_trailing_semicolon_tokens( array $tokens ): array {
+		while ( count( $tokens ) > 0 && WP_MySQL_Lexer::SEMICOLON_SYMBOL === $tokens[ count( $tokens ) - 1 ]->id ) {
+			array_pop( $tokens );
+		}
+
+		return $tokens;
+	}
+
+	/**
+	 * Check for the right-side-null predicate in a left-join orphan DELETE.
+	 *
+	 * @param WP_Parser_Token[] $tokens       WHERE tokens.
+	 * @param string            $source_alias Right-side source alias.
+	 * @return bool Whether the WHERE clause is source_alias.column IS NULL.
+	 */
+	private function is_joined_delete_source_null_where( array $tokens, string $source_alias ): bool {
+		return isset( $tokens[4] )
+			&& 5 === count( $tokens )
+			&& WP_MySQL_Lexer::DOT_SYMBOL === $tokens[1]->id
+			&& WP_MySQL_Lexer::IS_SYMBOL === $tokens[3]->id
+			&& ( WP_MySQL_Lexer::NULL_SYMBOL === $tokens[4]->id || WP_MySQL_Lexer::NULL2_SYMBOL === $tokens[4]->id )
+			&& 0 === strcasecmp( $source_alias, $this->identifier_value( $tokens[0] ) );
 	}
 
 	/**
@@ -24870,8 +24978,9 @@ class WP_DuckDB_Driver {
 	 * @return string DuckDB SQL.
 	 */
 	private function translate_insert_values_tokens_to_duckdb_sql( array $tokens, int $table_index, bool $ignore, string $verb = 'INSERT', ?int $end_index = null, bool $rewrite_seeded_rand_literals = false ): string {
-		$shape = $this->parse_insert_values_write_shape( $tokens, $table_index, $end_index, true, $rewrite_seeded_rand_literals );
-		if ( ! $shape['requires_coercion'] && ! $shape['requires_seeded_rand_rewrite'] ) {
+		$shape                          = $this->parse_insert_values_write_shape( $tokens, $table_index, $end_index, true, $rewrite_seeded_rand_literals );
+		$requires_identifier_generation = $this->insert_values_target_clause_has_double_quoted_identifier( $tokens, $table_index, $end_index );
+		if ( ! $shape['requires_coercion'] && ! $shape['requires_seeded_rand_rewrite'] && ! $requires_identifier_generation ) {
 			return $verb
 				. ( $ignore ? ' OR IGNORE' : '' )
 				. ' INTO '
@@ -24905,6 +25014,34 @@ class WP_DuckDB_Driver {
 			)
 			. ') VALUES '
 			. implode( ', ', $row_sql );
+	}
+
+	/**
+	 * Check whether a VALUES write target clause needs generated identifier SQL.
+	 *
+	 * MySQL accepts double quotes as strings, but WordPress' %i can emit quoted
+	 * identifiers in plugin SQL. In target-table/column positions we treat those
+	 * as identifiers without changing expression-string semantics.
+	 *
+	 * @param WP_Parser_Token[] $tokens      MySQL tokens.
+	 * @param int               $table_index Index of the table token.
+	 * @param int|null          $end_index   Optional token index where VALUES input ends.
+	 * @return bool Whether the target clause contains a double-quoted identifier.
+	 */
+	private function insert_values_target_clause_has_double_quoted_identifier( array $tokens, int $table_index, ?int $end_index = null ): bool {
+		$limit        = null === $end_index ? count( $tokens ) : $end_index;
+		$values_index = $this->find_top_level_token_index( $tokens, $table_index + 1, WP_MySQL_Lexer::VALUES_SYMBOL );
+		if ( null !== $values_index && $values_index < $limit ) {
+			$limit = $values_index;
+		}
+
+		for ( $index = $table_index; $index < $limit; ++$index ) {
+			if ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::DOUBLE_QUOTED_TEXT === $tokens[ $index ]->id ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -35985,10 +36122,13 @@ class WP_DuckDB_Driver {
 	 * @return string Identifier value.
 	 */
 	private function identifier_value( $token ): string {
-		if ( ! $token instanceof WP_Parser_Token || $this->is_non_identifier_token( $token ) ) {
+		if (
+			! $token instanceof WP_Parser_Token
+			|| ( WP_MySQL_Lexer::DOUBLE_QUOTED_TEXT !== $token->id && $this->is_non_identifier_token( $token ) )
+		) {
 			throw new WP_DuckDB_Driver_Exception( 'Expected a MySQL identifier in DuckDB driver statement.' );
 		}
-		return $token->get_value();
+		return $this->token_value( $token );
 	}
 
 	/**

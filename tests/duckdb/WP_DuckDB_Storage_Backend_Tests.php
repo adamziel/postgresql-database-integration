@@ -155,7 +155,7 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 				'SELECT id, message
 				FROM wptests_plugin_log
 				ORDER BY id'
-				)->fetchAll( PDO::FETCH_ASSOC )
+			)->fetchAll( PDO::FETCH_ASSOC )
 		);
 	}
 
@@ -664,6 +664,197 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		$this->assertCount( 1, $rows );
 		$this->assertSame( 4, (int) $rows[0]['stock_quantity'] );
 		$this->assertGreaterThan( 0, strtotime( $rows[0]['expires'] ) );
+	}
+
+	public function test_woocommerce_customer_lookup_replace_updates_existing_customer_id(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query(
+			'CREATE TABLE wptests_wc_customer_lookup (
+				customer_id INTEGER PRIMARY KEY,
+				user_id INTEGER NOT NULL,
+				email TEXT NOT NULL
+			)'
+		);
+		$driver->query( "INSERT INTO wptests_wc_customer_lookup (customer_id, user_id, email) VALUES (1, 1, 'old@example.com')" );
+
+		$replace = "REPLACE INTO `wptests_wc_customer_lookup` (`user_id`, `email`, `customer_id`) VALUES (2, 'new@example.com', '1')";
+
+		$this->assertSame( 2, $driver->query( $replace )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'user_id' => 2,
+					'email'   => 'new@example.com',
+				),
+			),
+			$driver->query(
+				'SELECT user_id, email
+				FROM wptests_wc_customer_lookup
+				WHERE customer_id = 1'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_woocommerce_product_lookup_replace_coerces_empty_decimal_strings(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+		$driver->query( "SET sql_mode = ''" );
+
+		$driver->query(
+			'CREATE TABLE wptests_wc_product_meta_lookup_prices (
+				`product_id` bigint(20) unsigned NOT NULL,
+				`min_price` decimal(19,4) DEFAULT NULL,
+				`max_price` decimal(19,4) DEFAULT NULL,
+				`average_rating` decimal(3,2) NOT NULL DEFAULT 0,
+				PRIMARY KEY (`product_id`)
+			)'
+		);
+
+		$replace = "REPLACE INTO `wptests_wc_product_meta_lookup_prices` (`product_id`, `min_price`, `max_price`, `average_rating`) VALUES (109, '', '', '4.50')";
+
+		$this->assertSame( 1, $driver->query( $replace )->rowCount() );
+
+		$rows = $driver->query(
+			'SELECT min_price, max_price, average_rating
+			FROM wptests_wc_product_meta_lookup_prices
+			WHERE product_id = 109'
+		)->fetchAll( PDO::FETCH_ASSOC );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 0.0, (float) $rows[0]['min_price'] );
+		$this->assertSame( 0.0, (float) $rows[0]['max_price'] );
+		$this->assertSame( 4.5, (float) $rows[0]['average_rating'] );
+	}
+
+	public function test_woocommerce_session_upsert_supports_double_quoted_table_identifier(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query(
+			'CREATE TABLE wptests_woocommerce_sessions (
+				session_id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				session_key char(32) NOT NULL,
+				session_value longtext NOT NULL,
+				session_expiry bigint(20) unsigned NOT NULL,
+				PRIMARY KEY (session_id),
+				UNIQUE KEY session_key (session_key)
+			)'
+		);
+
+		$upsert = "INSERT INTO \"wptests_woocommerce_sessions\" (`session_key`, `session_value`, `session_expiry`)
+			VALUES ('session-key', 'first', 1781870576)
+			ON DUPLICATE KEY UPDATE `session_value` = VALUES(`session_value`), `session_expiry` = VALUES(`session_expiry`)";
+
+		$this->assertSame( 1, $driver->query( $upsert )->rowCount() );
+
+		$duplicate_upsert = "INSERT INTO \"wptests_woocommerce_sessions\" (`session_key`, `session_value`, `session_expiry`)
+			VALUES ('session-key', 'second', 1781870577)
+			ON DUPLICATE KEY UPDATE `session_value` = VALUES(`session_value`), `session_expiry` = VALUES(`session_expiry`)";
+
+		$this->assertSame( 1, $driver->query( $duplicate_upsert )->rowCount() );
+
+		$rows = $driver->query(
+			"SELECT session_value, session_expiry
+			FROM \"wptests_woocommerce_sessions\"
+			WHERE session_key = 'session-key'"
+		)->fetchAll( PDO::FETCH_ASSOC );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'second', $rows[0]['session_value'] );
+		$this->assertSame( 1781870577, (int) $rows[0]['session_expiry'] );
+	}
+
+	public function test_woocommerce_orphan_cleanup_delete_left_join_removes_only_orphans(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query(
+			'CREATE TABLE wptests_posts (
+				"ID" INTEGER PRIMARY KEY
+			)'
+		);
+		$driver->query(
+			'CREATE TABLE wptests_postmeta (
+				meta_id INTEGER PRIMARY KEY,
+				post_id INTEGER NOT NULL
+			)'
+		);
+		$driver->query( 'INSERT INTO wptests_posts (`ID`) VALUES (1)' );
+		$driver->query( 'INSERT INTO wptests_postmeta (meta_id, post_id) VALUES (1, 1)' );
+		$driver->query( 'INSERT INTO wptests_postmeta (meta_id, post_id) VALUES (2, 999)' );
+
+		$delete = 'DELETE meta FROM wptests_postmeta meta LEFT JOIN wptests_posts posts ON posts.ID = meta.post_id WHERE posts.ID IS NULL;';
+
+		$this->assertSame( 1, $driver->query( $delete )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'meta_id' => 1,
+					'post_id' => 1,
+				),
+			),
+			$driver->query( 'SELECT meta_id, post_id FROM wptests_postmeta ORDER BY meta_id' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_woocommerce_found_rows_query_supports_alias_projection(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query( 'CREATE TABLE wptests_posts (`ID` INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_date TEXT NOT NULL)' );
+		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status, post_date) VALUES (1, 'shop_order', 'wc-completed', '2024-01-01 00:00:00')" );
+		$driver->query( "INSERT INTO wptests_posts (\"ID\", post_type, post_status, post_date) VALUES (2, 'shop_order', 'wc-completed', '2024-01-02 00:00:00')" );
+
+		$rows = $driver->query(
+			"SELECT SQL_CALC_FOUND_ROWS wptests_posts.ID
+			FROM wptests_posts
+			WHERE wptests_posts.post_type = 'shop_order'
+			ORDER BY wptests_posts.ID ASC
+			LIMIT 0, 1"
+		)->fetchAll( PDO::FETCH_ASSOC );
+
+		$this->assertCount( 1, $rows );
+		$found_rows = $driver->query( 'SELECT FOUND_ROWS() AS found_rows' );
+
+		$this->assertSame( 2, (int) $found_rows->fetch( PDO::FETCH_ASSOC )['found_rows'] );
+		$this->assertSame( 'found_rows', $found_rows->getColumnMeta( 0 )['name'] );
 	}
 
 	public function test_native_backend_aliases_use_duckdb_file_backend(): void {
