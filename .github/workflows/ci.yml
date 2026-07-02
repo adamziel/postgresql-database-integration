@@ -260,14 +260,16 @@ jobs:
         run: ./wordpress-databases-support/bin/prepare-wordpress-core-duckdb-tests.sh wordpress wordpress-databases-support duckdb
 
       - name: Run full WordPress core PHPUnit suite on DuckDB
-        timeout-minutes: 30
+        timeout-minutes: 32
         working-directory: wordpress
         run: |
           set +e
           mkdir -p tests/phpunit/build/logs
+          timeout --foreground --kill-after=30s 29m \
           php -d ffi.enable=true ./vendor/bin/phpunit \
             --configuration phpunit.xml.dist \
             --colors=never \
+            --debug \
             --log-junit tests/phpunit/build/logs/junit.xml \
             2>&1 | tee duckdb-full-core.log
           status=${PIPESTATUS[0]}
