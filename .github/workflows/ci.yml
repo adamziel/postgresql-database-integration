@@ -220,9 +220,8 @@ jobs:
         run: php -d ffi.enable=true ./vendor/bin/phpunit --configuration phpunit.xml.dist --colors=never --filter '^Tests_DB'
 
   wordpress-core-duckdb-full:
-    name: WordPress core DuckDB full PHPUnit (experimental)
+    name: WordPress core DuckDB full PHPUnit
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     env:
       WORDPRESS_REF: '6.7.2'
