@@ -39,13 +39,42 @@ reset_incomplete_storage() {
 	find "$database_dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 }
 
+reset_storage() {
+	echo "Resetting DuckDB JSON example storage."
+	find "$database_dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+	mkdir -p "$json_dir"
+}
+
+run_installer() {
+	failure_output="${1:-summary}"
+	installer_output=$(mktemp)
+
+	if php -d ffi.enable=1 /usr/local/bin/duckdb-json-install.php >"$installer_output" 2>&1 \
+		&& ! grep -Eq 'One or more database tables are unavailable|Error establishing a database connection' "$installer_output"; then
+		cat "$installer_output"
+		rm -f "$installer_output"
+		return 0
+	fi
+
+	if [ "$failure_output" = "full" ]; then
+		cat "$installer_output"
+	else
+		echo "DuckDB JSON installer could not load the current example storage."
+	fi
+	rm -f "$installer_output"
+	return 1
+}
+
 copy_wordpress
 mkdir -p "$database_dir" "$wordpress_dest/wp-content/uploads"
 reset_incomplete_storage
 mkdir -p "$json_dir"
 install_dropin
 
-php -d ffi.enable=1 /usr/local/bin/duckdb-json-install.php
+if ! run_installer summary; then
+	reset_storage
+	run_installer full
+fi
 touch "$install_marker"
 
 if [ "$(id -u)" = "0" ]; then
