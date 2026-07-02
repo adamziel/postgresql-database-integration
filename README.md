@@ -499,6 +499,10 @@ WooCommerce and Query Monitor smoke matrix against native DuckDB, JSON, CSV, and
 Parquet storage, a custom pipe-delimited file backend, and DuckDB's attached
 SQLite extension.
 
+An experimental full WordPress core PHPUnit job also runs against DuckDB. That
+job is capped at 30 minutes and uploads the full PHPUnit log plus JUnit output
+for compatibility discovery; it is not yet a passing support gate.
+
 ## Releases
 
 Build a plugin zip:
