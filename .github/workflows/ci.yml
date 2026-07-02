@@ -219,6 +219,64 @@ jobs:
         working-directory: wordpress
         run: php -d ffi.enable=true ./vendor/bin/phpunit --configuration phpunit.xml.dist --colors=never --filter '^Tests_DB'
 
+  wordpress-core-duckdb-full:
+    name: WordPress core DuckDB full PHPUnit (experimental)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    env:
+      WORDPRESS_REF: '6.7.2'
+      WP_CORE_TEST_DB_NAME: wordpress_develop_tests
+      WP_CORE_TEST_DB_USER: wordpress
+      WP_CORE_TEST_DB_PASSWORD: wordpress
+      WP_CORE_TEST_DB_HOST: localhost
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          path: wordpress-databases-support
+
+      - name: Check out WordPress core
+        uses: actions/checkout@v4
+        with:
+          repository: WordPress/wordpress-develop
+          ref: ${{ env.WORDPRESS_REF }}
+          path: wordpress
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: ffi, mysqli, gd, zip, mbstring
+          ini-values: ffi.enable=true
+          coverage: none
+
+      - name: Install WordPress Composer dependencies
+        working-directory: wordpress
+        run: composer update -W --no-interaction --no-progress --prefer-dist
+
+      - name: Prepare WordPress core DuckDB test harness
+        run: ./wordpress-databases-support/bin/prepare-wordpress-core-duckdb-tests.sh wordpress wordpress-databases-support duckdb
+
+      - name: Run full WordPress core PHPUnit suite on DuckDB
+        working-directory: wordpress
+        run: |
+          set +e
+          php -d ffi.enable=true ./vendor/bin/phpunit --configuration phpunit.xml.dist --colors=never 2>&1 | tee duckdb-full-core.log
+          status=${PIPESTATUS[0]}
+          exit "$status"
+
+      - name: Upload full DuckDB core PHPUnit logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wordpress-core-duckdb-full-phpunit
+          path: |
+            wordpress/duckdb-full-core.log
+            wordpress/tests/phpunit/build/logs/junit.xml
+          if-no-files-found: ignore
+
   duckdb-wordpress-plugin-smoke:
     name: DuckDB WordPress plugin smoke (${{ matrix.backend }})
     runs-on: ubuntu-latest
