@@ -44,6 +44,7 @@ class WP_DuckDB_Prepared_Statement {
 				$parameter = is_string( $key ) ? ltrim( $key, ':$' ) : $key + 1;
 				$this->statement->bindParam( $parameter, $value );
 			}
+			$this->connection->trace_native_query( 'execute_prepared', $this->sql, (array) $params );
 			return $this->connection->create_statement_from_result( $this->statement->execute(), $this->sql );
 		} catch ( Throwable $e ) {
 			throw new WP_DuckDB_Driver_Exception( 'DuckDB prepared statement failed: ' . $e->getMessage(), 0, $e );

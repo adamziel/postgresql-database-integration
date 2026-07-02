@@ -480,6 +480,38 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		}
 	}
 
+	public function test_database_lock_times_out_instead_of_blocking_forever(): void {
+		$temp_dir  = $this->create_temp_dir();
+		$database  = $temp_dir . '/locked.duckdb';
+		$lock_path = $database . '.lock';
+		$handle    = fopen( $lock_path, 'c' );
+
+		$this->assertNotFalse( $handle );
+		$this->assertTrue( flock( $handle, LOCK_EX | LOCK_NB ) );
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'              => 'duckdb',
+				'database_path'        => $database,
+				'lock_timeout_seconds' => 0.05,
+			)
+		);
+
+		$started_at = microtime( true );
+		try {
+			$storage->create_driver( 'wp' );
+			$this->fail( 'Expected a DuckDB lock timeout.' );
+		} catch ( WP_DuckDB_Driver_Exception $e ) {
+			$this->assertStringContainsString( 'Timed out after', $e->getMessage() );
+			$this->assertStringContainsString( $lock_path, $e->getMessage() );
+		} finally {
+			flock( $handle, LOCK_UN );
+			fclose( $handle );
+		}
+
+		$this->assertLessThan( 1.0, microtime( true ) - $started_at );
+	}
+
 	/**
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled

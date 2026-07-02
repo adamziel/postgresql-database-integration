@@ -444,6 +444,14 @@ The DuckDB core harness installs an isolated production DuckDB PHP runtime under
 the copied plugin in the WordPress checkout. This avoids loading this
 repository's dev dependencies into WordPress core's PHPUnit process.
 
+DuckDB storage serializes access to local working database files with a lock.
+Lock acquisition is bounded by default at 30 seconds so a second PHP process
+cannot block forever while another process owns the working database. Override
+the limit with `WP_DUCKDB_LOCK_TIMEOUT_SECONDS` in the environment, or with the
+`DUCKDB_LOCK_TIMEOUT_SECONDS` / `WP_DUCKDB_LOCK_TIMEOUT_SECONDS` WordPress
+constants. Set `WP_DUCKDB_TRACE_NATIVE_QUERIES=1` to log bounded native DuckDB
+connection/query trace lines while debugging a local reproduction.
+
 Run a disposable WordPress site with WooCommerce and Query Monitor against the
 verifiable DuckDB backends:
 
@@ -500,9 +508,9 @@ Parquet storage, a custom pipe-delimited file backend, and DuckDB's attached
 SQLite extension.
 
 An experimental full WordPress core PHPUnit job also runs against DuckDB. That
-job runs with debug output, has a bounded PHPUnit timeout, and uploads the full
-PHPUnit log plus JUnit output for compatibility discovery; it is not yet a
-passing support gate.
+job runs with debug output, has bounded PHPUnit and DuckDB lock timeouts, and
+uploads the full PHPUnit log plus JUnit output for compatibility discovery; it
+is not yet a passing support gate.
 
 ## Releases
 

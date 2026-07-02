@@ -15,6 +15,13 @@ class WP_DuckDB_Connection {
 	private $query_logger;
 
 	/**
+	 * Cached native query trace flag.
+	 *
+	 * @var bool|null
+	 */
+	private static $trace_native_queries_enabled;
+
+	/**
 	 * Whether this connection is inside an explicit transaction.
 	 *
 	 * @var bool
@@ -47,7 +54,9 @@ class WP_DuckDB_Connection {
 
 		try {
 			$client_class = WP_DuckDB_Runtime::CLIENT_CLASS;
+			$this->trace_native_connection( 'open_start', $path );
 			$this->duckdb = $client_class::create( $path );
+			$this->trace_native_connection( 'open_end', $path );
 		} catch ( Throwable $e ) {
 			throw new WP_DuckDB_Driver_Exception( 'Failed to open DuckDB database: ' . $e->getMessage(), 0, $e );
 		}
@@ -72,6 +81,7 @@ class WP_DuckDB_Connection {
 		}
 
 		try {
+			$this->trace_native_query( 'query', $sql );
 			return $this->create_statement_from_result( $this->duckdb->query( $sql ), $sql );
 		} catch ( Throwable $e ) {
 			throw new WP_DuckDB_Driver_Exception( 'DuckDB query failed: ' . $e->getMessage(), 0, $e );
@@ -92,10 +102,79 @@ class WP_DuckDB_Connection {
 		}
 
 		try {
+			$this->trace_native_query( 'prepare', $sql );
 			return new WP_DuckDB_Prepared_Statement( $this, $this->duckdb->preparedStatement( $sql ), $sql );
 		} catch ( Throwable $e ) {
 			throw new WP_DuckDB_Driver_Exception( 'Failed to prepare DuckDB query: ' . $e->getMessage(), 0, $e );
 		}
+	}
+
+	/**
+	 * Emit a bounded native DuckDB query trace line when requested.
+	 *
+	 * @param string $phase  Query execution phase.
+	 * @param string $sql    Native DuckDB SQL.
+	 * @param array  $params Optional parameter values.
+	 */
+	public function trace_native_query( string $phase, string $sql, array $params = array() ): void {
+		if ( ! self::trace_native_queries_enabled() ) {
+			return;
+		}
+
+		$sql = preg_replace( '/\s+/', ' ', str_replace( array( "\r", "\n" ), ' ', $sql ) );
+		$sql = trim( (string) $sql );
+		if ( strlen( $sql ) > 2000 ) {
+			$sql = substr( $sql, 0, 1997 ) . '...';
+		}
+
+		error_log(
+			sprintf(
+				'WP_DUCKDB_NATIVE_QUERY pid=%d phase=%s params=%d sql=%s',
+				getmypid(),
+				$phase,
+				count( $params ),
+				'' === $sql ? '<empty>' : $sql
+			)
+		);
+	}
+
+	/**
+	 * Emit a bounded native DuckDB connection trace line when requested.
+	 *
+	 * @param string      $phase Connection phase.
+	 * @param string|null $path  DuckDB database path.
+	 */
+	private function trace_native_connection( string $phase, ?string $path ): void {
+		if ( ! self::trace_native_queries_enabled() ) {
+			return;
+		}
+
+		error_log(
+			sprintf(
+				'WP_DUCKDB_NATIVE_CONNECT pid=%d phase=%s path=%s',
+				getmypid(),
+				$phase,
+				null === $path ? ':memory:' : $path
+			)
+		);
+	}
+
+	/**
+	 * Whether native DuckDB query tracing is enabled.
+	 *
+	 * @return bool
+	 */
+	private static function trace_native_queries_enabled(): bool {
+		if ( null === self::$trace_native_queries_enabled ) {
+			$value                              = getenv( 'WP_DUCKDB_TRACE_NATIVE_QUERIES' );
+			self::$trace_native_queries_enabled = is_string( $value )
+				&& '' !== $value
+				&& '0' !== $value
+				&& 'false' !== strtolower( $value )
+				&& 'no' !== strtolower( $value );
+		}
+
+		return self::$trace_native_queries_enabled;
 	}
 
 	/**

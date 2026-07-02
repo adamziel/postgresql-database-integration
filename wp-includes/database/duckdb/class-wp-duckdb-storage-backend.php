@@ -5,6 +5,7 @@
  */
 class WP_DuckDB_Storage_Backend {
 	const DEFAULT_BACKEND = 'duckdb';
+	const DEFAULT_LOCK_TIMEOUT_SECONDS = 30.0;
 
 	/**
 	 * Canonical backend name.
@@ -70,6 +71,13 @@ class WP_DuckDB_Storage_Backend {
 	private $atomic_flush;
 
 	/**
+	 * Maximum seconds to wait for the local working database lock.
+	 *
+	 * @var float
+	 */
+	private $lock_timeout_seconds;
+
+	/**
 	 * DuckDB connection used by this backend.
 	 *
 	 * @var WP_DuckDB_Connection|null
@@ -130,6 +138,10 @@ class WP_DuckDB_Storage_Backend {
 		if ( null === $this->external_storage_dir || ! $this->is_local_storage_dir() ) {
 			$this->atomic_flush = false;
 		}
+
+		$this->lock_timeout_seconds = isset( $options['lock_timeout_seconds'] )
+			? $this->normalize_lock_timeout_seconds( $options['lock_timeout_seconds'] )
+			: $this->configured_lock_timeout_seconds();
 	}
 
 	/**
@@ -188,6 +200,7 @@ class WP_DuckDB_Storage_Backend {
 				'setup_sql'            => self::constant_value( array( 'DUCKDB_BACKEND_SETUP_SQL', 'WP_DUCKDB_BACKEND_SETUP_SQL' ), array() ),
 				'tables'               => self::constant_value( array( 'DUCKDB_BACKEND_TABLES', 'WP_DUCKDB_BACKEND_TABLES' ), array() ),
 				'atomic_flush'         => self::constant_value( array( 'DUCKDB_BACKEND_ATOMIC_FLUSH', 'WP_DUCKDB_BACKEND_ATOMIC_FLUSH' ) ),
+				'lock_timeout_seconds' => self::constant_value( array( 'DUCKDB_LOCK_TIMEOUT_SECONDS', 'WP_DUCKDB_LOCK_TIMEOUT_SECONDS' ) ),
 			)
 		);
 	}
@@ -302,12 +315,40 @@ class WP_DuckDB_Storage_Backend {
 			throw new WP_DuckDB_Driver_Exception( 'Failed to open DuckDB lock file: ' . $lock_path );
 		}
 
-		if ( ! flock( $handle, LOCK_EX ) ) {
-			fclose( $handle );
-			throw new WP_DuckDB_Driver_Exception( 'Failed to acquire DuckDB lock file: ' . $lock_path );
-		}
+		$started_at = microtime( true );
+		do {
+			$would_block = false;
+			if ( flock( $handle, LOCK_EX | LOCK_NB, $would_block ) ) {
+				$this->lock_handle = $handle;
+				return;
+			}
 
-		$this->lock_handle = $handle;
+			if ( ! $would_block ) {
+				fclose( $handle );
+				throw new WP_DuckDB_Driver_Exception( 'Failed to acquire DuckDB lock file: ' . $lock_path );
+			}
+
+			$elapsed = microtime( true ) - $started_at;
+			if ( $elapsed >= $this->lock_timeout_seconds ) {
+				fclose( $handle );
+				$message = sprintf(
+					'Timed out after %.3f seconds acquiring DuckDB lock file: %s',
+					$this->lock_timeout_seconds,
+					$lock_path
+				);
+				error_log(
+					sprintf(
+						'WP_DUCKDB_LOCK_TIMEOUT pid=%d timeout_seconds=%.3f path=%s',
+						getmypid(),
+						$this->lock_timeout_seconds,
+						$lock_path
+					)
+				);
+				throw new WP_DuckDB_Driver_Exception( $message );
+			}
+
+			usleep( min( 100000, max( 1000, (int) ( ( $this->lock_timeout_seconds - $elapsed ) * 1000000 ) ) ) );
+		} while ( true );
 	}
 
 	/**
@@ -531,6 +572,46 @@ class WP_DuckDB_Storage_Backend {
 		}
 
 		return $normalized;
+	}
+
+	/**
+	 * Get the configured lock timeout.
+	 *
+	 * @return float
+	 *
+	 * @throws InvalidArgumentException When the timeout is invalid.
+	 */
+	private function configured_lock_timeout_seconds(): float {
+		$environment_value = getenv( 'WP_DUCKDB_LOCK_TIMEOUT_SECONDS' );
+		if ( is_string( $environment_value ) && '' !== $environment_value ) {
+			return $this->normalize_lock_timeout_seconds( $environment_value );
+		}
+
+		return self::DEFAULT_LOCK_TIMEOUT_SECONDS;
+	}
+
+	/**
+	 * Normalize a lock timeout value.
+	 *
+	 * @param mixed $seconds Timeout in seconds.
+	 * @return float
+	 *
+	 * @throws InvalidArgumentException When the timeout is invalid.
+	 */
+	private function normalize_lock_timeout_seconds( $seconds ): float {
+		if ( null === $seconds || '' === $seconds ) {
+			return self::DEFAULT_LOCK_TIMEOUT_SECONDS;
+		}
+		if ( is_bool( $seconds ) || ! is_numeric( $seconds ) ) {
+			throw new InvalidArgumentException( 'DuckDB lock timeout must be a non-negative number of seconds.' );
+		}
+
+		$seconds = (float) $seconds;
+		if ( $seconds < 0.0 ) {
+			throw new InvalidArgumentException( 'DuckDB lock timeout must be a non-negative number of seconds.' );
+		}
+
+		return $seconds;
 	}
 
 	/**

@@ -262,6 +262,8 @@ jobs:
       - name: Run full WordPress core PHPUnit suite on DuckDB
         timeout-minutes: 32
         working-directory: wordpress
+        env:
+          WP_DUCKDB_LOCK_TIMEOUT_SECONDS: '5'
         run: |
           set +e
           mkdir -p tests/phpunit/build/logs
