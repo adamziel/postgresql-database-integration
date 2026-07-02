@@ -342,6 +342,74 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		$this->assertSame( 1, $fresh_driver->get_insert_id() );
 	}
 
+	public function test_json_backend_restores_secondary_unique_indexes_after_hydration(): void {
+		$this->requireDuckDBRuntime();
+
+		$temp_dir     = $this->create_temp_dir();
+		$external_dir = $temp_dir . '/json-external';
+		$database     = $temp_dir . '/working.duckdb';
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'              => 'json',
+				'database_path'        => $database,
+				'external_storage_dir' => $external_dir,
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+		$driver->query(
+			"CREATE TABLE wptests_options (
+				option_id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				option_name varchar(191) NOT NULL DEFAULT '',
+				option_value longtext NOT NULL,
+				autoload varchar(20) NOT NULL DEFAULT 'yes',
+				PRIMARY KEY (option_id),
+				UNIQUE KEY option_name (option_name)
+			)"
+		);
+		$driver->query(
+			"INSERT INTO wptests_options (option_name, option_value, autoload)
+			VALUES ('blogname', 'DuckDB JSON Site', 'yes')"
+		);
+		$storage->flush();
+		unset( $driver, $storage );
+
+		$fresh_storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'              => 'json',
+				'database_path'        => $database,
+				'external_storage_dir' => $external_dir,
+			)
+		);
+		$fresh_driver  = $fresh_storage->create_driver( 'wp' );
+
+		$this->assertSame(
+			1,
+			$fresh_driver->query(
+				"INSERT INTO wptests_options (option_name, option_value, autoload)
+				VALUES ('blogname', 'Updated Site', 'no')
+				ON DUPLICATE KEY UPDATE
+					option_name = VALUES(option_name),
+					option_value = VALUES(option_value),
+					autoload = VALUES(autoload)"
+			)->rowCount()
+		);
+		$this->assertSame(
+			array(
+				array(
+					'option_name'  => 'blogname',
+					'option_value' => 'Updated Site',
+					'autoload'     => 'no',
+				),
+			),
+			$fresh_driver->query(
+				"SELECT option_name, option_value, autoload
+				FROM wptests_options
+				WHERE option_name = 'blogname'"
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
 	public function test_native_backend_aliases_use_duckdb_file_backend(): void {
 		foreach ( array( 'duckdb', 'duck', 'native', 'file' ) as $alias ) {
 			$backend = new WP_DuckDB_Storage_Backend(

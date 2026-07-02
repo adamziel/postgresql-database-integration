@@ -27,14 +27,29 @@ if ( isset( $url_parts['scheme'] ) && 'https' === $url_parts['scheme'] ) {
 	$_SERVER['HTTPS'] = 'on';
 }
 
+$error_log = tempnam( sys_get_temp_dir(), 'duckdb-json-smoke-errors-' );
+if ( false === $error_log ) {
+	fwrite( STDERR, "Could not create a temporary error log for the front-page smoke check.\n" );
+	exit( 1 );
+}
+ini_set( 'log_errors', '1' );
+ini_set( 'error_log', $error_log );
+
 define( 'WP_USE_THEMES', true );
 
 ob_start();
 require $wordpress_root . '/wp-blog-header.php';
 $output = ob_get_clean();
+$errors = file_exists( $error_log ) ? file_get_contents( $error_log ) : '';
+unlink( $error_log );
 
 if ( preg_match( '/Error establishing a database connection|One or more database tables are unavailable|Database Error|WordPress &rsaquo; Error/i', $output ) ) {
 	fwrite( STDERR, "WordPress front page returned a database error page.\n" );
+	exit( 1 );
+}
+if ( is_string( $errors ) && preg_match( '/WordPress database error|DuckDB query failed|Failed to execute DuckDB/i', $errors ) ) {
+	fwrite( STDERR, "WordPress front page logged a database error.\n" );
+	fwrite( STDERR, trim( $errors ) . "\n" );
 	exit( 1 );
 }
 

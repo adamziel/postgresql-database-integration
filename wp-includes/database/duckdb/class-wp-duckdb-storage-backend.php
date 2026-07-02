@@ -726,6 +726,7 @@ class WP_DuckDB_Storage_Backend {
 		);
 
 		if ( $empty_source ) {
+			$this->restore_secondary_indexes_for_table( $table );
 			return;
 		}
 
@@ -749,6 +750,106 @@ class WP_DuckDB_Storage_Backend {
 				. ') AS '
 				. $this->connection->quote_identifier( '__src' )
 		);
+
+		$this->restore_secondary_indexes_for_table( $table );
+	}
+
+	/**
+	 * Restore recorded secondary indexes for a metadata-backed hydrated table.
+	 *
+	 * External table hydration recreates the mutable DuckDB table from files.
+	 * The internal metadata tables retain MySQL secondary-index definitions, but
+	 * the physical DuckDB indexes are dropped with the old mutable table. Restore
+	 * them so WordPress upserts such as add_option() can target unique keys like
+	 * wp_options.option_name.
+	 *
+	 * @param string $table Table name.
+	 * @return void
+	 */
+	private function restore_secondary_indexes_for_table( string $table ): void {
+		foreach ( $this->secondary_index_definitions_for_table( $table ) as $index_definition ) {
+			$this->connection->query( $index_definition['sql'] );
+		}
+	}
+
+	/**
+	 * Read recorded secondary index definitions for a table.
+	 *
+	 * @param string $table Table name.
+	 * @return array<int,array{sql:string}>
+	 */
+	private function secondary_index_definitions_for_table( string $table ): array {
+		if ( ! class_exists( 'WP_DuckDB_Driver' ) ) {
+			return array();
+		}
+
+		try {
+			$stmt = $this->connection->query(
+				'SELECT index_name, non_unique, seq_in_index, column_name FROM '
+					. $this->connection->quote_identifier( WP_DuckDB_Driver::INDEX_METADATA_TABLE )
+					. ' WHERE table_name = '
+					. $this->connection->quote( $table )
+					. ' ORDER BY index_name, seq_in_index'
+			);
+		} catch ( Throwable $e ) {
+			return array();
+		}
+
+		$grouped = array();
+		foreach ( $stmt->fetchAll( PDO::FETCH_ASSOC ) as $row ) {
+			if ( ! isset( $row['index_name'], $row['non_unique'], $row['column_name'] ) ) {
+				continue;
+			}
+
+			$index_name = (string) $row['index_name'];
+			if ( ! isset( $grouped[ $index_name ] ) ) {
+				$grouped[ $index_name ] = array(
+					'unique'  => 0 === (int) $row['non_unique'],
+					'columns' => array(),
+				);
+			}
+			$grouped[ $index_name ]['columns'][] = (string) $row['column_name'];
+		}
+
+		$definitions = array();
+		foreach ( $grouped as $index_name => $definition ) {
+			if ( array() === $definition['columns'] ) {
+				continue;
+			}
+			$definitions[] = array(
+				'sql' => 'CREATE '
+					. ( $definition['unique'] ? 'UNIQUE ' : '' )
+					. 'INDEX IF NOT EXISTS '
+					. $this->connection->quote_identifier( $this->physical_secondary_index_name( $table, (string) $index_name ) )
+					. ' ON '
+					. $this->connection->quote_identifier( $table )
+					. ' ('
+					. implode(
+						', ',
+						array_map(
+							function ( string $column ): string {
+								return $this->connection->quote_identifier( $column );
+							},
+							$definition['columns']
+						)
+					)
+					. ')',
+			);
+		}
+
+		return $definitions;
+	}
+
+	/**
+	 * Build the physical DuckDB index name used by WP_DuckDB_Driver.
+	 *
+	 * @param string $table       Table name.
+	 * @param string $index_name  MySQL-facing index name.
+	 * @return string Physical DuckDB index name.
+	 */
+	private function physical_secondary_index_name( string $table, string $index_name ): string {
+		$prefix = class_exists( 'WP_DuckDB_Driver' ) ? WP_DuckDB_Driver::INDEX_PREFIX : 'wp_duckdb_idx_';
+		return $prefix . substr( hash( 'sha256', "persistent\0" . $table ), 0, 8 ) . '_' . $index_name;
 	}
 
 	/**

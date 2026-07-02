@@ -124,6 +124,7 @@ if ( is_file( $backend_file ) ) {
 	echo 'storage_backend_sha256=' . hash_file( 'sha256', $backend_file ) . "\n";
 	echo 'zero_row_json_hydration_fix=' . duckdb_json_diag_bool( false !== strpos( $backend_source, 'source_relation_missing_metadata_columns' ) ) . "\n";
 	echo 'source_relation_row_count_probe=' . duckdb_json_diag_bool( false !== strpos( $backend_source, 'source_relation_row_count' ) ) . "\n";
+	echo 'secondary_index_restore_fix=' . duckdb_json_diag_bool( false !== strpos( $backend_source, 'restore_secondary_indexes_for_table' ) ) . "\n";
 } else {
 	echo "storage_backend_missing=yes\n";
 }
