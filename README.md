@@ -428,6 +428,21 @@ The DuckDB core harness installs an isolated production DuckDB PHP runtime under
 the copied plugin in the WordPress checkout. This avoids loading this
 repository's dev dependencies into WordPress core's PHPUnit process.
 
+Run a disposable WordPress site with WooCommerce and Query Monitor against the
+verifiable DuckDB backends:
+
+```bash
+WORDPRESS_VERSION=7.0 \
+WOOCOMMERCE_VERSION=10.9.1 \
+QUERY_MONITOR_VERSION=4.0.7 \
+./bin/duckdb-wordpress-plugin-smoke.sh duckdb json csv parquet
+```
+
+The smoke installs WordPress, activates WooCommerce and Query Monitor, creates a
+simple WooCommerce product, verifies WooCommerce custom tables, performs HTTP
+requests against the front page, login page, and product archive, and fails if
+WordPress logs DuckDB/database errors.
+
 ## CI
 
 GitHub Actions workflow: `.github/workflows/ci.yml`.
@@ -436,7 +451,9 @@ The workflow runs on `trunk` and pull requests. It validates Composer metadata,
 lints root-owned PHP files, runs the PostgreSQL PHPUnit suite and smoke test
 against PostgreSQL 16, runs the DuckDB PHPUnit suite with the native DuckDB PHP
 client, keeps the existing WordPress core PostgreSQL PHPUnit job, and runs the
-focused WordPress core DB test class against DuckDB.
+focused WordPress core DB test class against DuckDB. It also runs the
+WooCommerce and Query Monitor smoke matrix against native DuckDB, JSON, CSV, and
+Parquet storage.
 
 ## Releases
 
@@ -458,4 +475,4 @@ runs and publishes that zip to GitHub Releases for tags matching `v*`.
   cycle for Parquet, CSV, and JSON.
 - SQLite support is routed to the upstream submodule rather than imported as
   root-owned source.
-- Full WordPress E2E coverage for DuckDB and SQLite is not included yet.
+- Full browser/editor E2E coverage for DuckDB and SQLite is not included yet.

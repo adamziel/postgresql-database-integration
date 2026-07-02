@@ -218,3 +218,36 @@ jobs:
       - name: Run WordPress core DB tests on DuckDB
         working-directory: wordpress
         run: php -d ffi.enable=true ./vendor/bin/phpunit --configuration phpunit.xml.dist --colors=never --filter '^Tests_DB'
+
+  duckdb-wordpress-plugin-smoke:
+    name: DuckDB WordPress plugin smoke (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        backend:
+          - duckdb
+          - json
+          - csv
+          - parquet
+
+    env:
+      WORDPRESS_VERSION: '7.0'
+      WOOCOMMERCE_VERSION: '10.9.1'
+      QUERY_MONITOR_VERSION: '4.0.7'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: ffi, mysqli, gd, zip, mbstring
+          ini-values: ffi.enable=true
+          coverage: none
+
+      - name: Run WordPress plugin smoke on DuckDB
+        run: ./bin/duckdb-wordpress-plugin-smoke.sh ${{ matrix.backend }}
