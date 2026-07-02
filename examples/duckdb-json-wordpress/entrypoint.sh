@@ -45,11 +45,30 @@ reset_storage() {
 	mkdir -p "$json_dir"
 }
 
+ensure_web_writable_paths() {
+	if [ "$(id -u)" != "0" ]; then
+		return
+	fi
+
+	chown -R www-data:www-data "$database_dir" "$wordpress_dest/wp-content/uploads" "$dropin_path"
+}
+
+run_as_web_user() {
+	command_to_run="$1"
+
+	if [ "$(id -u)" = "0" ] && command -v su >/dev/null 2>&1; then
+		su -s /bin/sh -c "$command_to_run" www-data
+		return
+	fi
+
+	sh -c "$command_to_run"
+}
+
 run_installer() {
 	failure_output="${1:-summary}"
 	installer_output=$(mktemp)
 
-	if php -d ffi.enable=1 /usr/local/bin/duckdb-json-install.php >"$installer_output" 2>&1 \
+	if run_as_web_user "php -d ffi.enable=1 /usr/local/bin/duckdb-json-install.php" >"$installer_output" 2>&1 \
 		&& ! grep -Eq 'One or more database tables are unavailable|Error establishing a database connection' "$installer_output"; then
 		cat "$installer_output"
 		rm -f "$installer_output"
@@ -65,20 +84,48 @@ run_installer() {
 	return 1
 }
 
+run_front_page_check() {
+	failure_output="${1:-summary}"
+	check_output=$(mktemp)
+
+	if run_as_web_user "php -d ffi.enable=1 /usr/local/bin/duckdb-json-smoke.php" >"$check_output" 2>&1 \
+		&& ! grep -Eq 'One or more database tables are unavailable|Error establishing a database connection|Database Error' "$check_output"; then
+		cat "$check_output"
+		rm -f "$check_output"
+		return 0
+	fi
+
+	if [ "$failure_output" = "full" ]; then
+		cat "$check_output"
+	else
+		echo "DuckDB JSON front-page check failed against the current example storage."
+	fi
+	rm -f "$check_output"
+	return 1
+}
+
 copy_wordpress
 mkdir -p "$database_dir" "$wordpress_dest/wp-content/uploads"
 reset_incomplete_storage
 mkdir -p "$json_dir"
 install_dropin
+ensure_web_writable_paths
 
 if ! run_installer summary; then
 	reset_storage
+	ensure_web_writable_paths
 	run_installer full
 fi
 touch "$install_marker"
+ensure_web_writable_paths
 
-if [ "$(id -u)" = "0" ]; then
-	chown -R www-data:www-data "$database_dir" "$wordpress_dest/wp-content/uploads" "$dropin_path"
+if ! run_front_page_check summary; then
+	reset_storage
+	ensure_web_writable_paths
+	run_installer full
+	touch "$install_marker"
+	ensure_web_writable_paths
+	run_front_page_check full
 fi
 
 echo "WordPress is configured for DuckDB JSON storage."

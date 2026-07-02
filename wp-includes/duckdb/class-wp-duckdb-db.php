@@ -358,6 +358,7 @@ class WP_DuckDB_DB extends wpdb {
 		}
 
 		if ( $this->last_error ) {
+			error_log( '[duckdb-db-connect] ' . $this->last_error );
 			return false;
 		}
 
@@ -368,6 +369,7 @@ class WP_DuckDB_DB extends wpdb {
 		} catch ( Throwable $e ) {
 			$this->last_error = $e->getMessage();
 			$this->ready      = false;
+			error_log( '[duckdb-db-connect] ' . $this->last_error );
 			return false;
 		}
 		return true;
