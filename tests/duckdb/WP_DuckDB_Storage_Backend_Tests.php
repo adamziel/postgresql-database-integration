@@ -290,6 +290,58 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		$this->assertSame( 1, $fresh_driver->get_insert_id() );
 	}
 
+	public function test_json_backend_hydrates_zero_row_metadata_backed_tables_with_synthetic_json_column(): void {
+		$this->requireDuckDBRuntime();
+
+		$temp_dir     = $this->create_temp_dir();
+		$external_dir = $temp_dir . '/json-external';
+		$database     = $temp_dir . '/working.duckdb';
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'              => 'json',
+				'database_path'        => $database,
+				'external_storage_dir' => $external_dir,
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+		$driver->query(
+			'CREATE TABLE wptests_commentmeta (
+				meta_id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				comment_id bigint(20) unsigned NOT NULL DEFAULT 0,
+				meta_key varchar(255) DEFAULT NULL,
+				meta_value longtext,
+				PRIMARY KEY (meta_id)
+			)'
+		);
+		$storage->flush();
+		unset( $driver, $storage );
+
+		file_put_contents( $external_dir . '/wptests_commentmeta.json', '[]' );
+
+		$fresh_storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'              => 'json',
+				'database_path'        => $database,
+				'external_storage_dir' => $external_dir,
+			)
+		);
+		$fresh_driver  = $fresh_storage->create_driver( 'wp' );
+
+		$this->assertSame(
+			array( array( 'total' => 0 ) ),
+			$fresh_driver->query( 'SELECT COUNT(*) AS total FROM wptests_commentmeta' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame(
+			1,
+			$fresh_driver->query(
+				"INSERT INTO wptests_commentmeta (comment_id, meta_key, meta_value)
+				VALUES (1, 'rating', '5')"
+			)->rowCount()
+		);
+		$this->assertSame( 1, $fresh_driver->get_insert_id() );
+	}
+
 	public function test_native_backend_aliases_use_duckdb_file_backend(): void {
 		foreach ( array( 'duckdb', 'duck', 'native', 'file' ) as $alias ) {
 			$backend = new WP_DuckDB_Storage_Backend(

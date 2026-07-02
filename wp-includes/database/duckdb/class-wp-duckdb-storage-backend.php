@@ -664,6 +664,19 @@ class WP_DuckDB_Storage_Backend {
 		$source_sql    = $this->render_sql_template( $this->read_sql_template, $table, $source );
 		$primary_key   = $this->single_column_primary_key( $metadata );
 		$empty_source  = $this->source_is_empty_local_file( $source );
+		if ( ! $empty_source ) {
+			$missing_source_columns = $this->source_relation_missing_metadata_columns( $source_sql, $metadata );
+			if ( array() !== $missing_source_columns ) {
+				$source_row_count = $this->source_relation_row_count( $source_sql );
+				if ( 0 === $source_row_count ) {
+					$empty_source = true;
+				} else {
+					throw new WP_DuckDB_Driver_Exception(
+						'DuckDB external source for table "' . $table . '" does not contain recorded WordPress columns: ' . implode( ', ', $missing_source_columns ) . '.'
+					);
+				}
+			}
+		}
 
 		foreach ( $metadata as $column ) {
 			$column_name = (string) $column['column_name'];
@@ -753,6 +766,76 @@ class WP_DuckDB_Storage_Backend {
 			&& 1 !== preg_match( '#^[a-z][a-z0-9+.-]*://#i', $source )
 			&& is_file( $source )
 			&& 0 === filesize( $source );
+	}
+
+	/**
+	 * List recorded WordPress columns missing from an external source relation.
+	 *
+	 * Some DuckDB readers, notably read_json_auto(), expose empty JSON sources as
+	 * a zero-row relation with a synthetic "json" column. Metadata-backed
+	 * hydration should treat those as empty tables instead of probing missing
+	 * AUTO_INCREMENT columns or inserting from absent WordPress columns.
+	 *
+	 * @param string                       $source_sql Source SQL relation.
+	 * @param array<int,array<string,mixed>> $metadata Recorded column metadata.
+	 * @return string[] Missing recorded column names. Empty when the source could
+	 *                  not be probed, so the real reader error can surface later.
+	 */
+	private function source_relation_missing_metadata_columns( string $source_sql, array $metadata ): array {
+		try {
+			$stmt = $this->connection->query(
+				'SELECT * FROM ('
+					. $source_sql
+					. ') AS '
+					. $this->connection->quote_identifier( '__src_schema_probe' )
+					. ' LIMIT 0'
+			);
+		} catch ( Throwable $e ) {
+			return array();
+		}
+
+		$source_columns = array();
+		for ( $i = 0; $i < $stmt->columnCount(); ++$i ) {
+			$column_meta = $stmt->getColumnMeta( $i );
+			if ( is_array( $column_meta ) && isset( $column_meta['name'] ) ) {
+				$source_columns[ strtolower( (string) $column_meta['name'] ) ] = true;
+			}
+		}
+
+		$missing = array();
+		foreach ( $metadata as $column ) {
+			if ( ! isset( $column['column_name'] ) ) {
+				continue;
+			}
+			$column_name = (string) $column['column_name'];
+			if ( ! isset( $source_columns[ strtolower( $column_name ) ] ) ) {
+				$missing[] = $column_name;
+			}
+		}
+
+		return $missing;
+	}
+
+	/**
+	 * Count rows in an external source relation.
+	 *
+	 * @param string $source_sql Source SQL relation.
+	 * @return int|null Row count, or null when the source cannot be counted.
+	 */
+	private function source_relation_row_count( string $source_sql ): ?int {
+		try {
+			$stmt = $this->connection->query(
+				'SELECT COUNT(*) AS row_count FROM ('
+					. $source_sql
+					. ') AS '
+					. $this->connection->quote_identifier( '__src_count_probe' )
+			);
+		} catch ( Throwable $e ) {
+			return null;
+		}
+
+		$value = $stmt->fetchColumn();
+		return false === $value || null === $value ? null : (int) $value;
 	}
 
 	/**
