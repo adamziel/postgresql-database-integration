@@ -787,6 +787,136 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		);
 	}
 
+	public function test_group_concat_runtime_function_uses_mysql_separator_order_and_limit_semantics(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query(
+			'CREATE TABLE wptests_group_concat (
+				id INTEGER PRIMARY KEY,
+				value TEXT NOT NULL,
+				prefix TEXT NOT NULL,
+				suffix TEXT NULL
+			)'
+		);
+		$driver->query(
+			"INSERT INTO wptests_group_concat (id, value, prefix, suffix) VALUES
+				(2, 'two', 'b', NULL),
+				(1, 'one', 'a', '1'),
+				(3, 'three', 'c', '3'),
+				(4, 'one', 'd', '4')"
+		);
+
+		$this->assertSame(
+			array(
+				array(
+					'ordered_with_separator' => 'one|two|three|one',
+					'multi_expression'       => '1:one|2:two|3:three|4:one',
+					'null_skipping_composite' => 'a1,c3,d4',
+				),
+			),
+			$driver->query(
+				"SELECT
+					GROUP_CONCAT(value ORDER BY id SEPARATOR '|') AS ordered_with_separator,
+					GROUP_CONCAT(id, ':', value ORDER BY id SEPARATOR '|') AS multi_expression,
+					GROUP_CONCAT(prefix, suffix ORDER BY id SEPARATOR ',') AS null_skipping_composite
+				FROM wptests_group_concat"
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$distinct = $driver->query(
+			"SELECT GROUP_CONCAT(DISTINCT value SEPARATOR '|') AS combined
+			FROM wptests_group_concat"
+		)->fetchAll( PDO::FETCH_ASSOC );
+		$parts    = explode( '|', $distinct[0]['combined'] );
+		sort( $parts );
+		$this->assertSame( array( 'one', 'three', 'two' ), $parts );
+
+		$driver->query( 'CREATE TABLE wptests_group_concat_long (id INTEGER PRIMARY KEY, value TEXT NOT NULL)' );
+		$driver->query(
+			"INSERT INTO wptests_group_concat_long (id, value) VALUES
+				(1, '" . str_repeat( 'a', 600 ) . "'),
+				(2, '" . str_repeat( 'b', 600 ) . "')"
+		);
+
+		$default = $driver->query(
+			"SELECT GROUP_CONCAT(value ORDER BY id SEPARATOR '') AS combined
+			FROM wptests_group_concat_long"
+		)->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( str_repeat( 'a', 600 ) . str_repeat( 'b', 424 ), $default[0]['combined'] );
+		$this->assertSame( 1024, strlen( $default[0]['combined'] ) );
+
+		$this->assertSame( 0, $driver->query( 'SET SESSION group_concat_max_len = 5' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'@@group_concat_max_len' => 5,
+				),
+			),
+			$driver->query( 'SELECT @@group_concat_max_len' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame(
+			array(
+				array(
+					'combined' => 'one|t',
+				),
+			),
+			$driver->query(
+				"SELECT GROUP_CONCAT(value ORDER BY id SEPARATOR '|') AS combined
+				FROM wptests_group_concat"
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( 'SET SESSION group_concat_max_len = DEFAULT' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'@@group_concat_max_len' => 1024,
+				),
+			),
+			$driver->query( 'SELECT @@group_concat_max_len' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_group_concat_runtime_function_rejects_malformed_forms(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		foreach (
+			array(
+				'SELECT GROUP_CONCAT() AS combined',
+				'SELECT GROUP_CONCAT(DISTINCT id, value) AS combined FROM missing_table',
+				"SELECT GROUP_CONCAT(value SEPARATOR) AS combined FROM missing_table",
+				"SELECT GROUP_CONCAT(value SEPARATOR ',' SEPARATOR '|') AS combined FROM missing_table",
+			) as $query
+		) {
+			try {
+				$driver->query( $query );
+				$this->fail( 'Expected malformed GROUP_CONCAT() form to fail closed.' );
+			} catch ( WP_DuckDB_Driver_Exception $e ) {
+				$this->assertTrue(
+					str_contains( $e->getMessage(), 'Unsupported GROUP_CONCAT() call' )
+					|| str_contains( $e->getMessage(), 'DuckDB driver could not parse MySQL statement' ),
+					$query . ': ' . $e->getMessage()
+				);
+			}
+		}
+	}
+
 	public function test_insert_select_on_duplicate_key_update_uses_unique_metadata_conflict_target(): void {
 		$this->requireDuckDBRuntime();
 

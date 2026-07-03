@@ -37,6 +37,7 @@ class WP_DuckDB_Driver {
 	const INFO_SCHEMA_REFERENTIAL_CONSTRAINTS_TABLE = '__wp_duckdb_information_schema_referential_constraints';
 	const INFO_SCHEMA_CHECK_CONSTRAINTS_TABLE       = '__wp_duckdb_information_schema_check_constraints';
 	const TRANSACTION_RECOVERY_PROBE_TABLE          = '__wp_duckdb_transaction_recovery_probe';
+	const DEFAULT_GROUP_CONCAT_MAX_LEN              = 1024;
 
 	const SUPPORTED_SESSION_SYSTEM_VARIABLES = array(
 		'autocommit'                              => true,
@@ -49,6 +50,7 @@ class WP_DuckDB_Driver {
 		'end_markers_in_json'                     => true,
 		'explicit_defaults_for_timestamp'         => true,
 		'foreign_key_checks'                      => true,
+		'group_concat_max_len'                    => true,
 		'keep_files_on_create'                    => true,
 		'old_alter_table'                         => true,
 		'print_identified_with_as_hex'            => true,
@@ -468,6 +470,7 @@ class WP_DuckDB_Driver {
 			throw new InvalidArgumentException( 'DuckDB driver option "database" must not be empty.' );
 		}
 		$this->current_database = $this->database;
+		$this->session_system_variables['group_concat_max_len'] = self::DEFAULT_GROUP_CONCAT_MAX_LEN;
 
 		if ( isset( $options['connection'] ) ) {
 			if ( ! $options['connection'] instanceof WP_DuckDB_Connection ) {
@@ -13634,6 +13637,9 @@ class WP_DuckDB_Driver {
 		if ( 'default_storage_engine' === $name ) {
 			return $this->normalize_set_default_storage_engine_value( $token );
 		}
+		if ( 'group_concat_max_len' === $name ) {
+			return $this->normalize_set_group_concat_max_len_value( $token );
+		}
 		if ( isset( self::STRING_SESSION_SYSTEM_VARIABLES[ $name ] ) ) {
 			return $this->normalize_set_string_session_system_variable_value( $name, $token );
 		}
@@ -13706,6 +13712,36 @@ class WP_DuckDB_Driver {
 	}
 
 	/**
+	 * Normalize SET group_concat_max_len values.
+	 *
+	 * @param WP_Parser_Token $token Value token.
+	 * @return int Normalized limit.
+	 */
+	private function normalize_set_group_concat_max_len_value( WP_Parser_Token $token ): int {
+		if ( ! $this->is_non_identifier_token( $token ) && 'default' === strtolower( $token->get_value() ) ) {
+			return self::DEFAULT_GROUP_CONCAT_MAX_LEN;
+		}
+
+		if ( ! in_array( $token->id, array( WP_MySQL_Lexer::INT_NUMBER, WP_MySQL_Lexer::LONG_NUMBER, WP_MySQL_Lexer::ULONGLONG_NUMBER ), true ) ) {
+			throw $this->new_unsupported_set_session_system_variable_value_exception( 'group_concat_max_len' );
+		}
+
+		$value = ltrim( $token->get_value(), '+' );
+		if ( '' === $value || ! ctype_digit( $value ) ) {
+			throw $this->new_unsupported_set_session_system_variable_value_exception( 'group_concat_max_len' );
+		}
+
+		if (
+			strlen( $value ) > strlen( (string) PHP_INT_MAX )
+			|| ( strlen( $value ) === strlen( (string) PHP_INT_MAX ) && strcmp( $value, (string) PHP_INT_MAX ) > 0 )
+		) {
+			return PHP_INT_MAX;
+		}
+
+		return (int) $value;
+	}
+
+	/**
 	 * Normalize a restored dump check variable value.
 	 *
 	 * @param string $name  Normalized variable name.
@@ -13752,6 +13788,26 @@ class WP_DuckDB_Driver {
 			}
 
 			return implode( ',', $this->normalize_sql_modes( (string) $value ) );
+		}
+		if ( 'group_concat_max_len' === $name ) {
+			if ( null === $value || 'DEFAULT' === $value ) {
+				return self::DEFAULT_GROUP_CONCAT_MAX_LEN;
+			}
+			if ( is_int( $value ) ) {
+				return max( 0, $value );
+			}
+			if ( is_string( $value ) && ctype_digit( $value ) ) {
+				if (
+					strlen( $value ) > strlen( (string) PHP_INT_MAX )
+					|| ( strlen( $value ) === strlen( (string) PHP_INT_MAX ) && strcmp( $value, (string) PHP_INT_MAX ) > 0 )
+				) {
+					return PHP_INT_MAX;
+				}
+
+				return (int) $value;
+			}
+
+			throw $this->new_unsupported_set_session_system_variable_value_exception( $name );
 		}
 
 		if ( isset( self::STRING_SESSION_SYSTEM_VARIABLES[ $name ] ) ) {
@@ -23127,6 +23183,22 @@ class WP_DuckDB_Driver {
 				continue;
 			}
 
+			$group_concat_function = $this->translate_group_concat_function_call(
+				$tokens,
+				$index,
+				$rewrite_information_schema_tables,
+				$rewrite_information_schema_columns,
+				$rewrite_information_schema_statistics,
+				$rewrite_information_schema_table_constraints,
+				$rewrite_information_schema_key_column_usage,
+				$rewrite_information_schema_referential_constraints,
+				$rewrite_information_schema_check_constraints
+			);
+			if ( null !== $group_concat_function ) {
+				$pieces[] = $group_concat_function;
+				continue;
+			}
+
 			$json_valid_function = $this->translate_json_valid_function_call(
 				$tokens,
 				$index,
@@ -28349,6 +28421,197 @@ class WP_DuckDB_Driver {
 			. ') AS BIGINT) * INTERVAL 1 '
 			. $unit
 			. ", '%Y-%m-%d %H:%M:%S')";
+	}
+
+	/**
+	 * Translate MySQL GROUP_CONCAT() forms to DuckDB string_agg().
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @param int               $index  Current index, advanced on match.
+	 * @return string|null DuckDB SQL, or null when no GROUP_CONCAT() call starts here.
+	 */
+	private function translate_group_concat_function_call(
+		array $tokens,
+		int &$index,
+		bool $rewrite_information_schema_tables,
+		bool $rewrite_information_schema_columns,
+		bool $rewrite_information_schema_statistics,
+		bool $rewrite_information_schema_table_constraints,
+		bool $rewrite_information_schema_key_column_usage,
+		bool $rewrite_information_schema_referential_constraints,
+		bool $rewrite_information_schema_check_constraints
+	): ?string {
+		if (
+			! isset( $tokens[ $index + 1 ] )
+			|| WP_MySQL_Lexer::GROUP_CONCAT_SYMBOL !== $tokens[ $index ]->id
+			|| WP_MySQL_Lexer::OPEN_PAR_SYMBOL !== $tokens[ $index + 1 ]->id
+		) {
+			return null;
+		}
+
+		$end_index = $this->skip_balanced_parentheses( $tokens, $index + 1 );
+		$body      = array_slice( $tokens, $index + 2, $end_index - $index - 3 );
+
+		if ( count( $body ) === 0 ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported GROUP_CONCAT() call in DuckDB driver. GROUP_CONCAT() requires at least one expression.' );
+		}
+
+		$separator_sql   = $this->connection->quote( ',' );
+		$separator_index = $this->find_top_level_token_index( $body, 0, WP_MySQL_Lexer::SEPARATOR_SYMBOL );
+		if ( null !== $separator_index ) {
+			$separator_tokens = array_slice( $body, $separator_index + 1 );
+			if (
+				count( $separator_tokens ) === 0
+				|| null !== $this->find_top_level_token_index( $separator_tokens, 0, WP_MySQL_Lexer::SEPARATOR_SYMBOL )
+			) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported GROUP_CONCAT() call in DuckDB driver. Expected one SEPARATOR expression.' );
+			}
+
+			$separator_sql = $this->translate_tokens_to_duckdb_sql(
+				$separator_tokens,
+				$rewrite_information_schema_tables,
+				$rewrite_information_schema_columns,
+				$rewrite_information_schema_statistics,
+				$rewrite_information_schema_table_constraints,
+				$rewrite_information_schema_key_column_usage,
+				$rewrite_information_schema_referential_constraints,
+				$rewrite_information_schema_check_constraints
+			);
+			$body          = array_slice( $body, 0, $separator_index );
+		}
+
+		$order_sql   = '';
+		$order_index = $this->find_top_level_token_index( $body, 0, WP_MySQL_Lexer::ORDER_SYMBOL );
+		if ( null !== $order_index ) {
+			if ( ! isset( $body[ $order_index + 1 ] ) || WP_MySQL_Lexer::BY_SYMBOL !== $body[ $order_index + 1 ]->id ) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported GROUP_CONCAT() call in DuckDB driver. Expected ORDER BY inside GROUP_CONCAT().' );
+			}
+
+			$order_tokens = array_slice( $body, $order_index + 2 );
+			if ( count( $order_tokens ) === 0 ) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported GROUP_CONCAT() call in DuckDB driver. Expected ORDER BY expression inside GROUP_CONCAT().' );
+			}
+
+			$order_sql = $this->translate_tokens_to_duckdb_sql(
+				$order_tokens,
+				$rewrite_information_schema_tables,
+				$rewrite_information_schema_columns,
+				$rewrite_information_schema_statistics,
+				$rewrite_information_schema_table_constraints,
+				$rewrite_information_schema_key_column_usage,
+				$rewrite_information_schema_referential_constraints,
+				$rewrite_information_schema_check_constraints
+			);
+			$body      = array_slice( $body, 0, $order_index );
+		}
+
+		$distinct = false;
+		if ( isset( $body[0] ) && WP_MySQL_Lexer::DISTINCT_SYMBOL === $body[0]->id ) {
+			$distinct = true;
+			$body     = array_slice( $body, 1 );
+		}
+
+		$items = $this->split_top_level_comma_items( $body );
+		if ( count( $items ) === 0 ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported GROUP_CONCAT() call in DuckDB driver. GROUP_CONCAT() requires at least one expression.' );
+		}
+		if ( $distinct && count( $items ) !== 1 ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported GROUP_CONCAT() call in DuckDB driver. DISTINCT GROUP_CONCAT() supports exactly one expression.' );
+		}
+
+		$value_sql = $this->translate_group_concat_value_expression(
+			$items,
+			$rewrite_information_schema_tables,
+			$rewrite_information_schema_columns,
+			$rewrite_information_schema_statistics,
+			$rewrite_information_schema_table_constraints,
+			$rewrite_information_schema_key_column_usage,
+			$rewrite_information_schema_referential_constraints,
+			$rewrite_information_schema_check_constraints
+		);
+
+		$aggregate_sql = 'string_agg('
+			. ( $distinct ? 'DISTINCT ' : '' )
+			. $value_sql
+			. ', '
+			. $separator_sql
+			. ( '' === $order_sql ? '' : ' ORDER BY ' . $order_sql )
+			. ')';
+
+		$index = $end_index - 1;
+
+		return 'LEFT(' . $aggregate_sql . ', ' . $this->get_group_concat_max_len() . ')';
+	}
+
+	/**
+	 * Translate GROUP_CONCAT value expressions.
+	 *
+	 * @param array<int,array<int,WP_Parser_Token>> $items GROUP_CONCAT expression items.
+	 * @return string DuckDB SQL.
+	 */
+	private function translate_group_concat_value_expression(
+		array $items,
+		bool $rewrite_information_schema_tables,
+		bool $rewrite_information_schema_columns,
+		bool $rewrite_information_schema_statistics,
+		bool $rewrite_information_schema_table_constraints,
+		bool $rewrite_information_schema_key_column_usage,
+		bool $rewrite_information_schema_referential_constraints,
+		bool $rewrite_information_schema_check_constraints
+	): string {
+		$item_sql = array();
+		foreach ( $items as $item ) {
+			$item_sql[] = $this->translate_tokens_to_duckdb_sql(
+				$item,
+				$rewrite_information_schema_tables,
+				$rewrite_information_schema_columns,
+				$rewrite_information_schema_statistics,
+				$rewrite_information_schema_table_constraints,
+				$rewrite_information_schema_key_column_usage,
+				$rewrite_information_schema_referential_constraints,
+				$rewrite_information_schema_check_constraints
+			);
+		}
+
+		if ( 1 === count( $item_sql ) ) {
+			return 'CAST(' . $item_sql[0] . ' AS VARCHAR)';
+		}
+
+		$null_checks = array();
+		$parts       = array();
+		foreach ( $item_sql as $sql ) {
+			$null_checks[] = '(' . $sql . ') IS NULL';
+			$parts[]       = 'CAST(' . $sql . ' AS VARCHAR)';
+		}
+
+		return 'CASE WHEN ' . implode( ' OR ', $null_checks )
+			. ' THEN NULL ELSE '
+			. implode( ' || ', $parts )
+			. ' END';
+	}
+
+	/**
+	 * Get the active GROUP_CONCAT truncation length.
+	 *
+	 * @return int Length limit.
+	 */
+	private function get_group_concat_max_len(): int {
+		$value = $this->session_system_variables['group_concat_max_len'] ?? self::DEFAULT_GROUP_CONCAT_MAX_LEN;
+		if ( is_int( $value ) ) {
+			return max( 0, $value );
+		}
+		if ( is_string( $value ) && ctype_digit( $value ) ) {
+			if (
+				strlen( $value ) > strlen( (string) PHP_INT_MAX )
+				|| ( strlen( $value ) === strlen( (string) PHP_INT_MAX ) && strcmp( $value, (string) PHP_INT_MAX ) > 0 )
+			) {
+				return PHP_INT_MAX;
+			}
+
+			return max( 0, (int) $value );
+		}
+
+		return self::DEFAULT_GROUP_CONCAT_MAX_LEN;
 	}
 
 	/**
