@@ -23127,6 +23127,22 @@ class WP_DuckDB_Driver {
 				continue;
 			}
 
+			$json_valid_function = $this->translate_json_valid_function_call(
+				$tokens,
+				$index,
+				$rewrite_information_schema_tables,
+				$rewrite_information_schema_columns,
+				$rewrite_information_schema_statistics,
+				$rewrite_information_schema_table_constraints,
+				$rewrite_information_schema_key_column_usage,
+				$rewrite_information_schema_referential_constraints,
+				$rewrite_information_schema_check_constraints
+			);
+			if ( null !== $json_valid_function ) {
+				$pieces[] = $json_valid_function;
+				continue;
+			}
+
 			if ( $this->is_empty_function_call( $tokens, $index, 'UNIX_TIMESTAMP' ) ) {
 				$pieces[] = 'CAST(epoch(current_timestamp) AS BIGINT)';
 				$index   += 2;
@@ -28327,6 +28343,65 @@ class WP_DuckDB_Driver {
 			. ') AS BIGINT) * INTERVAL 1 '
 			. $unit
 			. ", '%Y-%m-%d %H:%M:%S')";
+	}
+
+	/**
+	 * Translate MySQL JSON_VALID(expr) to MySQL-shaped DuckDB SQL.
+	 *
+	 * DuckDB's native json_valid() returns BOOLEAN and does not accept all scalar
+	 * types that MySQL accepts. WordPress/plugin SQL expects MySQL's 1/0/NULL
+	 * result shape and string coercion.
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @param int               $index  Current index, advanced on match.
+	 * @return string|null DuckDB SQL, or null when no JSON_VALID() call starts here.
+	 */
+	private function translate_json_valid_function_call(
+		array $tokens,
+		int &$index,
+		bool $rewrite_information_schema_tables,
+		bool $rewrite_information_schema_columns,
+		bool $rewrite_information_schema_statistics,
+		bool $rewrite_information_schema_table_constraints,
+		bool $rewrite_information_schema_key_column_usage,
+		bool $rewrite_information_schema_referential_constraints,
+		bool $rewrite_information_schema_check_constraints
+	): ?string {
+		if (
+			! isset( $tokens[ $index + 1 ] )
+			|| $this->is_non_identifier_token( $tokens[ $index ] )
+			|| 0 !== strcasecmp( $tokens[ $index ]->get_value(), 'JSON_VALID' )
+			|| WP_MySQL_Lexer::OPEN_PAR_SYMBOL !== $tokens[ $index + 1 ]->id
+		) {
+			return null;
+		}
+
+		$end_index = $this->skip_balanced_parentheses( $tokens, $index + 1 );
+		$body      = array_slice( $tokens, $index + 2, $end_index - $index - 3 );
+		$items     = $this->split_top_level_comma_items( $body );
+
+		if ( 1 !== count( $items ) || 0 === count( $items[0] ) ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported JSON_VALID() call in DuckDB driver. JSON_VALID() requires exactly one argument.' );
+		}
+
+		$argument_sql = $this->translate_tokens_to_duckdb_sql(
+			$items[0],
+			$rewrite_information_schema_tables,
+			$rewrite_information_schema_columns,
+			$rewrite_information_schema_statistics,
+			$rewrite_information_schema_table_constraints,
+			$rewrite_information_schema_key_column_usage,
+			$rewrite_information_schema_referential_constraints,
+			$rewrite_information_schema_check_constraints
+		);
+
+		$index = $end_index - 1;
+
+		return 'CASE'
+			. ' WHEN (' . $argument_sql . ') IS NULL THEN NULL'
+			. ' WHEN json_valid(CAST((' . $argument_sql . ') AS VARCHAR)) THEN 1'
+			. ' ELSE 0'
+			. ' END';
 	}
 
 	/**

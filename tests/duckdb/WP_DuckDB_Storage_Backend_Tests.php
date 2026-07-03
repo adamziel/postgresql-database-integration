@@ -571,6 +571,97 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 			);
 	}
 
+	public function test_json_valid_runtime_function_uses_mysql_semantics(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query( 'CREATE TABLE wptests_json_valid_runtime (id INTEGER PRIMARY KEY, payload TEXT)' );
+		$driver->query(
+			"INSERT INTO wptests_json_valid_runtime (id, payload)
+			VALUES (1, '{\"ok\":true}'), (2, 'not json'), (3, NULL), (4, 'null')"
+		);
+
+		$this->assertSame(
+			array(
+				array(
+					'id'            => 1,
+					'payload_valid' => 1,
+				),
+				array(
+					'id'            => 2,
+					'payload_valid' => 0,
+				),
+				array(
+					'id'            => 3,
+					'payload_valid' => null,
+				),
+				array(
+					'id'            => 4,
+					'payload_valid' => 1,
+				),
+			),
+			$driver->query(
+				'SELECT id, JSON_VALID(payload) AS payload_valid
+				FROM wptests_json_valid_runtime
+				ORDER BY id'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame(
+			array(
+				array(
+					'object_valid'       => 1,
+					'array_valid'        => 1,
+					'invalid_json'       => 0,
+					'null_json'          => null,
+					'null_literal_valid' => 1,
+					'number_valid'       => 1,
+				),
+			),
+			$driver->query(
+				'SELECT JSON_VALID(\'{"ok":true}\') AS object_valid,
+					JSON_VALID(\'[1,2]\') AS array_valid,
+					JSON_VALID(\'not json\') AS invalid_json,
+					JSON_VALID(NULL) AS null_json,
+					JSON_VALID(\'null\') AS null_literal_valid,
+					JSON_VALID(123) AS number_valid'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_json_valid_runtime_function_rejects_invalid_arity(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		foreach (
+			array(
+				'SELECT JSON_VALID() AS invalid_json',
+				"SELECT JSON_VALID('{\"ok\":true}', '{\"fallback\":true}') AS invalid_json",
+			) as $query
+		) {
+			try {
+				$driver->query( $query );
+				$this->fail( 'Expected invalid JSON_VALID() arity to fail closed.' );
+			} catch ( WP_DuckDB_Driver_Exception $e ) {
+				$this->assertStringContainsString( 'Unsupported JSON_VALID() call', $e->getMessage(), $query );
+			}
+		}
+	}
+
 	public function test_insert_select_on_duplicate_key_update_uses_unique_metadata_conflict_target(): void {
 		$this->requireDuckDBRuntime();
 
