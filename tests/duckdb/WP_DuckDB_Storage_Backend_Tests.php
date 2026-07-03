@@ -662,6 +662,131 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		}
 	}
 
+	public function test_regexp_runtime_predicates_use_mysql_semantics(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query(
+			"CREATE TABLE wptests_regexp_runtime (
+				id bigint(20) NOT NULL,
+				option_name varchar(191) DEFAULT NULL,
+				PRIMARY KEY (id)
+			)"
+		);
+		$driver->query(
+			"INSERT INTO wptests_regexp_runtime (id, option_name)
+			VALUES (1, 'rss_123'), (2, 'RSS_123'), (3, 'transient'), (4, NULL)"
+		);
+
+		foreach (
+			array(
+				'REGEXP'            => array(
+					'operator' => 'REGEXP',
+					'id'       => 1,
+				),
+				'RLIKE'             => array(
+					'operator' => 'RLIKE',
+					'id'       => 1,
+				),
+				'REGEXP BINARY'     => array(
+					'operator' => 'REGEXP BINARY',
+					'id'       => 2,
+				),
+				'RLIKE BINARY'      => array(
+					'operator' => 'RLIKE BINARY',
+					'id'       => 2,
+				),
+				'NOT REGEXP'        => array(
+					'operator' => 'NOT REGEXP',
+					'id'       => 3,
+				),
+				'NOT RLIKE'         => array(
+					'operator' => 'NOT RLIKE',
+					'id'       => 3,
+				),
+				'NOT REGEXP BINARY' => array(
+					'operator' => 'NOT REGEXP BINARY',
+					'id'       => 1,
+				),
+				'NOT RLIKE BINARY'  => array(
+					'operator' => 'NOT RLIKE BINARY',
+					'id'       => 1,
+				),
+			) as $case
+		) {
+			$this->assertSame(
+				array(
+					array(
+						'id'          => $case['id'],
+						'option_name' => 1 === $case['id'] ? 'rss_123' : ( 2 === $case['id'] ? 'RSS_123' : 'transient' ),
+					),
+				),
+				$driver->query(
+					"SELECT id, option_name
+					FROM wptests_regexp_runtime
+					WHERE option_name {$case['operator']} '^RSS_.+$'
+					ORDER BY id
+					LIMIT 1"
+				)->fetchAll( PDO::FETCH_ASSOC ),
+				$case['operator']
+			);
+		}
+
+		$this->assertSame(
+			array(
+				array(
+					'id'                  => 1,
+					'insensitive_match'   => 1,
+					'binary_match'        => 0,
+					'insensitive_not'     => 0,
+					'binary_not'          => 1,
+					'null_pattern_match'  => null,
+				),
+				array(
+					'id'                  => 2,
+					'insensitive_match'   => 1,
+					'binary_match'        => 1,
+					'insensitive_not'     => 0,
+					'binary_not'          => 0,
+					'null_pattern_match'  => null,
+				),
+				array(
+					'id'                  => 3,
+					'insensitive_match'   => 0,
+					'binary_match'        => 0,
+					'insensitive_not'     => 1,
+					'binary_not'          => 1,
+					'null_pattern_match'  => null,
+				),
+				array(
+					'id'                  => 4,
+					'insensitive_match'   => null,
+					'binary_match'        => null,
+					'insensitive_not'     => null,
+					'binary_not'          => null,
+					'null_pattern_match'  => null,
+				),
+			),
+			$driver->query(
+				"SELECT id,
+					option_name REGEXP '^RSS_.+$' AS insensitive_match,
+					option_name REGEXP BINARY '^RSS_.+$' AS binary_match,
+					option_name NOT REGEXP '^RSS_.+$' AS insensitive_not,
+					option_name NOT REGEXP BINARY '^RSS_.+$' AS binary_not,
+					option_name REGEXP NULL AS null_pattern_match
+				FROM wptests_regexp_runtime
+				ORDER BY id"
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
 	public function test_insert_select_on_duplicate_key_update_uses_unique_metadata_conflict_target(): void {
 		$this->requireDuckDBRuntime();
 

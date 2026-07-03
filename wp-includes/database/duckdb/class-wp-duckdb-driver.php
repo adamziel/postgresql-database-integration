@@ -27946,13 +27946,21 @@ class WP_DuckDB_Driver {
 			return $this->sqlite_invalid_regexp_literal_predicate_sql( $left_expression, $negated );
 		}
 
-		$left        = 'COALESCE(CAST((' . $left_expression . ") AS VARCHAR), '')";
-		$pattern_sql = 'COALESCE(CAST((' . $this->translate_token_to_duckdb_sql( $pattern ) . ") AS VARCHAR), '')";
-		$predicate   = $binary
+		$pattern_expression = $this->translate_token_to_duckdb_sql( $pattern );
+		$left               = 'CAST((' . $left_expression . ') AS VARCHAR)';
+		$pattern_sql        = 'CAST((' . $pattern_expression . ') AS VARCHAR)';
+		$predicate          = $binary
 			? sprintf( 'regexp_matches(%s, %s)', $left, $pattern_sql )
 			: sprintf( "regexp_matches(%s, %s, 'i')", $left, $pattern_sql );
 
-		return $negated ? 'NOT ' . $predicate : $predicate;
+		if ( $negated ) {
+			$predicate = 'NOT (' . $predicate . ')';
+		}
+
+		return 'CASE WHEN (' . $left_expression . ') IS NULL OR (' . $pattern_expression . ') IS NULL THEN NULL'
+			. ' WHEN ' . $predicate . ' THEN 1'
+			. ' ELSE 0'
+			. ' END';
 	}
 
 	/**
@@ -27963,10 +27971,8 @@ class WP_DuckDB_Driver {
 	 * @return string DuckDB SQL.
 	 */
 	private function sqlite_invalid_regexp_literal_predicate_sql( string $left_expression, bool $negated ): string {
-		$result = $negated ? 'TRUE' : 'FALSE';
-		return '(CASE WHEN COALESCE(CAST((' . $left_expression . ") AS VARCHAR), '') IS NULL THEN "
-			. $result
-			. ' ELSE '
+		$result = $negated ? '1' : '0';
+		return '(CASE WHEN (' . $left_expression . ') IS NULL THEN NULL ELSE '
 			. $result
 			. ' END)';
 	}
