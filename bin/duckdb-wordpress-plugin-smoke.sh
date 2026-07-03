@@ -26,13 +26,24 @@ require_command() {
 download() {
 	local url=$1
 	local dest=$2
+	local attempt
 
 	if [ -f "$dest" ]; then
 		return
 	fi
 
 	mkdir -p "$(dirname "$dest")"
-	curl -fsSL "$url" -o "$dest"
+	for attempt in 1 2 3 4 5; do
+		if curl -fsSL "$url" -o "$dest"; then
+			return
+		fi
+		rm -f "$dest"
+		if [ "$attempt" -lt 5 ]; then
+			sleep "$attempt"
+		fi
+	done
+
+	return 1
 }
 
 copy_dir() {
