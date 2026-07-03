@@ -22,6 +22,9 @@
 		"test-duckdb": [
 			"phpunit --configuration phpunit-duckdb.xml.dist"
 		],
+		"readiness-duckdb": [
+			"@php -d ffi.enable=1 bin/duckdb-production-readiness.php"
+		],
 		"test-postgresql": [
 			"phpunit --configuration phpunit-postgresql.xml.dist"
 		],

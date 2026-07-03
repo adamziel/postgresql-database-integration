@@ -22,6 +22,13 @@ class WP_DuckDB_Connection {
 	private static $trace_native_queries_enabled;
 
 	/**
+	 * Whether the native DuckDB client has been closed.
+	 *
+	 * @var bool
+	 */
+	private $closed = false;
+
+	/**
 	 * Whether this connection is inside an explicit transaction.
 	 *
 	 * @var bool
@@ -72,6 +79,8 @@ class WP_DuckDB_Connection {
 	 * @throws WP_DuckDB_Driver_Exception When execution fails.
 	 */
 	public function query( string $sql, array $params = array() ): WP_DuckDB_Result_Statement {
+		$this->assert_open();
+
 		if ( $this->query_logger ) {
 			( $this->query_logger )( $sql, $params );
 		}
@@ -97,6 +106,8 @@ class WP_DuckDB_Connection {
 	 * @throws WP_DuckDB_Driver_Exception When preparation fails.
 	 */
 	public function prepare( string $sql ): WP_DuckDB_Prepared_Statement {
+		$this->assert_open();
+
 		if ( $this->query_logger ) {
 			( $this->query_logger )( $sql, array() );
 		}
@@ -431,12 +442,50 @@ class WP_DuckDB_Connection {
 	}
 
 	/**
+	 * Close the native DuckDB client.
+	 *
+	 * DuckDB only allows one writer process to open a database file at a time.
+	 * Closing explicitly lets storage backends release their lock after the
+	 * native handle is gone, instead of relying on PHP object teardown order.
+	 *
+	 * @return void
+	 */
+	public function close(): void {
+		if ( $this->closed ) {
+			return;
+		}
+
+		$this->duckdb         = null;
+		$this->in_transaction = false;
+		$this->closed         = true;
+	}
+
+	/**
+	 * Destructor.
+	 */
+	public function __destruct() {
+		$this->close();
+	}
+
+	/**
 	 * Get the raw DuckDB PHP client object.
 	 *
 	 * @return object
 	 */
 	public function get_client() {
+		$this->assert_open();
 		return $this->duckdb;
+	}
+
+	/**
+	 * Assert the connection is still open.
+	 *
+	 * @return void
+	 */
+	private function assert_open(): void {
+		if ( $this->closed || ! is_object( $this->duckdb ) ) {
+			throw new WP_DuckDB_Driver_Exception( 'DuckDB connection is closed.' );
+		}
 	}
 
 	/**

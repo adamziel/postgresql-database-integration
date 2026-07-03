@@ -297,6 +297,19 @@ class WP_DuckDB_Storage_Backend {
 	}
 
 	/**
+	 * Close the working DuckDB connection and release the local lock.
+	 *
+	 * @return void
+	 */
+	public function close(): void {
+		if ( $this->connection instanceof WP_DuckDB_Connection ) {
+			$this->connection->close();
+			$this->connection = null;
+		}
+		$this->release_database_lock();
+	}
+
+	/**
 	 * Acquire an exclusive lock for local DuckDB working database access.
 	 *
 	 * DuckDB permits multiple readers, but WordPress requests mutate the working

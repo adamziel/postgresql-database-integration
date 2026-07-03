@@ -4437,6 +4437,15 @@ class WP_DuckDB_Driver {
 	}
 
 	/**
+	 * Close the underlying DuckDB connection.
+	 *
+	 * @return void
+	 */
+	public function close(): void {
+		$this->connection->close();
+	}
+
+	/**
 	 * Get the last MySQL query.
 	 *
 	 * @return string|null

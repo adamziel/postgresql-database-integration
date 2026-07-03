@@ -98,6 +98,7 @@ prepare_databases_support_plugin() {
 		--exclude='.git' \
 		--exclude='.github' \
 		--exclude='.phpunit.result.cache' \
+		--exclude='artifacts' \
 		--exclude='build' \
 		--exclude='examples' \
 		--exclude='external' \

@@ -532,6 +532,48 @@ renders database query output, and fails if WordPress logs DuckDB/database
 errors. Custom backend setup SQL can use `{root}`, `{database_dir}`, `{backend}`,
 and `{backend_slug}` placeholders in this smoke harness.
 
+Run the DuckDB production-readiness evidence harness when you want structured
+results that can be aggregated into a later report:
+
+```bash
+WP_DUCKDB_TESTS=1 \
+WP_DUCKDB_AUTOLOAD="$PWD/vendor/autoload.php" \
+DUCKDB_PHP_AUTOLOAD="$PWD/vendor/autoload.php" \
+composer run readiness-duckdb
+```
+
+The harness writes one directory per run under
+`artifacts/duckdb-production-readiness/runs/`. Each run contains:
+
+- `events.jsonl`: one JSON object per scenario.
+- `summary.json`: aggregate status/readiness counts, environment details, and
+  artifact paths.
+- `wordpress-smoke-native-duckdb.log`: full smoke-test output when the
+  WordPress smoke scenario runs.
+
+It currently records native DuckDB backup/restore, external JSON
+backup/restore with the metadata manifest, plugin-created table discovery,
+missing-manifest behavior, simulated flush failure atomicity, serialized
+multi-process writes, a bounded large-table workload, external JSON schema
+upgrade/cold reload, and the full native DuckDB WordPress smoke.
+
+Useful knobs:
+
+```bash
+WP_DUCKDB_READINESS_OUTPUT_DIR=/tmp/duckdb-readiness-run \
+WP_DUCKDB_READINESS_WORK_DIR=/tmp/duckdb-readiness-work \
+WP_DUCKDB_READINESS_LARGE_ROWS=10000 \
+WP_DUCKDB_READINESS_CONCURRENCY_WORKERS=4 \
+WP_DUCKDB_READINESS_CONCURRENCY_ITERATIONS=8 \
+composer run readiness-duckdb
+```
+
+Set `WP_DUCKDB_READINESS_SKIP_WORDPRESS_SMOKE=1` only for fast local harness
+debugging. Keep the generated run directories when comparing readiness evidence
+over time; they are ignored by Git because the logs are host-specific. The
+scratch work directory defaults to `/tmp/wp-duckdb-production-readiness-work/`
+so generated WordPress checkouts do not become part of the report artifacts.
+
 ## CI
 
 GitHub Actions workflow: `.github/workflows/ci.yml`.

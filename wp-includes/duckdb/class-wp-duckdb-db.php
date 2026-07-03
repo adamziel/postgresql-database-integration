@@ -76,6 +76,13 @@ class WP_DuckDB_DB extends wpdb {
 	}
 
 	/**
+	 * Destructor.
+	 */
+	public function __destruct() {
+		$this->close();
+	}
+
+	/**
 	 * Determine the best charset and collation to use.
 	 *
 	 * This mirrors wpdb::determine_charset() without requiring a mysqli handle.
@@ -201,8 +208,16 @@ class WP_DuckDB_DB extends wpdb {
 			return false;
 		}
 
+		if ( $this->dbh instanceof WP_DuckDB_Driver ) {
+			$this->dbh->close();
+		}
+		if ( $this->storage_backend instanceof WP_DuckDB_Storage_Backend ) {
+			$this->storage_backend->close();
+		}
+
 		$this->ready         = false;
 		$this->has_connected = false;
+		$this->dbh           = null;
 
 		return true;
 	}
