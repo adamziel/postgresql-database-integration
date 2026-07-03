@@ -4446,6 +4446,15 @@ class WP_DuckDB_Driver {
 	}
 
 	/**
+	 * Whether the underlying DuckDB connection is closed.
+	 *
+	 * @return bool
+	 */
+	public function is_closed(): bool {
+		return $this->connection->is_closed();
+	}
+
+	/**
 	 * Get the last MySQL query.
 	 *
 	 * @return string|null

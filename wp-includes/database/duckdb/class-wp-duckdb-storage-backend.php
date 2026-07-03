@@ -306,6 +306,8 @@ class WP_DuckDB_Storage_Backend {
 			$this->connection->close();
 			$this->connection = null;
 		}
+		$this->hydrated       = false;
+		$this->setup_complete = false;
 		$this->release_database_lock();
 	}
 

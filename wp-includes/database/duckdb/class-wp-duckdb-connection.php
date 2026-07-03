@@ -461,6 +461,15 @@ class WP_DuckDB_Connection {
 	}
 
 	/**
+	 * Whether the native DuckDB client is closed.
+	 *
+	 * @return bool
+	 */
+	public function is_closed(): bool {
+		return $this->closed || ! is_object( $this->duckdb );
+	}
+
+	/**
 	 * Destructor.
 	 */
 	public function __destruct() {
@@ -483,7 +492,7 @@ class WP_DuckDB_Connection {
 	 * @return void
 	 */
 	private function assert_open(): void {
-		if ( $this->closed || ! is_object( $this->duckdb ) ) {
+		if ( $this->is_closed() ) {
 			throw new WP_DuckDB_Driver_Exception( 'DuckDB connection is closed.' );
 		}
 	}

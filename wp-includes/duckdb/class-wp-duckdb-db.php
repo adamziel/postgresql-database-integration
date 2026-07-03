@@ -197,8 +197,16 @@ class WP_DuckDB_DB extends wpdb {
 	 * @return bool
 	 */
 	public function close() {
-		if ( ! $this->ready ) {
+		if ( ! $this->dbh ) {
+			$this->ready         = false;
+			$this->has_connected = false;
 			return false;
+		}
+
+		$driver     = $this->dbh instanceof WP_DuckDB_Driver ? $this->dbh : null;
+		$connection = $this->dbh instanceof WP_DuckDB_Connection ? $this->dbh : null;
+		if ( $driver instanceof WP_DuckDB_Driver ) {
+			$connection = $driver->get_connection();
 		}
 
 		try {
@@ -208,12 +216,16 @@ class WP_DuckDB_DB extends wpdb {
 			return false;
 		}
 
-		if ( $this->dbh instanceof WP_DuckDB_Driver ) {
-			$this->dbh->close();
+		if ( $driver instanceof WP_DuckDB_Driver ) {
+			$driver->close();
+		} elseif ( $connection instanceof WP_DuckDB_Connection ) {
+			$connection->close();
 		}
 		if ( $this->storage_backend instanceof WP_DuckDB_Storage_Backend ) {
 			$this->storage_backend->close();
 		}
+		$this->clear_cached_driver( $driver );
+		$this->clear_cached_connection( $connection );
 
 		$this->ready         = false;
 		$this->has_connected = false;
@@ -370,10 +382,26 @@ class WP_DuckDB_DB extends wpdb {
 	 * @return bool|null
 	 */
 	public function db_connect( $allow_bail = true ) {
-		if ( isset( $GLOBALS['@duckdb_driver'] ) && $GLOBALS['@duckdb_driver'] instanceof WP_DuckDB_Driver ) {
-			$this->dbh = $GLOBALS['@duckdb_driver'];
-		} elseif ( isset( $GLOBALS['@duckdb'] ) && $GLOBALS['@duckdb'] instanceof WP_DuckDB_Connection ) {
-			$this->dbh = $GLOBALS['@duckdb'];
+		$this->is_mysql   = true;
+		$this->last_error = '';
+
+		$this->discard_closed_handle();
+
+		if ( ! $this->dbh ) {
+			if ( isset( $GLOBALS['@duckdb_driver'] ) && $GLOBALS['@duckdb_driver'] instanceof WP_DuckDB_Driver ) {
+				if ( $GLOBALS['@duckdb_driver']->is_closed() ) {
+					$this->clear_cached_driver( $GLOBALS['@duckdb_driver'] );
+				} else {
+					$this->dbh = $GLOBALS['@duckdb_driver'];
+				}
+			}
+			if ( ! $this->dbh && isset( $GLOBALS['@duckdb'] ) && $GLOBALS['@duckdb'] instanceof WP_DuckDB_Connection ) {
+				if ( $GLOBALS['@duckdb']->is_closed() ) {
+					$this->clear_cached_connection( $GLOBALS['@duckdb'] );
+				} else {
+					$this->dbh = $GLOBALS['@duckdb'];
+				}
+			}
 		}
 
 		if ( null === $this->dbname || '' === $this->dbname ) {
@@ -386,7 +414,9 @@ class WP_DuckDB_DB extends wpdb {
 
 		try {
 			if ( ! $this->dbh ) {
-				$this->storage_backend = WP_DuckDB_Storage_Backend::from_constants();
+				if ( ! ( $this->storage_backend instanceof WP_DuckDB_Storage_Backend ) ) {
+					$this->storage_backend = WP_DuckDB_Storage_Backend::from_constants();
+				}
 				$database_path         = $this->storage_backend->get_database_path();
 				if ( null !== $database_path && ':memory:' !== $database_path ) {
 					$this->ensure_database_directory( $database_path );
@@ -411,7 +441,6 @@ class WP_DuckDB_DB extends wpdb {
 			return false;
 		}
 
-		$this->is_mysql = true;
 		$this->ready    = true;
 		try {
 			$this->set_sql_mode();
@@ -461,18 +490,70 @@ class WP_DuckDB_DB extends wpdb {
 	}
 
 	/**
+	 * Drop a closed local handle before attempting to reconnect.
+	 *
+	 * @return void
+	 */
+	private function discard_closed_handle() {
+		if ( $this->dbh instanceof WP_DuckDB_Driver && $this->dbh->is_closed() ) {
+			$connection = $this->dbh->get_connection();
+			$this->clear_cached_driver( $this->dbh );
+			$this->clear_cached_connection( $connection );
+			$this->dbh = null;
+		}
+
+		if ( $this->dbh instanceof WP_DuckDB_Connection && $this->dbh->is_closed() ) {
+			$this->clear_cached_connection( $this->dbh );
+			$this->dbh = null;
+		}
+	}
+
+	/**
+	 * Clear the cached global DuckDB driver when it matches a closed handle.
+	 *
+	 * @param WP_DuckDB_Driver|null $driver Driver to clear.
+	 * @return void
+	 */
+	private function clear_cached_driver( ?WP_DuckDB_Driver $driver ) {
+		if ( null !== $driver && isset( $GLOBALS['@duckdb_driver'] ) && $GLOBALS['@duckdb_driver'] === $driver ) {
+			unset( $GLOBALS['@duckdb_driver'] );
+		}
+	}
+
+	/**
+	 * Clear the cached global DuckDB connection when it matches a closed handle.
+	 *
+	 * @param WP_DuckDB_Connection|null $connection Connection to clear.
+	 * @return void
+	 */
+	private function clear_cached_connection( ?WP_DuckDB_Connection $connection ) {
+		if ( null !== $connection && isset( $GLOBALS['@duckdb'] ) && $GLOBALS['@duckdb'] === $connection ) {
+			unset( $GLOBALS['@duckdb'] );
+		}
+	}
+
+	/**
 	 * Check the connection.
 	 *
-	 * @param bool $allow_bail Not used.
+	 * @param bool $allow_bail Whether to bail on reconnect failure.
 	 * @return bool
 	 */
 	public function check_connection( $allow_bail = true ) {
-		if ( $this->dbh instanceof WP_DuckDB_Driver ) {
+		$this->discard_closed_handle();
+
+		if ( $this->dbh instanceof WP_DuckDB_Driver && ! $this->dbh->is_closed() ) {
 			$this->ready         = true;
 			$this->has_connected = true;
+			return true;
 		}
 
-		return true;
+		$this->ready         = false;
+		$this->has_connected = false;
+		if ( ! ( $this->dbh instanceof WP_DuckDB_Connection ) ) {
+			$this->dbh = null;
+		}
+
+		return (bool) $this->db_connect( $allow_bail );
 	}
 
 	/**
@@ -496,9 +577,13 @@ class WP_DuckDB_DB extends wpdb {
 		$wpdb_allow_unsafe_unquoted_parameters = $this->__get( 'allow_unsafe_unquoted_parameters' );
 		if ( $wpdb_allow_unsafe_unquoted_parameters !== $this->allow_unsafe_unquoted_parameters ) {
 			$property = new ReflectionProperty( 'wpdb', 'allow_unsafe_unquoted_parameters' );
-			$property->setAccessible( true );
+			if ( PHP_VERSION_ID < 80100 ) {
+				$property->setAccessible( true );
+			}
 			$property->setValue( $this, $this->allow_unsafe_unquoted_parameters );
-			$property->setAccessible( false );
+			if ( PHP_VERSION_ID < 80100 ) {
+				$property->setAccessible( false );
+			}
 		}
 
 		return parent::prepare( $query, ...$args );
