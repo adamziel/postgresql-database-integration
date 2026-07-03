@@ -1,7 +1,7 @@
 #!/usr/bin/env php
 <?php
 /**
- * Generate a static GitHub Pages report from DuckDB WordPress benchmark output.
+ * Generate a static GitHub Pages report from WordPress database benchmark output.
  */
 
 declare( strict_types=1 );
@@ -116,7 +116,7 @@ if ( is_file( $meta_file ) ) {
 file_put_contents( $docs_dir . '/.nojekyll', '' );
 file_put_contents( $docs_dir . '/index.html', render_html_report( $summary ) );
 
-echo "Wrote DuckDB benchmark report to $docs_dir/index.html\n";
+echo "Wrote WordPress database benchmark report to $docs_dir/index.html\n";
 
 function write_json_file( string $path, array $data ): void {
 	$encoded = json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
@@ -215,7 +215,7 @@ function render_html_report( array $summary ): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DuckDB WordPress Backend Benchmarks</title>
+<title>WordPress Database Backend Benchmarks</title>
 <style>
 :root { color-scheme: light; --border: #d7dee8; --text: #182230; --muted: #5d6b7c; --bg: #f7f9fc; --panel: #fff; --accent: #0f766e; --bad: #b42318; }
 body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--text); background: var(--bg); line-height: 1.45; }
@@ -241,8 +241,8 @@ pre { overflow: auto; background: #111827; color: #f8fafc; padding: 14px; border
 </head>
 <body>
 <main>
-<h1>DuckDB WordPress Backend Benchmarks</h1>
-<p>This page is generated from a local real WordPress benchmark run against the DuckDB database backend. It measures front-page reads, REST reads, and REST writes through HTTP with multiple PHP server workers.</p>
+<h1>WordPress Database Backend Benchmarks</h1>
+<p>This page is generated from a real local WordPress HTTP benchmark run. It compares MySQL, SQLite, native DuckDB, local DuckDB file formats, and MinIO-backed S3-compatible Parquet storage using the same front-page reads, REST reads, REST writes, fixture data, and PHP server worker count.</p>
 <div class="meta">
 <div><div class="label">Run</div><div class="value">' . h( $run_id ) . '</div></div>
 <div><div class="label">Generated</div><div class="value">' . h( $generated_at ) . '</div></div>
@@ -253,7 +253,7 @@ pre { overflow: auto; background: #111827; color: #f8fafc; padding: 14px; border
 <div><div class="label">Host</div><div class="value">' . $host . '</div></div>
 </div>
 <section class="panel status"><strong>Status:</strong> ' . h( $status_text ) . '</section>
-<section class="panel"><strong>Concurrency interpretation:</strong> DuckDB access is serialized by the backend lock, so higher HTTP concurrency primarily creates queueing instead of linear throughput scaling. In this run, all measured requests and writes completed correctly; p95 latency rises at concurrency 4 and 8, especially for external JSON/CSV/Parquet storage where each request hydrates and flushes table files.</section>
+<section class="panel"><strong>Concurrency interpretation:</strong> MySQL is the server-backed baseline. SQLite and DuckDB are file-backed paths where writes are constrained by backend locking. DuckDB external storage adds a hydrate/flush cycle, so higher HTTP concurrency primarily creates queueing instead of linear throughput scaling. In this run, all measured requests and writes completed correctly; compare p95 latency at concurrency 4 and 8 to see queueing pressure.</section>
 <h2>Fastest Successful Rows</h2>
 <ul>' . $best_items . '</ul>
 <h2>Benchmark Results</h2>

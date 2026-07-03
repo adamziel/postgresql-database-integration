@@ -22,7 +22,7 @@ if [ "$#" -gt 0 ]; then
 elif [ -n "${WP_DUCKDB_BENCHMARK_BACKENDS:-}" ]; then
 	read -r -a backends <<<"$WP_DUCKDB_BENCHMARK_BACKENDS"
 else
-	backends=(duckdb json csv parquet)
+	backends=(mysql sqlite duckdb json csv parquet s3_parquet)
 fi
 
 read -r -a concurrency_levels <<<"${WP_DUCKDB_BENCHMARK_CONCURRENCY:-1 2 4 8}"
@@ -84,10 +84,31 @@ prepare_wordpress() {
 	tar -xzf "$archive" -C "$dest" --strip-components=1
 }
 
+prepare_duckdb_vendor_cache() {
+	local vendor_cache="$cache_dir/duckdb-php-vendor"
+
+	if [ -f "$vendor_cache/vendor/autoload.php" ] && [ -f "$vendor_cache/vendor/satur.io/duckdb/lib/libduckdb.so" ]; then
+		DUCKDB_VENDOR_CACHE="$vendor_cache/vendor"
+		return
+	fi
+
+	rm -rf "$vendor_cache"
+	mkdir -p "$vendor_cache"
+	(
+		cd "$vendor_cache"
+		composer require --no-interaction --no-progress --with-all-dependencies satur.io/duckdb
+		php -d ffi.enable=1 -r 'require "vendor/autoload.php"; Saturio\DuckDB\CLib\Installer::install();'
+		composer dump-autoload --no-dev --no-interaction --optimize
+	)
+	DUCKDB_VENDOR_CACHE="$vendor_cache/vendor"
+}
+
 prepare_databases_support_plugin() {
 	local wp_root=$1
 	local plugin_dest="$wp_root/wp-content/plugins/wordpress-databases-support"
 
+	prepare_duckdb_vendor_cache
+	rm -rf "$plugin_dest"
 	mkdir -p "$plugin_dest"
 	rsync -a --delete \
 		--exclude='.git' \
@@ -101,14 +122,159 @@ prepare_databases_support_plugin() {
 		--exclude='tests' \
 		--exclude='vendor' \
 		"$repo_dir"/ "$plugin_dest"/
+	ln -s "$DUCKDB_VENDOR_CACHE" "$plugin_dest/vendor"
 	cp "$plugin_dest/db.copy" "$wp_root/wp-content/db.php"
+}
 
-	(
-		cd "$plugin_dest"
-		COMPOSER_NO_DEV=1 composer require --no-interaction --no-progress --with-all-dependencies satur.io/duckdb
-		php -d ffi.enable=1 -r 'require "vendor/autoload.php"; Saturio\DuckDB\CLib\Installer::install();'
-		composer dump-autoload --no-dev --no-interaction --optimize
-	)
+prepare_sqlite_integration_plugin() {
+	local wp_root=$1
+	local plugin_dest="$wp_root/wp-content/plugins/sqlite-database-integration"
+
+	rm -rf "$plugin_dest"
+	mkdir -p "$plugin_dest"
+	rsync -a --delete \
+		--exclude='.git' \
+		"$repo_dir/external/sqlite-database-integration/packages/plugin-sqlite-database-integration"/ "$plugin_dest"/
+	rm -rf "$plugin_dest/wp-includes/database"
+	cp -R "$repo_dir/external/sqlite-database-integration/packages/mysql-on-sqlite/src" "$plugin_dest/wp-includes/database"
+	cp "$plugin_dest/db.copy" "$wp_root/wp-content/db.php"
+}
+
+start_mysql_server() {
+	local backend_slug=$1
+	local data_dir="$work_root/$backend_slug/mysql-data"
+	local socket="$work_root/$backend_slug/mysql.sock"
+	local log="$output_dir/$backend_slug-mysql.log"
+	local pid_file="$work_root/$backend_slug/mysql.pid"
+	local port=$(( 9300 + ( RANDOM % 500 ) ))
+
+	require_command mariadb
+	require_command mariadb-install-db
+	require_command mariadbd
+
+	rm -rf "$data_dir"
+	mkdir -p "$data_dir" "$(dirname "$socket")"
+	mariadb-install-db \
+		--datadir="$data_dir" \
+		--auth-root-authentication-method=normal \
+		--skip-test-db \
+		>"$log" 2>&1
+
+	mariadbd \
+		--datadir="$data_dir" \
+		--socket="$socket" \
+		--port="$port" \
+		--bind-address=127.0.0.1 \
+		--pid-file="$pid_file" \
+		--skip-networking=0 \
+		--log-error="$log" \
+		--user="$(id -un)" &
+	MYSQL_SERVER_PID=$!
+
+	for _ in $(seq 1 80); do
+		if mariadb --protocol=socket --socket="$socket" -uroot -e 'SELECT 1' >/dev/null 2>&1; then
+			MYSQL_BENCHMARK_HOST="127.0.0.1:$port"
+			mariadb --protocol=socket --socket="$socket" -uroot <<'SQL'
+CREATE DATABASE IF NOT EXISTS wordpress CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'wordpress'@'127.0.0.1' IDENTIFIED BY 'wordpress';
+CREATE USER IF NOT EXISTS 'wordpress'@'localhost' IDENTIFIED BY 'wordpress';
+GRANT ALL PRIVILEGES ON wordpress.* TO 'wordpress'@'127.0.0.1';
+GRANT ALL PRIVILEGES ON wordpress.* TO 'wordpress'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+			return
+		fi
+		sleep 0.25
+	done
+
+	echo "Timed out waiting for MariaDB. Log: $log" >&2
+	tail -100 "$log" >&2 || true
+	return 1
+}
+
+stop_mysql_server() {
+	local mysql_pid=${1:-}
+
+	if [ -n "$mysql_pid" ]; then
+		kill "$mysql_pid" >/dev/null 2>&1 || true
+		wait "$mysql_pid" 2>/dev/null || true
+	fi
+}
+
+download_minio_tools() {
+	local bin_dir="$cache_dir/minio-bin"
+
+	mkdir -p "$bin_dir"
+	download https://dl.min.io/server/minio/release/linux-amd64/minio "$bin_dir/minio"
+	download https://dl.min.io/client/mc/release/linux-amd64/mc "$bin_dir/mc"
+	chmod +x "$bin_dir/minio" "$bin_dir/mc"
+	MINIO_BIN="$bin_dir/minio"
+	MC_BIN="$bin_dir/mc"
+}
+
+start_minio_server() {
+	local backend_slug=$1
+	local data_dir="$work_root/$backend_slug/minio-data"
+	local log="$output_dir/$backend_slug-minio.log"
+	local port=$(( 9900 + ( RANDOM % 500 ) ))
+	local bucket
+
+	download_minio_tools
+	rm -rf "$data_dir"
+	mkdir -p "$data_dir"
+
+	MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin \
+		"$MINIO_BIN" server "$data_dir" --address "127.0.0.1:$port" >"$log" 2>&1 &
+	MINIO_SERVER_PID=$!
+
+	for _ in $(seq 1 80); do
+		if curl --max-time 3 -fsS "http://127.0.0.1:$port/minio/health/ready" >/dev/null 2>&1; then
+			bucket=$(printf 'duckdb-wordpress-benchmark-%s-%s' "$run_id" "$backend_slug" | tr '[:upper:]_' '[:lower:]-' | tr -c 'a-z0-9.-' '-')
+			"$MC_BIN" alias set "benchmark-$backend_slug" "http://127.0.0.1:$port" minioadmin minioadmin >/dev/null
+			"$MC_BIN" mb -p "benchmark-$backend_slug/$bucket" >/dev/null
+			MINIO_BENCHMARK_ENDPOINT="127.0.0.1:$port"
+			MINIO_BENCHMARK_BUCKET="$bucket"
+			return
+		fi
+		sleep 0.25
+	done
+
+	echo "Timed out waiting for MinIO. Log: $log" >&2
+	tail -100 "$log" >&2 || true
+	return 1
+}
+
+stop_minio_server() {
+	local minio_pid=${1:-}
+
+	if [ -n "$minio_pid" ]; then
+		kill "$minio_pid" >/dev/null 2>&1 || true
+		wait "$minio_pid" 2>/dev/null || true
+	fi
+}
+
+clear_s3_benchmark_env() {
+	unset WP_DUCKDB_EXTERNAL_STORAGE_DIR
+	unset WP_DUCKDB_BACKEND_FILE_EXTENSION
+	unset WP_DUCKDB_BACKEND_SETUP_SQL_JSON
+	unset WP_DUCKDB_BACKEND_READ_SQL
+	unset WP_DUCKDB_BACKEND_WRITE_SQL
+	unset WP_DUCKDB_BACKEND_ATOMIC_FLUSH
+}
+
+cleanup_backend() {
+	local server_pid=${1:-}
+	local mysql_pid=${2:-}
+	local minio_pid=${3:-}
+	local backend=${4:-}
+
+	stop_server "$server_pid"
+	stop_mysql_server "$mysql_pid"
+	stop_minio_server "$minio_pid"
+
+	if [ -n "$backend" ] && is_s3_parquet_backend "$backend"; then
+		clear_s3_benchmark_env
+	fi
 }
 
 write_benchmark_mu_plugin() {
@@ -240,6 +406,7 @@ write_wp_config() {
 	BENCHMARK_TOKEN="$benchmark_token" \
 	BENCHMARK_TABLES_FILE="$tables_file" \
 	BENCHMARK_LOCK_TIMEOUT="$lock_timeout" \
+	MYSQL_BENCHMARK_HOST="${MYSQL_BENCHMARK_HOST:-127.0.0.1}" \
 	php <<'PHP'
 <?php
 $root        = rtrim( getenv( 'WORDPRESS_ROOT' ), '/\\' );
@@ -248,6 +415,7 @@ $site_url    = getenv( 'SITE_URL' ) ?: 'http://127.0.0.1:8080';
 $token       = getenv( 'BENCHMARK_TOKEN' ) ?: 'duckdb-benchmark';
 $tables_file = getenv( 'BENCHMARK_TABLES_FILE' ) ?: '';
 $lock_timeout = max( 1, (int) ( getenv( 'BENCHMARK_LOCK_TIMEOUT' ) ?: 30 ) );
+$mysql_host  = getenv( 'MYSQL_BENCHMARK_HOST' ) ?: '127.0.0.1';
 
 function duckdb_benchmark_env_first( array $names ): ?string {
 	foreach ( $names as $name ) {
@@ -305,6 +473,95 @@ function duckdb_benchmark_tables_from_file( string $tables_file ): ?array {
 }
 
 $database_dir = $root . '/wp-content/database/';
+
+if ( 'mysql' === $backend || 'mariadb' === $backend ) {
+	$config = <<<'CONFIG'
+<?php
+define( 'DB_NAME', 'wordpress' );
+define( 'DB_USER', 'wordpress' );
+define( 'DB_PASSWORD', 'wordpress' );
+CONFIG;
+	$config .= 'define( \'DB_HOST\', ' . var_export( $mysql_host, true ) . " );\n";
+	$config .= <<<'CONFIG'
+define( 'DB_CHARSET', 'utf8mb4' );
+define( 'DB_COLLATE', '' );
+
+define( 'FS_METHOD', 'direct' );
+define( 'WP_DEBUG', true );
+define( 'WP_DEBUG_LOG', true );
+define( 'WP_DEBUG_DISPLAY', false );
+define( 'SCRIPT_DEBUG', false );
+define( 'DISABLE_WP_CRON', true );
+define( 'WP_AUTO_UPDATE_CORE', false );
+
+define( 'AUTH_KEY', 'mysql-benchmark-auth-key' );
+define( 'SECURE_AUTH_KEY', 'mysql-benchmark-secure-auth-key' );
+define( 'LOGGED_IN_KEY', 'mysql-benchmark-logged-in-key' );
+define( 'NONCE_KEY', 'mysql-benchmark-nonce-key' );
+define( 'AUTH_SALT', 'mysql-benchmark-auth-salt' );
+define( 'SECURE_AUTH_SALT', 'mysql-benchmark-secure-auth-salt' );
+define( 'LOGGED_IN_SALT', 'mysql-benchmark-logged-in-salt' );
+define( 'NONCE_SALT', 'mysql-benchmark-nonce-salt' );
+
+$table_prefix = 'wp_';
+
+CONFIG;
+	$config .= 'define( \'WP_HOME\', ' . var_export( $site_url, true ) . " );\n";
+	$config .= 'define( \'WP_SITEURL\', ' . var_export( $site_url, true ) . " );\n";
+	$config .= 'define( \'DUCKDB_BENCHMARK_TOKEN\', ' . var_export( $token, true ) . " );\n";
+	$config .= "\nif ( ! defined( 'ABSPATH' ) ) {\n";
+	$config .= "	define( 'ABSPATH', __DIR__ . '/' );\n";
+	$config .= "}\n";
+	$config .= "require_once ABSPATH . 'wp-settings.php';\n";
+	file_put_contents( $root . '/wp-config.php', $config );
+	return;
+}
+
+if ( 'sqlite' === $backend ) {
+	$config = <<<'CONFIG'
+<?php
+define( 'DB_NAME', 'wordpress' );
+define( 'DB_USER', 'wordpress' );
+define( 'DB_PASSWORD', 'wordpress' );
+define( 'DB_HOST', 'localhost' );
+define( 'DB_CHARSET', 'utf8mb4' );
+define( 'DB_COLLATE', '' );
+
+define( 'DB_ENGINE', 'sqlite' );
+define( 'DATABASE_ENGINE', 'sqlite' );
+define( 'FS_METHOD', 'direct' );
+define( 'WP_DEBUG', true );
+define( 'WP_DEBUG_LOG', true );
+define( 'WP_DEBUG_DISPLAY', false );
+define( 'SCRIPT_DEBUG', false );
+define( 'DISABLE_WP_CRON', true );
+define( 'WP_AUTO_UPDATE_CORE', false );
+
+define( 'AUTH_KEY', 'sqlite-benchmark-auth-key' );
+define( 'SECURE_AUTH_KEY', 'sqlite-benchmark-secure-auth-key' );
+define( 'LOGGED_IN_KEY', 'sqlite-benchmark-logged-in-key' );
+define( 'NONCE_KEY', 'sqlite-benchmark-nonce-key' );
+define( 'AUTH_SALT', 'sqlite-benchmark-auth-salt' );
+define( 'SECURE_AUTH_SALT', 'sqlite-benchmark-secure-auth-salt' );
+define( 'LOGGED_IN_SALT', 'sqlite-benchmark-logged-in-salt' );
+define( 'NONCE_SALT', 'sqlite-benchmark-nonce-salt' );
+
+$table_prefix = 'wp_';
+
+CONFIG;
+	$config .= 'define( \'WP_HOME\', ' . var_export( $site_url, true ) . " );\n";
+	$config .= 'define( \'WP_SITEURL\', ' . var_export( $site_url, true ) . " );\n";
+	$config .= 'define( \'DB_DIR\', ' . var_export( $database_dir, true ) . " );\n";
+	$config .= "define( 'DB_FILE', '.ht.sqlite-benchmark' );\n";
+	$config .= 'define( \'DUCKDB_BENCHMARK_TOKEN\', ' . var_export( $token, true ) . " );\n";
+	$config .= "\nif ( ! defined( 'ABSPATH' ) ) {\n";
+	$config .= "	define( 'ABSPATH', __DIR__ . '/' );\n";
+	$config .= "}\n";
+	$config .= "require_once ABSPATH . 'wp-settings.php';\n";
+	file_put_contents( $root . '/wp-config.php', $config );
+	return;
+}
+
 $config       = <<<'CONFIG'
 <?php
 define( 'DB_NAME', 'wordpress' );
@@ -660,6 +917,23 @@ is_native_duckdb_backend() {
 	return 1
 }
 
+is_mysql_backend() {
+	case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+		mysql|mariadb)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+is_sqlite_backend() {
+	[ "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" = "sqlite" ]
+}
+
+is_s3_parquet_backend() {
+	[ "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" = "s3_parquet" ]
+}
+
 remove_working_database() {
 	local wp_root=$1
 	local backend=$2
@@ -857,6 +1131,8 @@ run_backend() {
 	local tables_file
 	local benchmark_token
 	local server_pid=''
+	local mysql_pid=''
+	local minio_pid=''
 	local expected_write_events=0
 	local verification_output
 	local verification_status
@@ -870,15 +1146,37 @@ run_backend() {
 	tables_file="$output_dir/$backend_slug-tables.txt"
 	benchmark_token="duckdb-benchmark-$run_id-$backend_slug"
 
-	echo "==> DuckDB WordPress benchmark: backend=$backend"
+	echo "==> WordPress database benchmark: backend=$backend"
 	mkdir -p "$output_dir"
+	trap 'cleanup_backend "${server_pid:-}" "${mysql_pid:-}" "${minio_pid:-}" "$backend"' EXIT
+
+	if is_mysql_backend "$backend"; then
+		start_mysql_server "$backend_slug"
+		mysql_pid=$MYSQL_SERVER_PID
+	elif is_s3_parquet_backend "$backend"; then
+		start_minio_server "$backend_slug"
+		minio_pid=$MINIO_SERVER_PID
+		export WP_DUCKDB_EXTERNAL_STORAGE_DIR="s3://$MINIO_BENCHMARK_BUCKET/wordpress/"
+		export WP_DUCKDB_BACKEND_FILE_EXTENSION=parquet
+		export WP_DUCKDB_BACKEND_SETUP_SQL_JSON="[\"INSTALL httpfs\",\"LOAD httpfs\",\"CREATE OR REPLACE SECRET wp_s3_benchmark (TYPE s3, PROVIDER config, KEY_ID 'minioadmin', SECRET 'minioadmin', REGION 'us-east-1', ENDPOINT '$MINIO_BENCHMARK_ENDPOINT', URL_STYLE 'path', USE_SSL false, SCOPE 's3://$MINIO_BENCHMARK_BUCKET/wordpress/')\"]"
+		export WP_DUCKDB_BACKEND_READ_SQL='SELECT * FROM read_parquet({path})'
+		export WP_DUCKDB_BACKEND_WRITE_SQL='COPY {table} TO {path} (FORMAT PARQUET, OVERWRITE_OR_IGNORE true)'
+		export WP_DUCKDB_BACKEND_ATOMIC_FLUSH=0
+	fi
+
 	prepare_wordpress "$wp_root"
 	if [ -z "$actual_wordpress_version" ]; then
 		actual_wordpress_version=$(detect_wordpress_version "$wp_root")
 	fi
 	mkdir -p "$wp_root/wp-content/plugins"
 	write_benchmark_mu_plugin "$wp_root"
-	prepare_databases_support_plugin "$wp_root"
+	if is_mysql_backend "$backend"; then
+		:
+	elif is_sqlite_backend "$backend"; then
+		prepare_sqlite_integration_plugin "$wp_root"
+	else
+		prepare_databases_support_plugin "$wp_root"
+	fi
 	write_wp_config "$wp_root" "$backend" "$site_url" "$benchmark_token"
 	php_install_site "$wp_root" "$tables_file"
 	write_wp_config "$wp_root" "$backend" "$site_url" "$benchmark_token" "$tables_file"
@@ -887,7 +1185,6 @@ run_backend() {
 
 	start_server "$wp_root" "$port" "$server_log"
 	server_pid=$START_SERVER_PID
-	trap 'stop_server "$server_pid"' EXIT
 	wait_for_http "$site_url"
 
 	for concurrency in "${concurrency_levels[@]}"; do
@@ -899,7 +1196,6 @@ run_backend() {
 
 	stop_server "$server_pid"
 	server_pid=''
-	trap - EXIT
 
 	set +e
 	verification_output=$(php_verify_writes "$wp_root" "$backend" "$expected_write_events")
@@ -913,6 +1209,11 @@ run_backend() {
 	fi
 
 	check_logs "$backend" "$wp_root" "$server_log"
+	cleanup_backend "$server_pid" "$mysql_pid" "$minio_pid" "$backend"
+	server_pid=''
+	mysql_pid=''
+	minio_pid=''
+	trap - EXIT
 	echo "PASS benchmark backend=$backend root=$wp_root"
 }
 
@@ -933,8 +1234,8 @@ done
 write_meta "$actual_wordpress_version"
 php "$repo_dir/bin/duckdb-benchmark-report.php" "$output_dir" "$repo_dir/docs"
 
-echo "DuckDB benchmark run: $output_dir"
-echo "DuckDB benchmark report: $repo_dir/docs/index.html"
+echo "WordPress database benchmark run: $output_dir"
+echo "WordPress database benchmark report: $repo_dir/docs/index.html"
 
 if [ "$benchmark_failed" -ne 0 ]; then
 	exit 1

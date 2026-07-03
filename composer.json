@@ -31,6 +31,9 @@
 		"benchmark-duckdb": [
 			"./bin/duckdb-wordpress-benchmark.sh"
 		],
+		"benchmark-databases": [
+			"./bin/duckdb-wordpress-benchmark.sh"
+		],
 		"test-postgresql": [
 			"phpunit --configuration phpunit-postgresql.xml.dist"
 		],
