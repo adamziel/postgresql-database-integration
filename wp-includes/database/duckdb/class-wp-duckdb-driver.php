@@ -29777,7 +29777,7 @@ class WP_DuckDB_Driver {
 		$php_pattern              = '/' . str_replace( '/', '\/', $literal ) . '/' . $flags;
 		$previous_error_reporting = error_reporting( error_reporting() & ~E_WARNING & ~E_DEPRECATED );
 		try {
-			return false !== preg_match( $php_pattern, '' );
+			return false !== @preg_match( $php_pattern, '' );
 		} finally {
 			error_reporting( $previous_error_reporting );
 		}

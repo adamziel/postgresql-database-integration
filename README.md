@@ -405,6 +405,18 @@ The external-format and configured-backend test classes are
 `tests/duckdb/WP_DuckDB_External_Format_Backend_Tests.php` and
 `tests/duckdb/WP_DuckDB_Storage_Backend_Tests.php`.
 
+The broader DuckDB parity suite is kept separate because it runs thousands of
+driver-level MySQL compatibility assertions and SQLite-vs-DuckDB differential
+checks. Run it after the focused suite when changing the SQL translator or wpdb
+adapter surface:
+
+```bash
+WP_DUCKDB_TESTS=1 \
+WP_DUCKDB_AUTOLOAD="$PWD/vendor/autoload.php" \
+DUCKDB_PHP_AUTOLOAD="$PWD/vendor/autoload.php" \
+composer run test-duckdb-parity
+```
+
 The focused S3 PHPUnit test is skipped by default. To run it, start MinIO or
 another S3-compatible server, create a bucket, then set
 `WP_DUCKDB_S3_TESTS=1`, `WP_DUCKDB_S3_EXTERNAL_STORAGE_DIR`, and
@@ -450,6 +462,15 @@ WP_DUCKDB_TESTS=1 \
 WP_DUCKDB_AUTOLOAD="$PWD/vendor/autoload.php" \
 DUCKDB_PHP_AUTOLOAD="$PWD/vendor/autoload.php" \
 composer run test-duckdb
+```
+
+Run the extended DuckDB parity suite:
+
+```bash
+WP_DUCKDB_TESTS=1 \
+WP_DUCKDB_AUTOLOAD="$PWD/vendor/autoload.php" \
+DUCKDB_PHP_AUTOLOAD="$PWD/vendor/autoload.php" \
+composer run test-duckdb-parity
 ```
 
 Run the focused WordPress core DB tests against DuckDB:

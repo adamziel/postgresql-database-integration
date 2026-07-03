@@ -2,10 +2,8 @@
 
 require_once __DIR__ . '/WP_DuckDB_TestCase.php';
 
-/**
- * @group duckdb
- * @group duckdb-external-formats
- */
+#[PHPUnit\Framework\Attributes\Group( 'duckdb' )]
+#[PHPUnit\Framework\Attributes\Group( 'duckdb-external-formats' )]
 class WP_DuckDB_External_Format_Backend_Tests extends WP_DuckDB_TestCase {
 	/**
 	 * Temporary directories created by the current test.
@@ -37,10 +35,9 @@ class WP_DuckDB_External_Format_Backend_Tests extends WP_DuckDB_TestCase {
 	}
 
 	/**
-	 * @dataProvider other_external_format_provider
-	 *
 	 * @param string $format External storage format.
 	 */
+	#[PHPUnit\Framework\Attributes\DataProvider( 'other_external_format_provider' )]
 	public function test_csv_and_json_file_backed_views_can_serve_wordpress_table_reads( string $format ): void {
 		$this->assert_external_format_serves_wordpress_table_reads( $format );
 	}
@@ -145,10 +142,9 @@ class WP_DuckDB_External_Format_Backend_Tests extends WP_DuckDB_TestCase {
 	}
 
 	/**
-	 * @dataProvider external_format_provider
-	 *
 	 * @param string $format External storage format.
 	 */
+	#[PHPUnit\Framework\Attributes\DataProvider( 'external_format_provider' )]
 	public function test_external_format_files_can_round_trip_wordpress_mutations_as_storage( string $format ): void {
 		$this->requireDuckDBRuntime();
 

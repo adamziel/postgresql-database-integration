@@ -2,9 +2,7 @@
 
 require_once __DIR__ . '/WP_DuckDB_TestCase.php';
 
-/**
- * @group duckdb
- */
+#[PHPUnit\Framework\Attributes\Group( 'duckdb' )]
 class WP_DuckDB_Connection_Tests extends WP_DuckDB_TestCase {
 	public function test_result_statement_fetch_named_preserves_duplicate_columns(): void {
 		$stmt = new WP_DuckDB_Result_Statement(

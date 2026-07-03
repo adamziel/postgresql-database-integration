@@ -1,8 +1,6 @@
 <?php
 
-/**
- * @group duckdb-runtime
- */
+#[PHPUnit\Framework\Attributes\Group( 'duckdb-runtime' )]
 class WP_DuckDB_Runtime_Gate_Tests extends PHPUnit\Framework\TestCase {
 	public static function setUpBeforeClass(): void {
 		parent::setUpBeforeClass();

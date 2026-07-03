@@ -2,10 +2,8 @@
 
 require_once __DIR__ . '/WP_DuckDB_TestCase.php';
 
-/**
- * @group duckdb
- * @group duckdb-storage-backend
- */
+#[PHPUnit\Framework\Attributes\Group( 'duckdb' )]
+#[PHPUnit\Framework\Attributes\Group( 'duckdb-storage-backend' )]
 class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 	/**
 	 * Temporary directories created by the current test.
@@ -45,10 +43,9 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 	}
 
 	/**
-	 * @dataProvider backend_provider
-	 *
 	 * @param string $backend DuckDB external backend.
 	 */
+	#[PHPUnit\Framework\Attributes\DataProvider( 'backend_provider' )]
 	public function test_configured_external_backend_round_trips_wordpress_mutations( string $backend ): void {
 		$this->requireDuckDBRuntime();
 
@@ -3226,10 +3223,8 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		$this->assertLessThan( 1.0, microtime( true ) - $started_at );
 	}
 
-	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
-	 */
+	#[PHPUnit\Framework\Attributes\RunInSeparateProcess]
+	#[PHPUnit\Framework\Attributes\PreserveGlobalState( false )]
 	public function test_backend_can_be_configured_from_constants(): void {
 		define( 'DUCKDB_BACKEND', 'pipe_text' );
 		define( 'DUCKDB_WORKING_DATABASE_FILE', ':memory:' );

@@ -2,9 +2,7 @@
 
 require_once __DIR__ . '/WP_DuckDB_TestCase.php';
 
-/**
- * @group duckdb
- */
+#[PHPUnit\Framework\Attributes\Group( 'duckdb' )]
 class WP_DuckDB_DB_Tests extends WP_DuckDB_TestCase {
 	public function test_close_clears_cached_driver_and_check_connection_reconnects(): void {
 		$this->requireDuckDBRuntime();

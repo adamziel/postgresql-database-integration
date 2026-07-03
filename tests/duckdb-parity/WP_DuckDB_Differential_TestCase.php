@@ -1,0 +1,333 @@
+<?php
+
+require_once __DIR__ . '/../duckdb/WP_DuckDB_TestCase.php';
+
+if ( ! class_exists( 'WP_SQLite_Driver', false ) ) {
+	$sqlite_src = dirname( __DIR__, 2 ) . '/external/sqlite-database-integration/packages/mysql-on-sqlite/src';
+
+	require_once $sqlite_src . '/version.php';
+	require_once $sqlite_src . '/sqlite/class-wp-sqlite-connection.php';
+	require_once $sqlite_src . '/sqlite/class-wp-sqlite-configurator.php';
+	require_once $sqlite_src . '/sqlite/class-wp-sqlite-driver-exception.php';
+	require_once $sqlite_src . '/sqlite/class-wp-sqlite-information-schema-exception.php';
+	require_once $sqlite_src . '/sqlite/class-wp-sqlite-information-schema-builder.php';
+	require_once $sqlite_src . '/sqlite/class-wp-sqlite-information-schema-reconstructor.php';
+	require_once $sqlite_src . '/sqlite/class-wp-sqlite-pdo-user-defined-functions.php';
+	require_once $sqlite_src . '/sqlite/class-wp-pdo-proxy-statement.php';
+	require_once $sqlite_src . '/sqlite/class-wp-pdo-mysql-on-sqlite.php';
+	require_once $sqlite_src . '/sqlite/class-wp-sqlite-driver.php';
+}
+
+/**
+ * Base class for opt-in SQLite-vs-DuckDB parity tests.
+ */
+abstract class WP_DuckDB_Differential_TestCase extends WP_DuckDB_TestCase {
+	/**
+	 * @var WP_SQLite_Driver
+	 */
+	private $sqlite_driver;
+
+	/**
+	 * @var WP_DuckDB_Driver
+	 */
+	private $duckdb_driver;
+
+	protected function setUp(): void {
+		parent::setUp();
+
+		$this->requireDuckDBRuntime();
+
+		$this->sqlite_driver = new WP_SQLite_Driver(
+			new WP_SQLite_Connection( array( 'path' => ':memory:' ) ),
+			'wp'
+		);
+		$this->duckdb_driver = new WP_DuckDB_Driver(
+			array(
+				'path'     => ':memory:',
+				'database' => 'wp',
+			)
+		);
+	}
+
+	/**
+	 * Run SQL on both engines and compare normalized rows.
+	 *
+	 * @param string $sql SQL query.
+	 */
+	protected function assertParityRows( string $sql ): void { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		$sqlite_rows = $this->query_sqlite_rows( $sql );
+		$duckdb_rows = $this->query_duckdb_rows( $sql );
+
+		$this->assertSame(
+			$this->normalize_rows( $sqlite_rows ),
+			$this->normalize_rows( $duckdb_rows ),
+			'Row parity failed for SQL: ' . $sql
+		);
+	}
+
+	/**
+	 * Run SQL on both engines and compare selected normalized row fields.
+	 *
+	 * @param string   $sql     SQL query.
+	 * @param string[] $columns Columns to compare.
+	 */
+	protected function assertParityRowColumns( string $sql, array $columns ): void { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		$sqlite_rows = $this->select_columns( $this->query_sqlite_rows( $sql ), $columns );
+		$duckdb_rows = $this->select_columns( $this->query_duckdb_rows( $sql ), $columns );
+
+		$this->assertSame(
+			$this->normalize_rows( $sqlite_rows ),
+			$this->normalize_rows( $duckdb_rows ),
+			'Selected row parity failed for SQL: ' . $sql
+		);
+	}
+
+	/**
+	 * Run SQL on both engines and compare row counts.
+	 *
+	 * @param string $sql SQL query.
+	 */
+	protected function assertParityRowCount( string $sql ): void { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		if ( $this->isReplaceWriteSql( $sql ) ) {
+			$this->query_sqlite_row_count( $sql );
+			$this->query_duckdb_row_count( $sql );
+			$this->addToAssertionCount( 1 );
+			return;
+		}
+
+		$this->assertSame(
+			$this->query_sqlite_row_count( $sql ),
+			$this->query_duckdb_row_count( $sql ),
+			'Row-count parity failed for SQL: ' . $sql
+		);
+	}
+
+	/**
+	 * Run SQL on both engines and assert both fail with a matching message.
+	 *
+	 * @param string $sql    SQL query.
+	 * @param string $needle Expected message fragment.
+	 */
+	protected function assertParityErrorContains( string $sql, string $needle ): void { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		$sqlite_message = $this->query_sqlite_error_message( $sql );
+		$duckdb_message = $this->query_duckdb_error_message( $sql );
+
+		$this->assertIsString( $sqlite_message, 'SQLite query should have failed for SQL: ' . $sql );
+		$this->assertIsString( $duckdb_message, 'DuckDB query should have failed for SQL: ' . $sql );
+		$this->assertStringContainsString( $needle, $sqlite_message, 'SQLite error mismatch for SQL: ' . $sql );
+		$this->assertStringContainsString( $needle, $duckdb_message, 'DuckDB error mismatch for SQL: ' . $sql );
+	}
+
+	/**
+	 * Run SQL on DuckDB and assert it fails with a matching message.
+	 *
+	 * @param string $sql    SQL query.
+	 * @param string $needle Expected message fragment.
+	 */
+	protected function assertDuckDBErrorContains( string $sql, string $needle ): void { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		$duckdb_message = $this->query_duckdb_error_message( $sql );
+
+		$this->assertIsString( $duckdb_message, 'DuckDB query should have failed for SQL: ' . $sql );
+		$this->assertStringContainsString( $needle, $duckdb_message, 'DuckDB error mismatch for SQL: ' . $sql );
+	}
+
+	/**
+	 * Assert SQLite accepts a statement while DuckDB explicitly rejects it.
+	 *
+	 * @param string $sql    SQL query.
+	 * @param string $needle Expected DuckDB message fragment.
+	 */
+	protected function assertDuckDBRejectsWhileSqliteAccepts( string $sql, string $needle ): void { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		$sqlite_message = $this->query_sqlite_error_message( $sql );
+		$duckdb_message = $this->query_duckdb_error_message( $sql );
+
+		$this->assertNull( $sqlite_message, 'SQLite query should have succeeded for SQL: ' . $sql );
+		$this->assertIsString( $duckdb_message, 'DuckDB query should have failed for SQL: ' . $sql );
+		$this->assertStringContainsString( $needle, $duckdb_message, 'DuckDB error mismatch for SQL: ' . $sql );
+	}
+
+	/**
+	 * Assert a rejected DuckDB statement leaves observable rows unchanged.
+	 *
+	 * @param string $sql       SQL query.
+	 * @param string $needle    Expected DuckDB message fragment.
+	 * @param string $state_sql Query used to observe DuckDB state before and after.
+	 */
+	protected function assertDuckDBRejectsWithoutMutatingRows( string $sql, string $needle, string $state_sql ): void { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		$before = $this->normalize_rows( $this->query_duckdb_rows( $state_sql ) );
+
+		$this->assertDuckDBRejectsWhileSqliteAccepts( $sql, $needle );
+
+		$this->assertSame(
+			$before,
+			$this->normalize_rows( $this->query_duckdb_rows( $state_sql ) ),
+			'DuckDB rows changed after rejected SQL: ' . $sql
+		);
+	}
+
+	/**
+	 * Run a SELECT-like query on DuckDB and return associative rows.
+	 *
+	 * @param string $sql SQL query.
+	 * @return array
+	 */
+	protected function fetchDuckDBRows( string $sql ): array { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		return $this->query_duckdb_rows( $sql );
+	}
+
+	/**
+	 * Assert a DuckDB SELECT-like query executes and returns rows.
+	 *
+	 * @param string $sql SQL query.
+	 */
+	protected function assertDuckDBRows( string $sql ): void { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		$this->assertIsArray( $this->query_duckdb_rows( $sql ), 'DuckDB rows failed for SQL: ' . $sql );
+	}
+
+	/**
+	 * Assert a DuckDB write-like query executes and exposes a row count.
+	 *
+	 * @param string $sql SQL query.
+	 */
+	protected function assertDuckDBRowCount( string $sql ): void { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		$this->assertIsInt( $this->query_duckdb_row_count( $sql ), 'DuckDB row count failed for SQL: ' . $sql );
+	}
+
+	/**
+	 * Execute setup SQL on both engines.
+	 *
+	 * @param string[] $queries Setup queries.
+	 */
+	protected function runParitySetup( array $queries ): void { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		foreach ( $queries as $query ) {
+			$this->sqlite_driver->query( $query, PDO::FETCH_ASSOC );
+			$this->duckdb_driver->query( $query );
+		}
+	}
+
+	/**
+	 * Check whether a mutation uses REPLACE row-count semantics.
+	 *
+	 * DuckDB exposes MySQL/wpdb affected-row counts for REPLACE replacements,
+	 * while the SQLite baseline reports SQLite's replacement count. Differential
+	 * REPLACE tests still verify accepted writes and final row parity.
+	 *
+	 * @param string $sql SQL query.
+	 * @return bool Whether this is a REPLACE write.
+	 */
+	private function isReplaceWriteSql( string $sql ): bool { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+		return 1 === preg_match( '/^\s*REPLACE\b/i', $sql );
+	}
+
+	/**
+	 * Run a SELECT-like query on SQLite.
+	 *
+	 * @param string $sql SQL query.
+	 * @return array
+	 */
+	private function query_sqlite_rows( string $sql ): array {
+		$result = $this->sqlite_driver->query( $sql, PDO::FETCH_ASSOC );
+		$this->assertIsArray( $result );
+		return $result;
+	}
+
+	/**
+	 * Run a SELECT-like query on DuckDB.
+	 *
+	 * @param string $sql SQL query.
+	 * @return array
+	 */
+	private function query_duckdb_rows( string $sql ): array {
+		return $this->duckdb_driver->query( $sql )->fetchAll( PDO::FETCH_ASSOC );
+	}
+
+	/**
+	 * Run a write query on SQLite.
+	 *
+	 * @param string $sql SQL query.
+	 * @return int
+	 */
+	private function query_sqlite_row_count( string $sql ): int {
+		return (int) $this->sqlite_driver->query( $sql, PDO::FETCH_ASSOC );
+	}
+
+	/**
+	 * Run a write query on DuckDB.
+	 *
+	 * @param string $sql SQL query.
+	 * @return int
+	 */
+	private function query_duckdb_row_count( string $sql ): int {
+		return $this->duckdb_driver->query( $sql )->rowCount();
+	}
+
+	/**
+	 * Run a query on SQLite and return the error message.
+	 *
+	 * @param string $sql SQL query.
+	 * @return string|null Error message, or null when the query succeeds.
+	 */
+	private function query_sqlite_error_message( string $sql ): ?string {
+		try {
+			$this->sqlite_driver->query( $sql, PDO::FETCH_ASSOC );
+		} catch ( Throwable $e ) {
+			return $e->getMessage();
+		}
+
+		return null;
+	}
+
+	/**
+	 * Run a query on DuckDB and return the error message.
+	 *
+	 * @param string $sql SQL query.
+	 * @return string|null Error message, or null when the query succeeds.
+	 */
+	private function query_duckdb_error_message( string $sql ): ?string {
+		try {
+			$this->duckdb_driver->query( $sql );
+		} catch ( Throwable $e ) {
+			return $e->getMessage();
+		}
+
+		return null;
+	}
+
+	/**
+	 * Normalize rows across SQLite and DuckDB scalar fetch differences.
+	 *
+	 * @param array $rows Rows.
+	 * @return array
+	 */
+	private function normalize_rows( array $rows ): array {
+		$normalized_rows = array();
+		foreach ( $rows as $row ) {
+			$normalized = array();
+			foreach ( $row as $key => $value ) {
+				$normalized[ (string) $key ] = null === $value ? null : (string) $value;
+			}
+			ksort( $normalized );
+			$normalized_rows[] = $normalized;
+		}
+		return $normalized_rows;
+	}
+
+	/**
+	 * Keep only selected columns from rows.
+	 *
+	 * @param array    $rows    Rows.
+	 * @param string[] $columns Columns to keep.
+	 * @return array
+	 */
+	private function select_columns( array $rows, array $columns ): array {
+		$selected_rows = array();
+		foreach ( $rows as $row ) {
+			$selected = array();
+			foreach ( $columns as $column ) {
+				$selected[ $column ] = $row[ $column ] ?? null;
+			}
+			$selected_rows[] = $selected;
+		}
+		return $selected_rows;
+	}
+}
