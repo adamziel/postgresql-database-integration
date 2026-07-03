@@ -11203,8 +11203,12 @@ class WP_DuckDB_Driver {
 
 		$set_index = $this->find_insert_set_index( $tokens, $index );
 		if ( null !== $set_index ) {
-			if ( null !== $this->find_on_duplicate_key_update_index( $tokens ) ) {
-				throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT statement in DuckDB driver. INSERT ... SET ... ON DUPLICATE KEY UPDATE is not supported.' );
+			$on_duplicate_index = $this->find_on_duplicate_key_update_index( $tokens );
+			if ( null !== $on_duplicate_index ) {
+				if ( $ignore ) {
+					throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT statement in DuckDB driver. INSERT IGNORE ... ON DUPLICATE KEY UPDATE is not supported.' );
+				}
+				return $this->execute_insert_set_on_duplicate_key_update( $tokens, $index, $set_index, $on_duplicate_index );
 			}
 			return $this->execute_auto_increment_write(
 				$this->identifier_value( $tokens[ $index ] ?? null ),
@@ -11258,6 +11262,32 @@ class WP_DuckDB_Driver {
 
 		return $this->execute_auto_increment_write(
 			$this->identifier_value( $tokens[ $table_index ] ?? null ),
+			$translation['sql'],
+			'Failed to execute DuckDB INSERT',
+			$tokens,
+			$table_index,
+			true
+		);
+	}
+
+	/**
+	 * Execute INSERT ... SET ... ON DUPLICATE KEY UPDATE.
+	 *
+	 * @param WP_Parser_Token[] $tokens             MySQL tokens.
+	 * @param int               $table_index        Index of the table token.
+	 * @param int               $set_index          Index of the SET token.
+	 * @param int               $on_duplicate_index Index of the ON token.
+	 * @return WP_DuckDB_Result_Statement
+	 */
+	private function execute_insert_set_on_duplicate_key_update( array $tokens, int $table_index, int $set_index, int $on_duplicate_index ): WP_DuckDB_Result_Statement {
+		$translation = $this->translate_insert_set_on_duplicate_key_update_tokens_to_duckdb_sql( $tokens, $table_index, $set_index, $on_duplicate_index );
+
+		if ( $translation['matched'] ) {
+			return $this->execute_duckdb_query( $translation['sql'], 'Failed to execute DuckDB INSERT' );
+		}
+
+		return $this->execute_auto_increment_write(
+			$translation['requested_table_name'],
 			$translation['sql'],
 			'Failed to execute DuckDB INSERT',
 			$tokens,
@@ -25323,19 +25353,52 @@ class WP_DuckDB_Driver {
 	 * @return string DuckDB SQL.
 	 */
 	private function translate_insert_set_tokens_to_duckdb_sql( array $tokens, int $table_index, int $set_index, bool $ignore ): string {
-		$seeded_rand_state = array();
-		$assignments       = $this->parse_insert_set_assignments( array_slice( $tokens, $set_index + 1 ), $seeded_rand_state );
-		$table_name        = $this->identifier_value( $tokens[ $table_index ] ?? null );
-		$reference         = $this->resolve_write_table_reference( $table_name );
-		$metadata_map      = $this->write_column_metadata_map( $reference['table_name'], $reference['temporary'] );
-		$columns           = array();
-		$values            = array();
-		$supplied          = array();
+		$components = $this->insert_set_write_components( $tokens, $table_index, $set_index );
+
+		return 'INSERT '
+			. ( $ignore ? 'OR IGNORE ' : '' )
+			. 'INTO '
+			. $this->connection->quote_identifier( $components['table_name'] )
+			. ' ('
+			. implode( ', ', $components['column_sql'] )
+			. ') VALUES ('
+			. implode( ', ', $components['value_sql'] )
+			. ')';
+	}
+
+	/**
+	 * Build INSERT ... SET target/value components.
+	 *
+	 * @param WP_Parser_Token[] $tokens      MySQL tokens.
+	 * @param int               $table_index Index of the table token.
+	 * @param int               $set_index   Index of the SET token.
+	 * @param int|null          $end_index   Optional token index where SET input ends.
+	 * @return array{table_name:string,requested_table_name:string,temporary:bool,columns:string[],column_sql:string[],value_sql:string[],rows:array<int,array<string,string>>,alias_map:array{qualifier:string|null,columns:array<string,string>}}
+	 */
+	private function insert_set_write_components( array $tokens, int $table_index, int $set_index, ?int $end_index = null ): array {
+		$requested_table_name = $this->identifier_value( $tokens[ $table_index ] ?? null );
+		$reference            = $this->resolve_write_table_reference( $requested_table_name );
+		$metadata_map         = $this->write_column_metadata_map( $reference['table_name'], $reference['temporary'] );
+		$set_tokens           = array_slice(
+			$tokens,
+			$set_index + 1,
+			( null === $end_index ? count( $tokens ) : $end_index ) - $set_index - 1
+		);
+		$alias_index          = $this->find_insert_set_row_alias_index( $set_tokens );
+		$assignment_tokens    = null === $alias_index ? $set_tokens : array_slice( $set_tokens, 0, $alias_index );
+		$seeded_rand_state    = array();
+		$assignments          = $this->parse_insert_set_assignments( $assignment_tokens, $seeded_rand_state, $reference, $requested_table_name );
+		$columns              = array();
+		$column_sql           = array();
+		$values               = array();
+		$supplied             = array();
+		$row                  = array();
 
 		foreach ( $assignments as $assignment ) {
-			$columns[]  = $assignment['column_sql'];
-			$supplied[] = $assignment['column_name'];
-			$value_sql  = $assignment['value_sql'];
+			$columns[]    = $assignment['column_name'];
+			$column_sql[] = $assignment['column_sql'];
+			$supplied[]   = $assignment['column_name'];
+			$value_sql    = $assignment['value_sql'];
 			if ( isset( $metadata_map[ strtolower( $assignment['column_name'] ) ] ) ) {
 				$value_sql = $this->coerce_write_value_for_column_sql(
 					$metadata_map[ strtolower( $assignment['column_name'] ) ],
@@ -25344,23 +25407,29 @@ class WP_DuckDB_Driver {
 					false
 				);
 			}
-			$values[] = $value_sql;
+			$values[]                                  = $value_sql;
+			$row[ strtolower( $assignment['column_name'] ) ] = $value_sql;
 		}
 
 		foreach ( $this->omitted_non_strict_implicit_default_writes( $reference['table_name'], $reference['temporary'], $supplied ) as $default_write ) {
-			$columns[] = $this->connection->quote_identifier( $default_write['column_name'] );
-			$values[]  = $default_write['value_sql'];
+			$columns[]    = $default_write['column_name'];
+			$column_sql[] = $this->connection->quote_identifier( $default_write['column_name'] );
+			$values[]     = $default_write['value_sql'];
+			$row[ strtolower( $default_write['column_name'] ) ] = $default_write['value_sql'];
 		}
 
-		return 'INSERT '
-			. ( $ignore ? 'OR IGNORE ' : '' )
-			. 'INTO '
-			. $this->connection->quote_identifier( $reference['table_name'] )
-			. ' ('
-			. implode( ', ', $columns )
-			. ') VALUES ('
-			. implode( ', ', $values )
-			. ')';
+		$alias_tokens = null === $alias_index ? array() : array_slice( $set_tokens, $alias_index );
+
+		return array(
+			'table_name'           => $reference['table_name'],
+			'requested_table_name' => $requested_table_name,
+			'temporary'            => $reference['temporary'],
+			'columns'              => $columns,
+			'column_sql'           => $column_sql,
+			'value_sql'            => $values,
+			'rows'                 => array( $row ),
+			'alias_map'            => $this->parse_insert_row_alias_map( $alias_tokens, $columns ),
+		);
 	}
 
 	/**
@@ -25368,53 +25437,39 @@ class WP_DuckDB_Driver {
 	 *
 	 * @param WP_Parser_Token[] $tokens            Assignment-list tokens after SET.
 	 * @param array             $seeded_rand_state Per-statement seeded RAND() state.
+	 * @param array{table_name:string,temporary:bool} $reference Resolved write table reference.
+	 * @param string            $requested_table_name Requested target table name.
 	 * @return array<int,array{column_name:string,column_sql:string,value_tokens:array<int,WP_Parser_Token>,value_sql:string}>
 	 */
-	private function parse_insert_set_assignments( array $tokens, array &$seeded_rand_state ): array {
+	private function parse_insert_set_assignments( array $tokens, array &$seeded_rand_state, array $reference, string $requested_table_name ): array {
 		$assignments = array();
-		$index       = 0;
 
-		while ( $index < count( $tokens ) ) {
-			$column_name = $this->identifier_value( $tokens[ $index ] ?? null );
-			$column_sql  = $this->translate_tokens_to_duckdb_sql( array( $tokens[ $index ] ) );
-			++$index;
-
-			if (
-				! isset( $tokens[ $index ] )
-				|| ( WP_MySQL_Lexer::EQUAL_OPERATOR !== $tokens[ $index ]->id && WP_MySQL_Lexer::ASSIGN_OPERATOR !== $tokens[ $index ]->id )
-			) {
-				throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... SET statement in DuckDB driver. Expected assignment for column: ' . $column_name . '.' );
+		foreach ( $this->split_top_level_comma_items( $tokens ) as $item ) {
+			$equals_index = $this->find_top_level_token_index( $item, 0, WP_MySQL_Lexer::EQUAL_OPERATOR );
+			if ( null === $equals_index ) {
+				$equals_index = $this->find_top_level_token_index( $item, 0, WP_MySQL_Lexer::ASSIGN_OPERATOR );
 			}
-			++$index;
-
-			$value_tokens = array();
-			$depth        = 0;
-			while ( $index < count( $tokens ) ) {
-				if ( 0 === $depth && WP_MySQL_Lexer::COMMA_SYMBOL === $tokens[ $index ]->id ) {
-					break;
-				}
-				if ( WP_MySQL_Lexer::OPEN_PAR_SYMBOL === $tokens[ $index ]->id ) {
-					++$depth;
-				} elseif ( WP_MySQL_Lexer::CLOSE_PAR_SYMBOL === $tokens[ $index ]->id ) {
-					--$depth;
-				}
-				$value_tokens[] = $tokens[ $index ];
-				++$index;
+			if ( null === $equals_index ) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... SET statement in DuckDB driver. Assignment operator is required.' );
 			}
+
+			$target       = $this->insert_set_assignment_target(
+				array_slice( $item, 0, $equals_index ),
+				$reference,
+				$requested_table_name
+			);
+			$value_tokens = array_slice( $item, $equals_index + 1 );
 
 			if ( count( $value_tokens ) === 0 ) {
-				throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... SET statement in DuckDB driver. Assignment value is required for column: ' . $column_name . '.' );
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... SET statement in DuckDB driver. Assignment value is required for column: ' . $target['column_name'] . '.' );
 			}
 
 			$assignments[] = array(
-				'column_name'  => $column_name,
-				'column_sql'   => $column_sql,
+				'column_name'  => $target['column_name'],
+				'column_sql'   => $target['sql'],
 				'value_tokens' => $value_tokens,
 				'value_sql'    => $this->translate_insert_set_value_tokens_to_duckdb_sql( $value_tokens, $seeded_rand_state ),
 			);
-			if ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::COMMA_SYMBOL === $tokens[ $index ]->id ) {
-				++$index;
-			}
 		}
 
 		if ( count( $assignments ) === 0 ) {
@@ -25422,6 +25477,153 @@ class WP_DuckDB_Driver {
 		}
 
 		return $assignments;
+	}
+
+	/**
+	 * Resolve one INSERT ... SET assignment target.
+	 *
+	 * @param WP_Parser_Token[] $tokens Requested assignment target tokens.
+	 * @param array{table_name:string,temporary:bool} $reference Resolved write table reference.
+	 * @param string            $requested_table_name Requested target table name.
+	 * @return array{column_name:string,sql:string}
+	 */
+	private function insert_set_assignment_target( array $tokens, array $reference, string $requested_table_name ): array {
+		if ( 1 === count( $tokens ) ) {
+			$column_name = $this->identifier_value( $tokens[0] );
+			return array(
+				'column_name' => $column_name,
+				'sql'         => $this->connection->quote_identifier( $column_name ),
+			);
+		}
+
+		if ( 3 === count( $tokens ) && WP_MySQL_Lexer::DOT_SYMBOL === $tokens[1]->id ) {
+			$qualifier = $this->identifier_value( $tokens[0] );
+			if (
+				0 !== strcasecmp( $qualifier, $reference['table_name'] )
+				&& 0 !== strcasecmp( $qualifier, $requested_table_name )
+			) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... SET statement in DuckDB driver. Only target table-qualified assignments are supported.' );
+			}
+
+			$column_name = $this->identifier_value( $tokens[2] );
+			return array(
+				'column_name' => $column_name,
+				'sql'         => $this->connection->quote_identifier( $column_name ),
+			);
+		}
+
+		if (
+			5 === count( $tokens )
+			&& WP_MySQL_Lexer::DOT_SYMBOL === $tokens[1]->id
+			&& WP_MySQL_Lexer::DOT_SYMBOL === $tokens[3]->id
+		) {
+			$database = $this->identifier_value( $tokens[0] );
+			$table    = $this->identifier_value( $tokens[2] );
+			if ( 0 === strcasecmp( $database, 'information_schema' ) ) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... SET statement in DuckDB driver. information_schema assignment targets are read-only.' );
+			}
+			if ( 0 !== strcasecmp( $database, $this->database ) ) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... SET statement in DuckDB driver. Only the current database is supported.' );
+			}
+			if (
+				0 !== strcasecmp( $table, $reference['table_name'] )
+				&& 0 !== strcasecmp( $table, $requested_table_name )
+			) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... SET statement in DuckDB driver. Only target table-qualified assignments are supported.' );
+			}
+
+			$column_name = $this->identifier_value( $tokens[4] );
+			return array(
+				'column_name' => $column_name,
+				'sql'         => $this->connection->quote_identifier( $column_name ),
+			);
+		}
+
+		throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... SET statement in DuckDB driver. Only simple column assignments are supported.' );
+	}
+
+	/**
+	 * Locate optional INSERT ... SET row alias syntax before ODKU.
+	 *
+	 * @param WP_Parser_Token[] $tokens SET-list tokens.
+	 * @return int|null Alias token index, or null when absent.
+	 */
+	private function find_insert_set_row_alias_index( array $tokens ): ?int {
+		$depth = 0;
+		for ( $index = 0; $index < count( $tokens ); ++$index ) {
+			if ( WP_MySQL_Lexer::OPEN_PAR_SYMBOL === $tokens[ $index ]->id ) {
+				++$depth;
+				continue;
+			}
+			if ( WP_MySQL_Lexer::CLOSE_PAR_SYMBOL === $tokens[ $index ]->id ) {
+				--$depth;
+				continue;
+			}
+			if (
+				0 === $depth
+				&& WP_MySQL_Lexer::AS_SYMBOL === $tokens[ $index ]->id
+				&& isset( $tokens[ $index + 1 ] )
+				&& ! $this->is_non_identifier_token( $tokens[ $index + 1 ] )
+			) {
+				return $index;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Parse INSERT row alias metadata for ODKU expressions.
+	 *
+	 * @param WP_Parser_Token[] $tokens  Alias tokens beginning with AS.
+	 * @param string[]          $columns Actual inserted columns in order.
+	 * @return array{qualifier:string|null,columns:array<string,string>}
+	 */
+	private function parse_insert_row_alias_map( array $tokens, array $columns ): array {
+		if ( count( $tokens ) === 0 ) {
+			return array(
+				'qualifier' => null,
+				'columns'   => array(),
+			);
+		}
+
+		$this->expect_token( $tokens, 0, WP_MySQL_Lexer::AS_SYMBOL, 'Expected AS before INSERT row alias.' );
+		$qualifier = $this->identifier_value( $tokens[1] ?? null );
+		$index     = 2;
+		$aliases   = array();
+
+		if ( isset( $tokens[ $index ] ) ) {
+			$this->expect_token( $tokens, $index, WP_MySQL_Lexer::OPEN_PAR_SYMBOL, 'Unsupported INSERT row alias in DuckDB driver. Expected alias column list.' );
+			++$index;
+			$alias_items = array();
+			while ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::CLOSE_PAR_SYMBOL !== $tokens[ $index ]->id ) {
+				$alias_items[] = $this->identifier_value( $tokens[ $index ] );
+				++$index;
+				if ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::COMMA_SYMBOL === $tokens[ $index ]->id ) {
+					++$index;
+				}
+			}
+			$this->expect_token( $tokens, $index, WP_MySQL_Lexer::CLOSE_PAR_SYMBOL, 'Unsupported INSERT row alias in DuckDB driver. Expected closing alias column list.' );
+			++$index;
+			if ( isset( $tokens[ $index ] ) ) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT row alias in DuckDB driver. Unexpected tokens after alias column list.' );
+			}
+			if ( count( $alias_items ) !== count( $columns ) ) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT row alias in DuckDB driver. Alias column count must match inserted column count.' );
+			}
+			foreach ( $alias_items as $offset => $alias_column ) {
+				$aliases[ strtolower( $alias_column ) ] = $columns[ $offset ];
+			}
+		} else {
+			foreach ( $columns as $column_name ) {
+				$aliases[ strtolower( $column_name ) ] = $column_name;
+			}
+		}
+
+		return array(
+			'qualifier' => $qualifier,
+			'columns'   => $aliases,
+		);
 	}
 
 	/**
@@ -25489,6 +25691,56 @@ class WP_DuckDB_Driver {
 		return array(
 			'sql'     => $sql,
 			'matched' => $target['matched'],
+		);
+	}
+
+	/**
+	 * Translate MySQL INSERT ... SET ... ON DUPLICATE KEY UPDATE.
+	 *
+	 * @param WP_Parser_Token[] $tokens             MySQL tokens.
+	 * @param int               $table_index        Index of the table token.
+	 * @param int               $set_index          Index of the SET token.
+	 * @param int               $on_duplicate_index Index of the ON token.
+	 * @return array{sql:string,matched:bool,requested_table_name:string} DuckDB SQL and conflict metadata.
+	 */
+	private function translate_insert_set_on_duplicate_key_update_tokens_to_duckdb_sql( array $tokens, int $table_index, int $set_index, int $on_duplicate_index ): array {
+		$components = $this->insert_set_write_components( $tokens, $table_index, $set_index, $on_duplicate_index );
+		$target     = $this->select_on_duplicate_conflict_target_for_rows( $components['table_name'], $components['temporary'], $components['rows'] );
+		$update_sql = $this->translate_on_duplicate_update_tokens_to_duckdb_sql(
+			array_slice( $tokens, $on_duplicate_index + 4 ),
+			$this->write_column_metadata_map( $components['table_name'], $components['temporary'] ),
+			$components['table_name'],
+			$components['requested_table_name'],
+			$components['alias_map']
+		);
+
+		if ( '' === $update_sql ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... ON DUPLICATE KEY UPDATE statement in DuckDB driver. UPDATE list is required.' );
+		}
+
+		$sql = 'INSERT INTO '
+			. $this->connection->quote_identifier( $components['table_name'] )
+			. ' ('
+			. implode( ', ', $components['column_sql'] )
+			. ') VALUES ('
+			. implode( ', ', $components['value_sql'] )
+			. ') ON CONFLICT ('
+			. implode(
+				', ',
+				array_map(
+					function ( string $column_name ): string {
+						return $this->connection->quote_identifier( $column_name );
+					},
+					$target['columns']
+				)
+			)
+			. ') DO UPDATE SET '
+			. $update_sql;
+
+		return array(
+			'sql'                  => $sql,
+			'matched'              => $target['matched'],
+			'requested_table_name' => $components['requested_table_name'],
 		);
 	}
 
@@ -27395,13 +27647,15 @@ class WP_DuckDB_Driver {
 	 * @param array<string,array<string,mixed>>  $metadata_map         Target column metadata keyed by lowercase column name.
 	 * @param string                             $target_table_name    Resolved target table name.
 	 * @param string                             $requested_table_name Requested target table name.
+	 * @param array{qualifier:string|null,columns:array<string,string>} $alias_map Optional INSERT row alias map.
 	 * @return string DuckDB SQL.
 	 */
 	private function translate_on_duplicate_update_tokens_to_duckdb_sql(
 		array $tokens,
 		array $metadata_map,
 		string $target_table_name,
-		string $requested_table_name
+		string $requested_table_name,
+		array $alias_map = array( 'qualifier' => null, 'columns' => array() )
 	): string {
 		$items = array();
 		foreach ( $this->split_top_level_comma_items( $tokens ) as $item ) {
@@ -27417,7 +27671,7 @@ class WP_DuckDB_Driver {
 			}
 
 			$target        = $this->on_duplicate_assignment_target( $left_tokens, $target_table_name, $requested_table_name );
-			$value_sql     = $this->translate_on_duplicate_value_tokens_to_duckdb_sql( $right_tokens );
+			$value_sql     = $this->translate_on_duplicate_value_tokens_to_duckdb_sql( $right_tokens, $alias_map );
 			$column_name   = $target['column_name'];
 			$metadata      = $metadata_map[ strtolower( $column_name ) ] ?? null;
 			$requires_wrap = ! is_array( $metadata ) || ! $this->on_duplicate_update_tokens_are_integer_preserving( $right_tokens, $metadata, $metadata_map );
@@ -27575,10 +27829,11 @@ class WP_DuckDB_Driver {
 	/**
 	 * Translate an ODKU RHS expression, rewriting MySQL VALUES(col) references.
 	 *
-	 * @param WP_Parser_Token[] $tokens RHS tokens.
+	 * @param WP_Parser_Token[] $tokens    RHS tokens.
+	 * @param array{qualifier:string|null,columns:array<string,string>} $alias_map Optional INSERT row alias map.
 	 * @return string DuckDB SQL.
 	 */
-	private function translate_on_duplicate_value_tokens_to_duckdb_sql( array $tokens ): string {
+	private function translate_on_duplicate_value_tokens_to_duckdb_sql( array $tokens, array $alias_map = array( 'qualifier' => null, 'columns' => array() ) ): string {
 		$pieces = array();
 
 		for ( $index = 0; $index < count( $tokens ); ++$index ) {
@@ -27593,6 +27848,40 @@ class WP_DuckDB_Driver {
 				$pieces[] = $this->connection->quote_identifier( $this->identifier_value( $tokens[ $index + 2 ] ) );
 				$index   += 3;
 				continue;
+			}
+
+			if (
+				isset( $tokens[ $index + 2 ] )
+				&& null !== $alias_map['qualifier']
+				&& WP_MySQL_Lexer::DOT_SYMBOL === $tokens[ $index + 1 ]->id
+				&& 0 === strcasecmp( $this->identifier_value( $tokens[ $index ] ), $alias_map['qualifier'] )
+				&& ! $this->is_non_identifier_token( $tokens[ $index + 2 ] )
+			) {
+				$alias_column = strtolower( $this->identifier_value( $tokens[ $index + 2 ] ) );
+				if ( ! isset( $alias_map['columns'][ $alias_column ] ) ) {
+					throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... ON DUPLICATE KEY UPDATE statement in DuckDB driver. Unknown INSERT row alias column.' );
+				}
+				$pieces[] = 'excluded';
+				$pieces[] = '.';
+				$pieces[] = $this->connection->quote_identifier( $alias_map['columns'][ $alias_column ] );
+				$index   += 2;
+				continue;
+			}
+
+			if (
+				count( $alias_map['columns'] ) > 0
+				&& ! $this->is_non_identifier_token( $tokens[ $index ] )
+			) {
+				$alias_column = strtolower( $this->identifier_value( $tokens[ $index ] ) );
+				if ( isset( $alias_map['columns'][ $alias_column ] ) ) {
+					$pieces[] = 'excluded';
+					$pieces[] = '.';
+					$pieces[] = $this->connection->quote_identifier( $alias_map['columns'][ $alias_column ] );
+					continue;
+				}
+				if ( null !== $alias_map['qualifier'] && 0 === strcasecmp( $this->identifier_value( $tokens[ $index ] ), $alias_map['qualifier'] ) ) {
+					throw new WP_DuckDB_Driver_Exception( 'Unsupported INSERT ... ON DUPLICATE KEY UPDATE statement in DuckDB driver. INSERT row alias must reference a column.' );
+				}
 			}
 
 			$pieces[] = $this->translate_tokens_to_duckdb_sql( array( $tokens[ $index ] ) );

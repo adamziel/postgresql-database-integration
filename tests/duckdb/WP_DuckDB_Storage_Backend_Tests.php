@@ -620,6 +620,281 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		);
 	}
 
+	public function test_insert_set_supports_qualified_assignment_targets(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query(
+			'CREATE TABLE wptests_insert_set (
+				id bigint(20) NOT NULL,
+				value longtext NOT NULL,
+				attempts int(11) NOT NULL,
+				PRIMARY KEY (id)
+			)'
+		);
+
+		$this->assertSame(
+			1,
+			$driver->query(
+				"INSERT INTO wptests_insert_set
+				SET wptests_insert_set.id = 1,
+				    wp.wptests_insert_set.value = 'qualified',
+				    attempts = 4"
+			)->rowCount()
+		);
+		$this->assertSame(
+			array(
+				array(
+					'id'       => 1,
+					'value'    => 'qualified',
+					'attempts' => 4,
+				),
+			),
+			$driver->query(
+				'SELECT id, value, attempts
+				FROM wptests_insert_set'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_insert_set_on_duplicate_key_update_uses_unique_metadata_conflict_target(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query(
+			'CREATE TABLE wptests_insert_set_upsert (
+				id bigint(20) NOT NULL AUTO_INCREMENT,
+				slug varchar(191) NOT NULL,
+				value longtext NOT NULL,
+				autoload varchar(20) NOT NULL DEFAULT "yes",
+				PRIMARY KEY (id),
+				UNIQUE KEY slug (slug)
+			)'
+		);
+
+		$insert = "INSERT INTO `wptests_insert_set_upsert`
+			SET `slug` = 'siteurl',
+			    `value` = 'http://example.org',
+			    `autoload` = 'yes'
+			ON DUPLICATE KEY UPDATE `value` = VALUES(`value`),
+			                        `autoload` = VALUES(`autoload`)";
+
+		$this->assertSame( 1, $driver->query( $insert )->rowCount() );
+
+		$update = "INSERT INTO `wptests_insert_set_upsert`
+			SET `slug` = 'siteurl',
+			    `value` = 'http://example.net',
+			    `autoload` = 'no'
+			ON DUPLICATE KEY UPDATE `value` = VALUES(`value`),
+			                        `autoload` = VALUES(`autoload`)";
+
+		$this->assertSame( 1, $driver->query( $update )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'slug'     => 'siteurl',
+					'value'    => 'http://example.net',
+					'autoload' => 'no',
+				),
+			),
+			$driver->query(
+				"SELECT slug, value, autoload
+				FROM wptests_insert_set_upsert
+				ORDER BY id"
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_insert_set_on_duplicate_key_update_supports_qualified_insert_assignment_targets(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query(
+			'CREATE TABLE wptests_qualified_insert_set_upsert (
+				id bigint(20) NOT NULL AUTO_INCREMENT,
+				slug varchar(191) NOT NULL,
+				value longtext NOT NULL,
+				autoload varchar(20) NOT NULL DEFAULT "yes",
+				PRIMARY KEY (id),
+				UNIQUE KEY slug (slug)
+			)'
+		);
+		$driver->query(
+			"INSERT INTO wptests_qualified_insert_set_upsert (slug, value, autoload)
+			VALUES ('siteurl', 'old', 'no')"
+		);
+
+		$upsert = "INSERT INTO `wptests_qualified_insert_set_upsert`
+			SET `wptests_qualified_insert_set_upsert`.`slug` = 'siteurl',
+			    `wp`.`wptests_qualified_insert_set_upsert`.`value` = 'from-set',
+			    `autoload` = 'off'
+			ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)";
+
+		$this->assertSame( 1, $driver->query( $upsert )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'value'    => 'from-set',
+					'autoload' => 'no',
+				),
+			),
+			$driver->query(
+				"SELECT value, autoload
+				FROM wptests_qualified_insert_set_upsert
+				WHERE slug = 'siteurl'"
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_insert_set_on_duplicate_key_update_supports_values_row_alias_expressions(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query(
+			'CREATE TABLE wptests_alias_insert_set_upsert (
+				id bigint(20) NOT NULL AUTO_INCREMENT,
+				slug varchar(191) NOT NULL,
+				value longtext NOT NULL,
+				autoload varchar(20) NOT NULL DEFAULT "yes",
+				PRIMARY KEY (id),
+				UNIQUE KEY slug (slug)
+			)'
+		);
+		$driver->query(
+			"INSERT INTO wptests_alias_insert_set_upsert (slug, value, autoload)
+			VALUES ('siteurl', 'old', 'no')"
+		);
+
+		$upsert = "INSERT INTO `wptests_alias_insert_set_upsert`
+			SET `slug` = 'siteurl',
+			    `value` = 'from-set-alias',
+			    `autoload` = 'off'
+			AS incoming(slug_alias, value_alias, autoload_alias)
+			ON DUPLICATE KEY UPDATE `value` = incoming.`value_alias`,
+			                        `autoload` = autoload_alias";
+
+		$this->assertSame( 1, $driver->query( $upsert )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'value'    => 'from-set-alias',
+					'autoload' => 'off',
+				),
+			),
+			$driver->query(
+				"SELECT value, autoload
+				FROM wptests_alias_insert_set_upsert
+				WHERE slug = 'siteurl'"
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_insert_set_on_duplicate_key_update_supports_integer_values_row_alias_expressions(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query(
+			'CREATE TABLE wptests_alias_counter_upsert (
+				id bigint(20) NOT NULL,
+				attempts int(11) NOT NULL,
+				PRIMARY KEY (id)
+			)'
+		);
+		$driver->query( 'INSERT INTO wptests_alias_counter_upsert (id, attempts) VALUES (1, 4)' );
+
+		$upsert = 'INSERT INTO `wptests_alias_counter_upsert`
+			SET `id` = 1,
+			    `attempts` = 3
+			AS incoming(row_id, incoming_attempts)
+			ON DUPLICATE KEY UPDATE `attempts` = `attempts` + incoming_attempts';
+
+		$this->assertSame( 1, $driver->query( $upsert )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'attempts' => 7,
+				),
+			),
+			$driver->query(
+				'SELECT attempts
+				FROM wptests_alias_counter_upsert
+				WHERE id = 1'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_insert_set_on_duplicate_key_update_rejects_malformed_values_row_aliases(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query(
+			'CREATE TABLE wptests_bad_alias_insert_set_upsert (
+				id bigint(20) NOT NULL AUTO_INCREMENT,
+				slug varchar(191) NOT NULL,
+				value longtext NOT NULL,
+				PRIMARY KEY (id),
+				UNIQUE KEY slug (slug)
+			)'
+		);
+
+		foreach (
+			array(
+				"INSERT INTO `wptests_bad_alias_insert_set_upsert` SET `slug` = 'siteurl', `value` = 'bad' AS incoming(slug_alias) ON DUPLICATE KEY UPDATE `value` = slug_alias",
+				"INSERT INTO `wptests_bad_alias_insert_set_upsert` SET `slug` = 'siteurl', `value` = 'bad' AS incoming ON DUPLICATE KEY UPDATE `value` = incoming.missing",
+				"INSERT INTO `wptests_bad_alias_insert_set_upsert` SET `slug` = 'siteurl', `value` = 'bad' AS incoming ON DUPLICATE KEY UPDATE `value` = incoming",
+			) as $query
+		) {
+			try {
+				$driver->query( $query );
+				$this->fail( 'Expected malformed INSERT ... SET row alias to fail closed.' );
+			} catch ( WP_DuckDB_Driver_Exception $e ) {
+				$this->assertStringContainsString( 'Unsupported INSERT', $e->getMessage(), $query );
+			}
+		}
+	}
+
 	public function test_woocommerce_reserved_stock_insert_select_on_duplicate_key_update(): void {
 		$this->requireDuckDBRuntime();
 
