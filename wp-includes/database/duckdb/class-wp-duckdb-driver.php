@@ -19828,6 +19828,11 @@ class WP_DuckDB_Driver {
 	 * @return WP_DuckDB_Result_Statement
 	 */
 	private function execute_show( array $tokens ): WP_DuckDB_Result_Statement {
+		$diagnostics = $this->parse_show_diagnostics_statement( $tokens );
+		if ( null !== $diagnostics ) {
+			return $this->execute_show_diagnostics( $diagnostics );
+		}
+
 		if ( isset( $tokens[1] ) && WP_MySQL_Lexer::COLLATION_SYMBOL === $tokens[1]->id ) {
 			return $this->execute_show_collation( $tokens );
 		}
@@ -19914,6 +19919,114 @@ class WP_DuckDB_Driver {
 		}
 
 		throw new WP_DuckDB_Driver_Exception( 'Unsupported SHOW statement in DuckDB driver.' );
+	}
+
+	/**
+	 * Parse SHOW WARNINGS/ERRORS and SHOW COUNT(*) WARNINGS/ERRORS.
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @return array{type:string,name:string}|null Parsed diagnostics statement, or null when not a diagnostics SHOW statement.
+	 */
+	private function parse_show_diagnostics_statement( array $tokens ): ?array {
+		if ( ! isset( $tokens[0], $tokens[1] ) || WP_MySQL_Lexer::SHOW_SYMBOL !== $tokens[0]->id ) {
+			return null;
+		}
+
+		if ( WP_MySQL_Lexer::COUNT_SYMBOL === $tokens[1]->id ) {
+			if (
+				! isset( $tokens[2], $tokens[3], $tokens[4], $tokens[5] )
+				|| WP_MySQL_Lexer::OPEN_PAR_SYMBOL !== $tokens[2]->id
+				|| WP_MySQL_Lexer::MULT_OPERATOR !== $tokens[3]->id
+				|| WP_MySQL_Lexer::CLOSE_PAR_SYMBOL !== $tokens[4]->id
+				|| ! in_array( $tokens[5]->id, array( WP_MySQL_Lexer::WARNINGS_SYMBOL, WP_MySQL_Lexer::ERRORS_SYMBOL ), true )
+			) {
+				return null;
+			}
+
+			$name = WP_MySQL_Lexer::WARNINGS_SYMBOL === $tokens[5]->id ? 'warnings' : 'errors';
+			if ( 6 !== count( $tokens ) ) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported SHOW ' . strtoupper( $name ) . ' statement in DuckDB driver.' );
+			}
+
+			return array(
+				'type' => 'count',
+				'name' => $name,
+			);
+		}
+
+		if ( ! in_array( $tokens[1]->id, array( WP_MySQL_Lexer::WARNINGS_SYMBOL, WP_MySQL_Lexer::ERRORS_SYMBOL ), true ) ) {
+			return null;
+		}
+
+		$name = WP_MySQL_Lexer::WARNINGS_SYMBOL === $tokens[1]->id ? 'warnings' : 'errors';
+		if ( 2 !== count( $tokens ) ) {
+			$end = $this->parse_show_diagnostics_limit_clause( $tokens, 2 );
+			if ( null === $end || $end !== count( $tokens ) ) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported SHOW ' . strtoupper( $name ) . ' statement in DuckDB driver.' );
+			}
+		}
+
+		return array(
+			'type' => 'rows',
+			'name' => $name,
+		);
+	}
+
+	/**
+	 * Parse a supported SHOW diagnostics LIMIT clause.
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @param int               $index  Token index after WARNINGS/ERRORS.
+	 * @return int|null Token index after the LIMIT clause, or null when unsupported.
+	 */
+	private function parse_show_diagnostics_limit_clause( array $tokens, int $index ): ?int {
+		if (
+			! isset( $tokens[ $index ], $tokens[ $index + 1 ] )
+			|| WP_MySQL_Lexer::LIMIT_SYMBOL !== $tokens[ $index ]->id
+			|| ! $this->is_show_diagnostics_limit_number_token( $tokens[ $index + 1 ] )
+		) {
+			return null;
+		}
+
+		if ( count( $tokens ) === $index + 2 ) {
+			return $index + 2;
+		}
+
+		if (
+			count( $tokens ) === $index + 4
+			&& isset( $tokens[ $index + 2 ], $tokens[ $index + 3 ] )
+			&& in_array( $tokens[ $index + 2 ]->id, array( WP_MySQL_Lexer::COMMA_SYMBOL, WP_MySQL_Lexer::OFFSET_SYMBOL ), true )
+			&& $this->is_show_diagnostics_limit_number_token( $tokens[ $index + 3 ] )
+		) {
+			return $index + 4;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Check whether a token is an unsigned integer accepted in SHOW diagnostics LIMIT.
+	 *
+	 * @param WP_Parser_Token $token Token.
+	 * @return bool Whether the token is an unsigned integer.
+	 */
+	private function is_show_diagnostics_limit_number_token( WP_Parser_Token $token ): bool {
+		return $this->is_integer_number_token( $token ) && ctype_digit( $token->get_value() );
+	}
+
+	/**
+	 * Execute empty MySQL-shaped diagnostics statements.
+	 *
+	 * @param array{type:string,name:string} $diagnostics Parsed diagnostics statement.
+	 * @return WP_DuckDB_Result_Statement
+	 */
+	private function execute_show_diagnostics( array $diagnostics ): WP_DuckDB_Result_Statement {
+		if ( 'count' === $diagnostics['type'] ) {
+			$column = 'warnings' === $diagnostics['name'] ? '@@session.warning_count' : '@@session.error_count';
+			return new WP_DuckDB_Result_Statement( array( $column ), array( array( 0 ) ) );
+		}
+
+		return new WP_DuckDB_Result_Statement( array( 'Level', 'Code', 'Message' ), array() );
 	}
 
 	/**

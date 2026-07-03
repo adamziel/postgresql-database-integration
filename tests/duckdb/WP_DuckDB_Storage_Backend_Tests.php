@@ -1563,6 +1563,88 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		);
 	}
 
+	public function test_show_warnings_and_errors_return_empty_mysql_shaped_diagnostics_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$warnings = $driver->query( 'SHOW WARNINGS' );
+		$this->assertSame( array(), $warnings->fetchAll( PDO::FETCH_ASSOC ) );
+		$this->assertSame(
+			array( 'Level', 'Code', 'Message' ),
+			array(
+				$warnings->getColumnMeta( 0 )['name'],
+				$warnings->getColumnMeta( 1 )['name'],
+				$warnings->getColumnMeta( 2 )['name'],
+			)
+		);
+
+		$this->assertSame(
+			array(
+				array(
+					'FOUND_ROWS()' => 0,
+				),
+			),
+			$driver->query( 'SELECT FOUND_ROWS()' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$errors = $driver->query( 'SHOW ERRORS LIMIT 0, 10' );
+		$this->assertSame( array(), $errors->fetchAll( PDO::FETCH_ASSOC ) );
+		$this->assertSame(
+			array( 'Level', 'Code', 'Message' ),
+			array(
+				$errors->getColumnMeta( 0 )['name'],
+				$errors->getColumnMeta( 1 )['name'],
+				$errors->getColumnMeta( 2 )['name'],
+			)
+		);
+
+		$limited_warnings = $driver->query( 'SHOW WARNINGS LIMIT 1 OFFSET 0' );
+		$this->assertSame( array(), $limited_warnings->fetchAll( PDO::FETCH_ASSOC ) );
+
+		$this->assertSame(
+			array(
+				array(
+					'@@session.warning_count' => 0,
+				),
+			),
+			$driver->query( 'SHOW COUNT(*) WARNINGS' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame(
+			array(
+				array(
+					0,
+				),
+			),
+			$driver->query( 'SHOW COUNT(*) ERRORS' )->fetchAll( PDO::FETCH_NUM )
+		);
+	}
+
+	public function test_unsupported_show_warnings_and_errors_clauses_fail_closed_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$queries = array(
+			"SHOW WARNINGS WHERE Level = 'Warning'" => 'Unsupported SHOW WARNINGS statement in DuckDB driver.',
+			'SHOW WARNINGS LIMIT bad'               => 'Unsupported SHOW WARNINGS statement in DuckDB driver.',
+			'SHOW WARNINGS LIMIT 1, bad'            => 'Unsupported SHOW WARNINGS statement in DuckDB driver.',
+			'SHOW COUNT(*) WARNINGS LIMIT 1'        => 'Unsupported SHOW WARNINGS statement in DuckDB driver.',
+			"SHOW ERRORS LIKE 'error%'"             => 'Unsupported SHOW ERRORS statement in DuckDB driver.',
+			'SHOW ERRORS LIMIT bad'                 => 'Unsupported SHOW ERRORS statement in DuckDB driver.',
+			'SHOW COUNT(*) ERRORS LIMIT 1'          => 'Unsupported SHOW ERRORS statement in DuckDB driver.',
+		);
+
+		foreach ( $queries as $query => $message ) {
+			try {
+				$driver->query( $query );
+				$this->fail( 'Expected unsupported SHOW diagnostics statement to throw.' );
+			} catch ( WP_DuckDB_Driver_Exception $e ) {
+				$this->assertTrue(
+					$message === $e->getMessage()
+					|| 'DuckDB driver could not parse MySQL statement.' === $e->getMessage(),
+					$query . ': ' . $e->getMessage()
+				);
+			}
+		}
+	}
+
 	public function test_insert_select_on_duplicate_key_update_uses_unique_metadata_conflict_target(): void {
 		$this->requireDuckDBRuntime();
 

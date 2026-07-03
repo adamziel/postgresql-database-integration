@@ -697,7 +697,7 @@ class WP_DuckDB_Connection_Tests extends WP_DuckDB_TestCase {
 		$this->assertSame( array( '00000', null, null ), $stmt->errorInfo() );
 	}
 
-	public function test_sql_warnings_session_variable_is_supported_without_warning_lists(): void {
+	public function test_sql_warnings_session_variable_and_empty_diagnostics_are_supported_without_backend_queries(): void {
 		$empty_result = $this->createDuckDBResult( array(), array() );
 		$duckdb       = new class( $empty_result ) {
 			public $queries = array();
@@ -723,18 +723,23 @@ class WP_DuckDB_Connection_Tests extends WP_DuckDB_TestCase {
 		$this->assertSame( 1, $stmt->columnCount() );
 		$this->assertSame( array( '@@sql_warnings' => 1 ), $stmt->fetch( PDO::FETCH_ASSOC ) );
 
-		$cases = array(
-			'SHOW WARNINGS' => 'Unsupported SHOW statement in DuckDB driver.',
-			'SHOW ERRORS'   => 'Unsupported SHOW statement in DuckDB driver.',
-		);
+		$diagnostics = $driver->query( 'SHOW WARNINGS' );
+		$this->assertSame( 3, $diagnostics->columnCount() );
+		$this->assertSame( array(), $diagnostics->fetchAll( PDO::FETCH_ASSOC ) );
+		$this->assertSame( 'Level', $diagnostics->getColumnMeta( 0 )['name'] );
+		$this->assertSame( 'Code', $diagnostics->getColumnMeta( 1 )['name'] );
+		$this->assertSame( 'Message', $diagnostics->getColumnMeta( 2 )['name'] );
 
-		foreach ( $cases as $sql => $message ) {
-			try {
-				$driver->query( $sql );
-				$this->fail( 'Expected WP_DuckDB_Driver_Exception for: ' . $sql );
-			} catch ( WP_DuckDB_Driver_Exception $e ) {
-				$this->assertStringContainsString( $message, $e->getMessage(), $sql );
-			}
+		$errors = $driver->query( 'SHOW ERRORS LIMIT 0, 10' );
+		$this->assertSame( array(), $errors->fetchAll( PDO::FETCH_ASSOC ) );
+
+		$counts = array(
+			'SHOW COUNT(*) WARNINGS' => '@@session.warning_count',
+			'SHOW COUNT(*) ERRORS'   => '@@session.error_count',
+		);
+		foreach ( $counts as $sql => $column ) {
+			$stmt = $driver->query( $sql );
+			$this->assertSame( array( $column => 0 ), $stmt->fetch( PDO::FETCH_ASSOC ), $sql );
 		}
 
 		$this->assertSame(
