@@ -553,6 +553,40 @@ renders database query output, and fails if WordPress logs DuckDB/database
 errors. Custom backend setup SQL can use `{root}`, `{database_dir}`, `{backend}`,
 and `{backend_slug}` placeholders in this smoke harness.
 
+Run a real local WordPress HTTP benchmark against the DuckDB backends:
+
+```bash
+WORDPRESS_VERSION=7.0 \
+WP_DUCKDB_BENCHMARK_BACKENDS="duckdb json csv parquet" \
+WP_DUCKDB_BENCHMARK_CONCURRENCY="1 2 4 8" \
+WP_DUCKDB_BENCHMARK_SERVER_WORKERS=4 \
+composer run benchmark-duckdb
+```
+
+The benchmark installs a disposable WordPress site for each backend, runs the
+PHP built-in server with multiple workers, and measures:
+
+- front-page `GET /` requests;
+- REST read requests that exercise options, posts, and post meta;
+- REST write requests that insert into a WordPress-managed table and write
+  options.
+
+Each run writes raw JSONL events under
+`artifacts/duckdb-benchmarks/runs/<run-id>/` and regenerates the GitHub Pages
+report under `docs/`. The committed Pages report keeps
+`docs/benchmarks/latest.json` and per-run raw JSONL so later reports can
+aggregate benchmark history without scraping HTML.
+
+Useful knobs:
+
+```bash
+WP_DUCKDB_BENCHMARK_READ_REQUESTS=80 \
+WP_DUCKDB_BENCHMARK_WRITE_REQUESTS=40 \
+WP_DUCKDB_BENCHMARK_CONCURRENCY="1 4 8 16" \
+WP_DUCKDB_BENCHMARK_SERVER_WORKERS=8 \
+./bin/duckdb-wordpress-benchmark.sh duckdb json
+```
+
 Run the DuckDB production-readiness evidence harness when you want structured
 results that can be aggregated into a later report:
 

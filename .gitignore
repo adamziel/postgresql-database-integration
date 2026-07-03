@@ -6,3 +6,4 @@
 /.php-cs-fixer.cache
 /.DS_Store
 /artifacts/duckdb-production-readiness/runs/
+/artifacts/duckdb-benchmarks/runs/
