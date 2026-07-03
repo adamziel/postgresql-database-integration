@@ -1170,6 +1170,56 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		}
 	}
 
+	public function test_malformed_sql_fails_closed_without_php_warnings(): void {
+		$this->requireDuckDBRuntime();
+
+		$driver = $this->create_in_memory_duckdb_driver();
+		$this->create_security_options_table( $driver );
+
+		$warnings = array();
+		set_error_handler(
+			static function ( int $severity, string $message, string $file, int $line ) use ( &$warnings ): bool {
+				$warnings[] = array(
+					'severity' => $severity,
+					'message'  => $message,
+					'file'     => $file,
+					'line'     => $line,
+				);
+
+				return true;
+			}
+		);
+
+		try {
+			$driver->query( "SELECT option_value FROM wptests_options WHERE option_name = 'unterminated'' LIMIT 1" );
+			$this->fail( 'Expected malformed SQL to fail closed.' );
+		} catch ( WP_DuckDB_Driver_Exception $e ) {
+			$this->assertSame( 'DuckDB driver could not parse MySQL statement.', $e->getMessage() );
+		} finally {
+			restore_error_handler();
+		}
+
+		$this->assertSame( array(), $warnings );
+	}
+
+	public function test_wordpress_escaped_backslash_quote_literal_does_not_inject(): void {
+		$this->requireDuckDBRuntime();
+
+		$driver = $this->create_in_memory_duckdb_driver();
+		$this->create_security_options_table( $driver );
+
+		$payload = "plain\\' OR 1=1 -- ";
+		$escaped = addslashes( $payload );
+		$rows    = $driver->query(
+			"SELECT option_name, option_value
+			FROM wptests_options
+			WHERE option_name = '" . $escaped . "'
+			ORDER BY option_id"
+		)->fetchAll( PDO::FETCH_ASSOC );
+
+		$this->assertSame( array(), $rows );
+	}
+
 	public function test_show_variables_returns_mysql_shaped_emulated_session_state(): void {
 		$this->requireDuckDBRuntime();
 
@@ -3255,6 +3305,31 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		$extension = null === $extension ? $backend : $extension;
 		$this->copy_table_to_external_storage( $duckdb, 'wptests_options', $backend, $external_dir . '/wptests_options.' . $extension );
 		$this->copy_table_to_external_storage( $duckdb, 'wptests_posts', $backend, $external_dir . '/wptests_posts.' . $extension );
+	}
+
+	private function create_security_options_table( WP_DuckDB_Driver $driver ): void {
+		$driver->query(
+			"CREATE TABLE wptests_options (
+				option_id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				option_name varchar(191) NOT NULL DEFAULT '',
+				option_value longtext NOT NULL,
+				autoload varchar(20) NOT NULL DEFAULT 'yes',
+				PRIMARY KEY (option_id),
+				UNIQUE KEY option_name (option_name)
+			)"
+		);
+		$driver->query(
+			"INSERT INTO wptests_options (option_name, option_value, autoload)
+			VALUES ('siteurl', 'https://example.test', 'yes')"
+		);
+		$driver->query(
+			"INSERT INTO wptests_options (option_name, option_value, autoload)
+			VALUES ('blogname', 'Security Site', 'yes')"
+		);
+		$driver->query(
+			"INSERT INTO wptests_options (option_name, option_value, autoload)
+			VALUES ('admin_email', 'admin@example.test', 'yes')"
+		);
 	}
 
 	private function copy_table_to_external_storage( $duckdb, string $table, string $backend, string $path ): void {

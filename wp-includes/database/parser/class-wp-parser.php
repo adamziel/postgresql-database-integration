@@ -29,12 +29,12 @@ class WP_Parser {
 	private function parse_recursive( $rule_id ) {
 		$is_terminal = $rule_id <= $this->grammar->highest_terminal_id;
 		if ( $is_terminal ) {
-			if ( $this->position >= count( $this->tokens ) ) {
-				return false;
-			}
-
 			if ( WP_Parser_Grammar::EMPTY_RULE_ID === $rule_id ) {
 				return true;
+			}
+
+			if ( $this->position >= count( $this->tokens ) ) {
+				return false;
 			}
 
 			if ( $this->tokens[ $this->position ]->id === $rule_id ) {
@@ -52,9 +52,9 @@ class WP_Parser {
 		// Bale out from processing the current branch if none of its rules can
 		// possibly match the current token.
 		if ( isset( $this->grammar->lookahead_is_match_possible[ $rule_id ] ) ) {
-			$token_id = $this->tokens[ $this->position ]->id;
+			$token_id = isset( $this->tokens[ $this->position ] ) ? $this->tokens[ $this->position ]->id : null;
 			if (
-				! isset( $this->grammar->lookahead_is_match_possible[ $rule_id ][ $token_id ] ) &&
+				( null === $token_id || ! isset( $this->grammar->lookahead_is_match_possible[ $rule_id ][ $token_id ] ) ) &&
 				! isset( $this->grammar->lookahead_is_match_possible[ $rule_id ][ WP_Parser_Grammar::EMPTY_RULE_ID ] )
 			) {
 				return false;
