@@ -1645,6 +1645,152 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		}
 	}
 
+	public function test_show_character_set_returns_mysql_shaped_static_rows_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$rows = $driver->query( 'SHOW CHARACTER SET' );
+		$this->assertSame(
+			array(
+				array(
+					'Charset'           => 'binary',
+					'Description'       => 'Binary pseudo charset',
+					'Default collation' => 'binary',
+					'Maxlen'            => '1',
+				),
+				array(
+					'Charset'           => 'utf8',
+					'Description'       => 'UTF-8 Unicode',
+					'Default collation' => 'utf8_general_ci',
+					'Maxlen'            => '3',
+				),
+				array(
+					'Charset'           => 'utf8mb4',
+					'Description'       => 'UTF-8 Unicode',
+					'Default collation' => 'utf8mb4_0900_ai_ci',
+					'Maxlen'            => '4',
+				),
+			),
+			$rows->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame( 'Charset', $rows->getColumnMeta( 0 )['name'] );
+		$this->assertSame( 'Description', $rows->getColumnMeta( 1 )['name'] );
+		$this->assertSame( 'Default collation', $rows->getColumnMeta( 2 )['name'] );
+		$this->assertSame( 'Maxlen', $rows->getColumnMeta( 3 )['name'] );
+
+		$charset_rows = $driver->query( 'SHOW CHARSET' )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( array( 'binary', 'utf8', 'utf8mb4' ), array_column( $charset_rows, 'Charset' ) );
+
+		$like_rows = $driver->query( "SHOW CHARACTER SET LIKE 'utf8%'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( array( 'utf8', 'utf8mb4' ), array_column( $like_rows, 'Charset' ) );
+
+		$where_rows = $driver->query( "SHOW CHARACTER SET WHERE `Default collation` = 'binary'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( array( 'binary' ), array_column( $where_rows, 'Charset' ) );
+
+		$where_expression_rows = $driver->query( "SHOW CHARACTER SET WHERE Charset <> 'binary' AND Maxlen >= '4'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( array( 'utf8mb4' ), array_column( $where_expression_rows, 'Charset' ) );
+	}
+
+	public function test_show_engines_returns_mysql_shaped_static_rows_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$rows      = $driver->query( 'SHOW ENGINES' );
+		$all_rows  = $rows->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame(
+			array( 'InnoDB', 'MEMORY', 'MyISAM' ),
+			array_column( $all_rows, 'Engine' )
+		);
+		$this->assertSame( 'Engine', $rows->getColumnMeta( 0 )['name'] );
+		$this->assertSame( 'Support', $rows->getColumnMeta( 1 )['name'] );
+		$this->assertSame( 'Comment', $rows->getColumnMeta( 2 )['name'] );
+		$this->assertSame( 'Transactions', $rows->getColumnMeta( 3 )['name'] );
+		$this->assertSame( 'XA', $rows->getColumnMeta( 4 )['name'] );
+		$this->assertSame( 'Savepoints', $rows->getColumnMeta( 5 )['name'] );
+		$this->assertSame( 'DEFAULT', $all_rows[0]['Support'] );
+		$this->assertSame( 'YES', $all_rows[0]['Transactions'] );
+		$this->assertSame( 'YES', $all_rows[0]['Savepoints'] );
+	}
+
+	public function test_show_status_returns_bounded_mysql_shaped_rows_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$rows   = $driver->query( 'SHOW STATUS' );
+		$status = array_column( $rows->fetchAll( PDO::FETCH_ASSOC ), 'Value', 'Variable_name' );
+
+		$this->assertSame( '0', $status['Uptime'] );
+		$this->assertSame( '1', $status['Threads_connected'] );
+		$this->assertSame( '0', $status['Questions'] );
+		$this->assertSame( 'Variable_name', $rows->getColumnMeta( 0 )['name'] );
+		$this->assertSame( 'Value', $rows->getColumnMeta( 1 )['name'] );
+
+		$threads = $driver->query( "SHOW GLOBAL STATUS LIKE 'Threads_%'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame(
+			array( 'Threads_cached', 'Threads_connected', 'Threads_created', 'Threads_running' ),
+			array_column( $threads, 'Variable_name' )
+		);
+
+		$handlers = $driver->query( "SHOW SESSION STATUS WHERE Variable_name LIKE 'Handler_read_%'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame(
+			array(
+				'Handler_read_first',
+				'Handler_read_key',
+				'Handler_read_next',
+				'Handler_read_prev',
+				'Handler_read_rnd',
+				'Handler_read_rnd_next',
+			),
+			array_column( $handlers, 'Variable_name' )
+		);
+
+		$non_zero_values = $driver->query( "SHOW STATUS WHERE Value <> '0'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame(
+			array(
+				'Connections',
+				'Threads_connected',
+				'Threads_created',
+				'Threads_running',
+			),
+			array_column( $non_zero_values, 'Variable_name' )
+		);
+
+		$selected_values = $driver->query( "SHOW LOCAL STATUS WHERE Variable_name IN ('Uptime', 'Threads_running')" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame(
+			array(
+				'Threads_running',
+				'Uptime',
+			),
+			array_column( $selected_values, 'Variable_name' )
+		);
+		$this->assertSame(
+			array(
+				array(
+					'FOUND_ROWS()' => 2,
+				),
+			),
+			$driver->query( 'SELECT FOUND_ROWS()' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_unsupported_show_status_clauses_fail_closed_for_duckdb(): void {
+		$driver  = $this->create_in_memory_duckdb_driver();
+		$queries = array(
+			'SHOW STATUS LIMIT 1',
+			'SHOW STATUS LIKE Threads_%',
+		);
+
+		foreach ( $queries as $query ) {
+			try {
+				$driver->query( $query );
+				$this->fail( 'Expected unsupported SHOW STATUS statement to throw.' );
+			} catch ( WP_DuckDB_Driver_Exception $e ) {
+				$this->assertTrue(
+					false !== strpos( $e->getMessage(), 'SHOW STATUS' )
+					|| 'DuckDB driver could not parse MySQL statement.' === $e->getMessage(),
+					$query . ': ' . $e->getMessage()
+				);
+			}
+		}
+	}
+
 	public function test_insert_select_on_duplicate_key_update_uses_unique_metadata_conflict_target(): void {
 		$this->requireDuckDBRuntime();
 

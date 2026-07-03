@@ -19833,8 +19833,36 @@ class WP_DuckDB_Driver {
 			return $this->execute_show_diagnostics( $diagnostics );
 		}
 
+		if (
+			isset( $tokens[1] )
+			&& (
+				WP_MySQL_Lexer::CHARSET_SYMBOL === $tokens[1]->id
+				|| (
+					isset( $tokens[2] )
+					&& WP_MySQL_Lexer::CHAR_SYMBOL === $tokens[1]->id
+					&& WP_MySQL_Lexer::SET_SYMBOL === $tokens[2]->id
+				)
+			)
+		) {
+			return $this->execute_show_character_set( $tokens );
+		}
+
 		if ( isset( $tokens[1] ) && WP_MySQL_Lexer::COLLATION_SYMBOL === $tokens[1]->id ) {
 			return $this->execute_show_collation( $tokens );
+		}
+
+		if (
+			isset( $tokens[1] )
+			&& (
+				WP_MySQL_Lexer::ENGINES_SYMBOL === $tokens[1]->id
+				|| (
+					isset( $tokens[2] )
+					&& WP_MySQL_Lexer::STORAGE_SYMBOL === $tokens[1]->id
+					&& WP_MySQL_Lexer::ENGINES_SYMBOL === $tokens[2]->id
+				)
+			)
+		) {
+			return $this->execute_show_engines( $tokens );
 		}
 
 		if ( isset( $tokens[1] ) && WP_MySQL_Lexer::DATABASES_SYMBOL === $tokens[1]->id ) {
@@ -19843,6 +19871,20 @@ class WP_DuckDB_Driver {
 
 		if ( isset( $tokens[1] ) && WP_MySQL_Lexer::GRANTS_SYMBOL === $tokens[1]->id ) {
 			return $this->execute_show_grants( $tokens );
+		}
+
+		if (
+			isset( $tokens[1] )
+			&& (
+				WP_MySQL_Lexer::STATUS_SYMBOL === $tokens[1]->id
+				|| (
+					isset( $tokens[2] )
+					&& in_array( $tokens[1]->id, array( WP_MySQL_Lexer::GLOBAL_SYMBOL, WP_MySQL_Lexer::LOCAL_SYMBOL, WP_MySQL_Lexer::SESSION_SYMBOL ), true )
+					&& WP_MySQL_Lexer::STATUS_SYMBOL === $tokens[2]->id
+				)
+			)
+		) {
+			return $this->execute_show_status( $tokens );
 		}
 
 		if (
@@ -20030,6 +20072,46 @@ class WP_DuckDB_Driver {
 	}
 
 	/**
+	 * Execute SHOW CHARACTER SET/CHARSET.
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @return WP_DuckDB_Result_Statement
+	 */
+	private function execute_show_character_set( array $tokens ): WP_DuckDB_Result_Statement {
+		$index = 1;
+		if ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::CHARSET_SYMBOL === $tokens[ $index ]->id ) {
+			++$index;
+		} else {
+			$this->expect_token( $tokens, $index, WP_MySQL_Lexer::CHAR_SYMBOL, 'Expected CHARACTER in SHOW CHARACTER SET statement.' );
+			++$index;
+			$this->expect_token( $tokens, $index, WP_MySQL_Lexer::SET_SYMBOL, 'Expected SET in SHOW CHARACTER SET statement.' );
+			++$index;
+		}
+
+		return $this->execute_static_show_metadata_statement(
+			array( 'Charset', 'Description', 'Default collation', 'Maxlen' ),
+			$this->show_character_set_rows(),
+			'Charset',
+			$tokens,
+			$index,
+			'SHOW CHARACTER SET'
+		);
+	}
+
+	/**
+	 * Build SQLite-compatible SHOW CHARACTER SET rows.
+	 *
+	 * @return array<int,array{0:string,1:string,2:string,3:string}> SHOW CHARACTER SET rows.
+	 */
+	private function show_character_set_rows(): array {
+		return array(
+			array( 'binary', 'Binary pseudo charset', 'binary', '1' ),
+			array( 'utf8', 'UTF-8 Unicode', 'utf8_general_ci', '3' ),
+			array( 'utf8mb4', 'UTF-8 Unicode', 'utf8mb4_0900_ai_ci', '4' ),
+		);
+	}
+
+	/**
 	 * Execute SHOW COLLATION.
 	 *
 	 * @param WP_Parser_Token[] $tokens MySQL tokens.
@@ -20088,6 +20170,44 @@ class WP_DuckDB_Driver {
 	}
 
 	/**
+	 * Execute SHOW [STORAGE] ENGINES.
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @return WP_DuckDB_Result_Statement
+	 */
+	private function execute_show_engines( array $tokens ): WP_DuckDB_Result_Statement {
+		$index = 1;
+		if ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::STORAGE_SYMBOL === $tokens[ $index ]->id ) {
+			++$index;
+		}
+
+		$this->expect_token( $tokens, $index, WP_MySQL_Lexer::ENGINES_SYMBOL, 'Expected ENGINES in SHOW ENGINES statement.' );
+		++$index;
+
+		return $this->execute_static_show_metadata_statement(
+			array( 'Engine', 'Support', 'Comment', 'Transactions', 'XA', 'Savepoints' ),
+			$this->show_engine_rows(),
+			'Engine',
+			$tokens,
+			$index,
+			'SHOW ENGINES'
+		);
+	}
+
+	/**
+	 * Build MySQL-shaped SHOW ENGINES rows.
+	 *
+	 * @return array<int,array{0:string,1:string,2:string,3:string,4:string,5:string}> SHOW ENGINES rows.
+	 */
+	private function show_engine_rows(): array {
+		return array(
+			array( 'InnoDB', 'DEFAULT', 'Supports transactions, row-level locking, and foreign keys', 'YES', 'YES', 'YES' ),
+			array( 'MEMORY', 'YES', 'Hash based, stored in memory, useful for temporary tables', 'NO', 'NO', 'NO' ),
+			array( 'MyISAM', 'YES', 'MyISAM storage engine', 'NO', 'NO', 'NO' ),
+		);
+	}
+
+	/**
 	 * Execute SHOW GRANTS.
 	 *
 	 * @param WP_Parser_Token[] $tokens MySQL tokens.
@@ -20112,6 +20232,34 @@ class WP_DuckDB_Driver {
 					'GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, SHUTDOWN, PROCESS, FILE, REFERENCES, INDEX, ALTER, SHOW DATABASES, SUPER, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, CREATE USER, EVENT, TRIGGER, CREATE TABLESPACE, CREATE ROLE, DROP ROLE ON *.* TO `root`@`localhost` WITH GRANT OPTION',
 				),
 			)
+		);
+	}
+
+	/**
+	 * Execute SHOW STATUS.
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @return WP_DuckDB_Result_Statement
+	 */
+	private function execute_show_status( array $tokens ): WP_DuckDB_Result_Statement {
+		$index = 1;
+		if (
+			isset( $tokens[ $index ] )
+			&& in_array( $tokens[ $index ]->id, array( WP_MySQL_Lexer::GLOBAL_SYMBOL, WP_MySQL_Lexer::LOCAL_SYMBOL, WP_MySQL_Lexer::SESSION_SYMBOL ), true )
+		) {
+			++$index;
+		}
+
+		$this->expect_token( $tokens, $index, WP_MySQL_Lexer::STATUS_SYMBOL, 'Expected STATUS in SHOW STATUS statement.' );
+		++$index;
+
+		return $this->execute_static_show_metadata_statement(
+			array( 'Variable_name', 'Value' ),
+			$this->show_status_rows(),
+			'Variable_name',
+			$tokens,
+			$index,
+			'SHOW STATUS'
 		);
 	}
 
@@ -20181,6 +20329,40 @@ class WP_DuckDB_Driver {
 		}
 
 		return $rows;
+	}
+
+	/**
+	 * Build MySQL-shaped SHOW STATUS rows.
+	 *
+	 * @return array<int,array{0:string,1:string}> SHOW STATUS rows.
+	 */
+	private function show_status_rows(): array {
+		return array(
+			array( 'Aborted_clients', '0' ),
+			array( 'Aborted_connects', '0' ),
+			array( 'Bytes_received', '0' ),
+			array( 'Bytes_sent', '0' ),
+			array( 'Connections', '1' ),
+			array( 'Created_tmp_disk_tables', '0' ),
+			array( 'Created_tmp_files', '0' ),
+			array( 'Created_tmp_tables', '0' ),
+			array( 'Handler_read_first', '0' ),
+			array( 'Handler_read_key', '0' ),
+			array( 'Handler_read_next', '0' ),
+			array( 'Handler_read_prev', '0' ),
+			array( 'Handler_read_rnd', '0' ),
+			array( 'Handler_read_rnd_next', '0' ),
+			array( 'Handler_write', '0' ),
+			array( 'Open_tables', '0' ),
+			array( 'Opened_tables', '0' ),
+			array( 'Questions', '0' ),
+			array( 'Slow_queries', '0' ),
+			array( 'Threads_cached', '0' ),
+			array( 'Threads_connected', '1' ),
+			array( 'Threads_created', '1' ),
+			array( 'Threads_running', '1' ),
+			array( 'Uptime', '0' ),
+		);
 	}
 
 	/**
