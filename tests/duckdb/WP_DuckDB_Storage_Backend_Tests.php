@@ -1791,6 +1791,106 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		}
 	}
 
+	public function test_empty_show_metadata_surfaces_return_mysql_shaped_rows_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$cases = array(
+			'SHOW EVENTS'           => array( 'Db', 'Name', 'Definer', 'Time zone', 'Type', 'Execute at', 'Interval value', 'Interval field', 'Starts', 'Ends', 'Status', 'Originator', 'character_set_client', 'collation_connection', 'Database Collation' ),
+			"SHOW EVENTS LIKE 'ev_%'" => array( 'Db', 'Name', 'Definer', 'Time zone', 'Type', 'Execute at', 'Interval value', 'Interval field', 'Starts', 'Ends', 'Status', 'Originator', 'character_set_client', 'collation_connection', 'Database Collation' ),
+			'SHOW FUNCTION STATUS'  => array( 'Db', 'Name', 'Type', 'Definer', 'Modified', 'Created', 'Security_type', 'Comment', 'character_set_client', 'collation_connection', 'Database Collation' ),
+			"SHOW PROCEDURE STATUS LIKE 'proc_%'" => array( 'Db', 'Name', 'Type', 'Definer', 'Modified', 'Created', 'Security_type', 'Comment', 'character_set_client', 'collation_connection', 'Database Collation' ),
+			'SHOW PLUGINS'          => array( 'Name', 'Status', 'Type', 'Library', 'License' ),
+			'SHOW TRIGGERS'         => array( 'Trigger', 'Event', 'Table', 'Statement', 'Timing', 'Created', 'sql_mode', 'Definer', 'character_set_client', 'collation_connection', 'Database Collation' ),
+			"SHOW TRIGGERS WHERE Event = 'INSERT'" => array( 'Trigger', 'Event', 'Table', 'Statement', 'Timing', 'Created', 'sql_mode', 'Definer', 'character_set_client', 'collation_connection', 'Database Collation' ),
+		);
+
+		foreach ( $cases as $query => $columns ) {
+			$stmt = $driver->query( $query );
+			$this->assertSame( array(), $stmt->fetchAll( PDO::FETCH_ASSOC ), $query );
+			$this->assertSame(
+				$columns,
+				array_map(
+					function ( int $index ) use ( $stmt ): string {
+						return (string) $stmt->getColumnMeta( $index )['name'];
+					},
+					range( 0, count( $columns ) - 1 )
+				),
+				$query
+			);
+		}
+
+		$this->assertSame(
+			array(
+				array(
+					'FOUND_ROWS()' => 0,
+				),
+			),
+			$driver->query( 'SELECT FOUND_ROWS()' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_show_processlist_returns_mysql_shaped_static_row_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$rows = $driver->query( 'SHOW FULL PROCESSLIST' );
+		$this->assertSame(
+			array(
+				array(
+					'Id'      => 1,
+					'User'    => 'duckdb',
+					'Host'    => 'localhost',
+					'db'      => 'wp',
+					'Command' => 'Query',
+					'Time'    => 0,
+					'State'   => '',
+					'Info'    => '',
+				),
+			),
+			$rows->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame(
+			array( 'Id', 'User', 'Host', 'db', 'Command', 'Time', 'State', 'Info' ),
+			array_map(
+				function ( int $index ) use ( $rows ): string {
+					return (string) $rows->getColumnMeta( $index )['name'];
+				},
+				range( 0, 7 )
+			)
+		);
+
+		$this->assertSame(
+			array(
+				array(
+					'FOUND_ROWS()' => 1,
+				),
+			),
+			$driver->query( 'SELECT FOUND_ROWS()' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_show_open_tables_reports_visible_user_tables_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$driver->query( 'CREATE TABLE wptests_options (`option_id` INTEGER PRIMARY KEY, option_name TEXT)' );
+		$driver->query( 'CREATE TEMPORARY TABLE wptests_temp_probe (`id` INTEGER)' );
+
+		$rows = $driver->query( 'SHOW OPEN TABLES' )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertContains( 'wptests_options', array_column( $rows, 'Table' ) );
+		$this->assertContains( 'wptests_temp_probe', array_column( $rows, 'Table' ) );
+
+		foreach ( $rows as $row ) {
+			$this->assertSame( 'wp', $row['Database'] );
+			$this->assertSame( '0', $row['In_use'] );
+			$this->assertSame( '0', $row['Name_locked'] );
+		}
+
+		$filtered = $driver->query( "SHOW OPEN TABLES LIKE 'wptests_temp_%'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( array( 'wptests_temp_probe' ), array_column( $filtered, 'Table' ) );
+
+		$other_database = $driver->query( 'SHOW OPEN TABLES FROM other_database' )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( array(), $other_database );
+	}
+
 	public function test_insert_select_on_duplicate_key_update_uses_unique_metadata_conflict_target(): void {
 		$this->requireDuckDBRuntime();
 
