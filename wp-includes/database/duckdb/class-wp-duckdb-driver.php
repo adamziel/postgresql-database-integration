@@ -331,6 +331,13 @@ class WP_DuckDB_Driver {
 	private $session_system_variables = array();
 
 	/**
+	 * MySQL global system variables emulated by this connection-local driver.
+	 *
+	 * @var array<string,int|string|null>
+	 */
+	private $global_system_variables = array();
+
+	/**
 	 * MySQL user variables emulated by this driver.
 	 *
 	 * @var array<string,int|float|string|null>
@@ -532,6 +539,7 @@ class WP_DuckDB_Driver {
 		}
 		$this->current_database = $this->database;
 		$this->session_system_variables = $this->default_session_system_variables();
+		$this->global_system_variables  = $this->default_global_system_variables();
 
 		if ( isset( $options['connection'] ) ) {
 			if ( ! $options['connection'] instanceof WP_DuckDB_Connection ) {
@@ -612,6 +620,26 @@ class WP_DuckDB_Driver {
 			'use_secondary_engine'                    => 'ON',
 			'wait_timeout'                            => 28800,
 		);
+	}
+
+	/**
+	 * Get MySQL-shaped default global system variables for WordPress tooling.
+	 *
+	 * @return array<string,int|string|null> Default values.
+	 */
+	private function default_global_system_variables(): array {
+		$defaults             = $this->default_session_system_variables();
+		$defaults['sql_mode'] = $this->default_sql_mode_string();
+		return $defaults;
+	}
+
+	/**
+	 * Get the default MySQL SQL mode string.
+	 *
+	 * @return string Default SQL mode.
+	 */
+	private function default_sql_mode_string(): string {
+		return 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
 	}
 
 	/**
@@ -4201,11 +4229,14 @@ class WP_DuckDB_Driver {
 		$read_only_values = $this->read_only_system_variable_values();
 
 		if ( 'global' === $scope ) {
-			if ( 'sql_mode' === $normalized_name ) {
-				return implode( ',', $this->active_sql_modes );
+			if ( array_key_exists( $normalized_name, $this->global_system_variables ) ) {
+				return $this->global_system_variables[ $normalized_name ];
 			}
 
-			if ( isset( self::READ_ONLY_GLOBAL_SYSTEM_VARIABLES[ $normalized_name ] ) ) {
+			if (
+				isset( self::READ_ONLY_GLOBAL_SYSTEM_VARIABLES[ $normalized_name ] )
+				|| isset( self::READ_ONLY_SYSTEM_VARIABLES[ $normalized_name ] )
+			) {
 				return $read_only_values[ $normalized_name ];
 			}
 		}
@@ -10827,7 +10858,9 @@ class WP_DuckDB_Driver {
 	 */
 	private function is_supported_system_variable_reference( string $name, string $scope, bool $explicit_scope ): bool {
 		if ( 'global' === $scope ) {
-			return isset( self::READ_ONLY_GLOBAL_SYSTEM_VARIABLES[ $name ] );
+			return array_key_exists( $name, $this->global_system_variables )
+				|| isset( self::READ_ONLY_GLOBAL_SYSTEM_VARIABLES[ $name ] )
+				|| isset( self::READ_ONLY_SYSTEM_VARIABLES[ $name ] );
 		}
 
 		if ( isset( self::SUPPORTED_SESSION_SYSTEM_VARIABLES[ $name ] ) ) {
@@ -13587,18 +13620,31 @@ class WP_DuckDB_Driver {
 			$assignments = array( $assignments[0] );
 		}
 
-		$default_scope = WP_MySQL_Lexer::SESSION_SYMBOL;
-		foreach ( $assignments as $assignment ) {
-			if ( $this->apply_set_charset_assignment( $assignment ) ) {
-				continue;
-			}
+		$session_snapshot   = $this->session_system_variables;
+		$global_snapshot    = $this->global_system_variables;
+		$user_snapshot      = $this->user_variables;
+		$sql_modes_snapshot = $this->active_sql_modes;
 
-			if ( $this->is_set_user_variable_assignment( $assignment ) ) {
-				$this->execute_set_user_variable_assignment( $assignment );
-				continue;
-			}
+		try {
+			$default_scope = WP_MySQL_Lexer::SESSION_SYMBOL;
+			foreach ( $assignments as $assignment ) {
+				if ( $this->apply_set_charset_assignment( $assignment ) ) {
+					continue;
+				}
 
-			$default_scope = $this->execute_set_session_system_variable_assignment( $assignment, $default_scope );
+				if ( $this->is_set_user_variable_assignment( $assignment ) ) {
+					$this->execute_set_user_variable_assignment( $assignment );
+					continue;
+				}
+
+				$default_scope = $this->execute_set_session_system_variable_assignment( $assignment, $default_scope );
+			}
+		} catch ( Throwable $e ) {
+			$this->session_system_variables = $session_snapshot;
+			$this->global_system_variables  = $global_snapshot;
+			$this->user_variables           = $user_snapshot;
+			$this->active_sql_modes         = $sql_modes_snapshot;
+			throw $e;
 		}
 
 		return $this->empty_ddl_result();
@@ -13767,7 +13813,7 @@ class WP_DuckDB_Driver {
 		$scope  = $target['scope'];
 		$index  = $target['next_index'];
 
-		$this->assert_supported_set_session_scope( $scope );
+		$this->assert_supported_set_system_variable_scope( $scope, $name );
 		$this->expect_token(
 			$tokens,
 			$index,
@@ -13777,7 +13823,9 @@ class WP_DuckDB_Driver {
 		++$index;
 
 		$value = $this->normalize_set_session_system_variable_value_tokens( $name, array_slice( $tokens, $index ) );
-		if ( 'sql_mode' === $name ) {
+		if ( WP_MySQL_Lexer::GLOBAL_SYMBOL === $scope ) {
+			$this->global_system_variables[ $name ] = $value;
+		} elseif ( 'sql_mode' === $name ) {
 			$this->active_sql_modes = $this->normalize_sql_modes( (string) $value );
 		} else {
 			$this->session_system_variables[ $name ] = $value;
@@ -14345,7 +14393,7 @@ class WP_DuckDB_Driver {
 		}
 
 		if ( 'default' === strtolower( $token->get_value() ) ) {
-			return 'DEFAULT';
+			return $this->default_sql_mode_string();
 		}
 
 		if ( ! $this->is_non_identifier_token( $token ) ) {
@@ -14464,12 +14512,17 @@ class WP_DuckDB_Driver {
 	}
 
 	/**
-	 * Assert that a SET assignment uses a supported session scope.
+	 * Assert that a SET assignment uses a supported system-variable scope.
 	 *
 	 * @param int $scope SET statement scope token ID.
+	 * @param string $name Normalized variable name.
 	 */
-	private function assert_supported_set_session_scope( int $scope ): void {
+	private function assert_supported_set_system_variable_scope( int $scope, string $name ): void {
 		if ( WP_MySQL_Lexer::SESSION_SYMBOL === $scope ) {
+			return;
+		}
+
+		if ( WP_MySQL_Lexer::GLOBAL_SYMBOL === $scope && 'group_concat_max_len' !== $name ) {
 			return;
 		}
 
@@ -19988,7 +20041,7 @@ class WP_DuckDB_Driver {
 	private function show_variables_rows( string $scope ): array {
 		$defaults = $this->default_session_system_variables();
 		$values   = 'global' === $scope
-			? $defaults
+			? array_replace( $this->default_global_system_variables(), $this->global_system_variables )
 			: array_replace( $defaults, $this->session_system_variables );
 		$read_only_values = $this->read_only_system_variable_values();
 
@@ -20027,10 +20080,9 @@ class WP_DuckDB_Driver {
 	 */
 	private function format_show_variable_value( string $name, array $values, string $scope ): string {
 		if ( 'sql_mode' === $name ) {
-			return implode( ',', $this->active_sql_modes );
-		}
-		if ( 'global' === $scope && 'autocommit' === $name ) {
-			return '1';
+			return 'global' === $scope && array_key_exists( $name, $values )
+				? (string) $values[ $name ]
+				: implode( ',', $this->active_sql_modes );
 		}
 
 		$read_only_values = $this->read_only_system_variable_values();

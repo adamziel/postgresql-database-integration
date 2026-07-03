@@ -23,6 +23,19 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		parent::tearDown();
 	}
 
+	private function create_in_memory_duckdb_driver(): WP_DuckDB_Driver {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+
+		return $storage->create_driver( 'wp' );
+	}
+
 	public static function backend_provider(): array {
 		return array(
 			'parquet' => array( 'parquet' ),
@@ -1324,6 +1337,229 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 				),
 			),
 			$driver->query( "SHOW VARIABLES WHERE Variable_name = 'wait_timeout'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_sql_warnings_save_restore_flow_is_emulated_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$this->assertSame( 0, $driver->query( 'SET @old_sql_warnings = @@sql_warnings' )->rowCount() );
+		$this->assertSame( 0, $driver->query( 'SET sql_warnings = ON' )->rowCount() );
+
+		$this->assertSame(
+			array(
+				array(
+					'saved_warnings' => 0,
+					'warning_state'  => 1,
+				),
+			),
+			$driver->query( 'SELECT @old_sql_warnings AS saved_warnings, @@sql_warnings warning_state' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'sql_warnings',
+					'Value'         => '1',
+				),
+			),
+			$driver->query( "SHOW VARIABLES WHERE Variable_name = 'sql_warnings'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( 'SET @@sql_warnings = @old_sql_warnings' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'warning_state' => 0,
+				),
+			),
+			$driver->query( 'SELECT @@sql_warnings warning_state' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_keyword_session_system_variables_can_be_set_and_selected_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$cases = array(
+			'SET default_collation_for_utf8mb4 = utf8mb4_0900_ai_ci' => array( '@@default_collation_for_utf8mb4', 'utf8mb4_0900_ai_ci' ),
+			'SET resultset_metadata = FULL'                          => array( '@@resultset_metadata', 'FULL' ),
+			'SET session_track_gtids = OWN_GTID'                     => array( '@@session_track_gtids', 'OWN_GTID' ),
+			'SET session_track_transaction_info = STATE'             => array( '@@session_track_transaction_info', 'STATE' ),
+			'SET transaction_isolation = SERIALIZABLE'               => array( '@@transaction_isolation', 'SERIALIZABLE' ),
+			'SET use_secondary_engine = FORCED'                      => array( '@@use_secondary_engine', 'FORCED' ),
+		);
+
+		foreach ( $cases as $query => $expected ) {
+			$this->assertSame( 0, $driver->query( $query )->rowCount(), $query );
+			$this->assertSame(
+				array(
+					array(
+						$expected[0] => $expected[1],
+					),
+				),
+				$driver->query( 'SELECT ' . $expected[0] )->fetchAll( PDO::FETCH_ASSOC ),
+				$query
+			);
+		}
+	}
+
+	public function test_on_off_session_system_variables_can_be_set_and_selected_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$cases = array(
+			'SET autocommit = ON'                                  => array( '@@autocommit', 1 ),
+			'SET big_tables = OFF'                                 => array( '@@big_tables', 0 ),
+			'SET end_markers_in_json = ON'                         => array( '@@end_markers_in_json', 1 ),
+			'SET explicit_defaults_for_timestamp = OFF'            => array( '@@explicit_defaults_for_timestamp', 0 ),
+			'SET keep_files_on_create = ON'                        => array( '@@keep_files_on_create', 1 ),
+			'SET old_alter_table = OFF'                            => array( '@@old_alter_table', 0 ),
+			'SET print_identified_with_as_hex = ON'                => array( '@@print_identified_with_as_hex', 1 ),
+			'SET require_row_format = OFF'                         => array( '@@require_row_format', 0 ),
+			'SET select_into_disk_sync = ON'                       => array( '@@select_into_disk_sync', 1 ),
+			'SET session_track_schema = ON'                        => array( '@@session_track_schema', 1 ),
+			'SET session_track_state_change = OFF'                 => array( '@@session_track_state_change', 0 ),
+			'SET show_create_table_skip_secondary_engine = ON'     => array( '@@show_create_table_skip_secondary_engine', 1 ),
+			'SET show_create_table_verbosity = OFF'                => array( '@@show_create_table_verbosity', 0 ),
+			'SET sql_auto_is_null = ON'                            => array( '@@sql_auto_is_null', 1 ),
+			'SET sql_big_selects = OFF'                            => array( '@@sql_big_selects', 0 ),
+			'SET sql_buffer_result = ON'                           => array( '@@sql_buffer_result', 1 ),
+			'SET sql_safe_updates = OFF'                           => array( '@@sql_safe_updates', 0 ),
+			'SET sql_warnings = ON'                                => array( '@@sql_warnings', 1 ),
+			'SET transaction_read_only = OFF'                      => array( '@@transaction_read_only', 0 ),
+		);
+
+		foreach ( $cases as $query => $expected ) {
+			$this->assertSame( 0, $driver->query( $query )->rowCount(), $query );
+			$this->assertSame(
+				array(
+					array(
+						$expected[0] => $expected[1],
+					),
+				),
+				$driver->query( 'SELECT ' . $expected[0] )->fetchAll( PDO::FETCH_ASSOC ),
+				$query
+			);
+		}
+
+		$this->assertSame( 0, $driver->query( "SET autocommit = 'on', big_tables = 'off'" )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'@@autocommit' => 1,
+					'@@big_tables' => 0,
+				),
+			),
+			$driver->query( 'SELECT @@autocommit, @@big_tables' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_global_system_variables_use_separate_duckdb_emulated_state(): void {
+		$driver           = $this->create_in_memory_duckdb_driver();
+		$default_sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+
+		$this->assertSame( 0, $driver->query( 'SET GLOBAL foreign_key_checks = 0' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'global_fk'  => 0,
+					'session_fk' => 1,
+				),
+			),
+			$driver->query( 'SELECT @@GLOBAL.foreign_key_checks AS global_fk, @@SESSION.foreign_key_checks AS session_fk' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'foreign_key_checks',
+					'Value'         => '0',
+				),
+			),
+			$driver->query( "SHOW GLOBAL VARIABLES WHERE Variable_name = 'foreign_key_checks'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'foreign_key_checks',
+					'Value'         => '1',
+				),
+			),
+			$driver->query( "SHOW VARIABLES WHERE Variable_name = 'foreign_key_checks'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( "SET GLOBAL sql_mode = 'ANSI_QUOTES'" )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'global_mode'  => 'ANSI_QUOTES',
+					'session_mode' => $default_sql_mode,
+				),
+			),
+			$driver->query( 'SELECT @@GLOBAL.sql_mode AS global_mode, @@SESSION.sql_mode AS session_mode' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'sql_mode',
+					'Value'         => 'ANSI_QUOTES',
+				),
+			),
+			$driver->query( "SHOW GLOBAL VARIABLES WHERE Variable_name = 'sql_mode'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'sql_mode',
+					'Value'         => $default_sql_mode,
+				),
+			),
+			$driver->query( "SHOW VARIABLES WHERE Variable_name = 'sql_mode'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_comma_separated_set_assignments_are_atomic_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$this->assertSame( 0, $driver->query( 'SET autocommit = ON, big_tables = OFF' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'@@autocommit' => 1,
+					'@@big_tables' => 0,
+				),
+			),
+			$driver->query( 'SELECT @@autocommit, @@big_tables' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		try {
+			$driver->query( 'SET autocommit = OFF, unsupported_setting = 1' );
+			$this->fail( 'Expected unsupported SET statement to throw.' );
+		} catch ( WP_DuckDB_Driver_Exception $e ) {
+			$this->assertStringContainsString( 'Unsupported SET session variable', $e->getMessage() );
+		}
+
+		$this->assertSame(
+			array(
+				array(
+					'@@autocommit' => 1,
+					'@@big_tables' => 0,
+				),
+			),
+			$driver->query( 'SELECT @@autocommit, @@big_tables' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		try {
+			$driver->query( 'SET GLOBAL foreign_key_checks = 0, group_concat_max_len = 1000000' );
+			$this->fail( 'Expected unsupported SET GLOBAL group_concat_max_len statement to throw.' );
+		} catch ( WP_DuckDB_Driver_Exception $e ) {
+			$this->assertStringContainsString( 'Unsupported SET statement type', $e->getMessage() );
+		}
+
+		$this->assertSame(
+			array(
+				array(
+					'global_fk' => 1,
+				),
+			),
+			$driver->query( 'SELECT @@GLOBAL.foreign_key_checks AS global_fk' )->fetchAll( PDO::FETCH_ASSOC )
 		);
 	}
 

@@ -253,6 +253,25 @@ if ( ! in_array( $backend, array( 'duckdb', 'duck', 'native', 'file' ), true ) )
 	$external_storage_dir = duckdb_smoke_expand_placeholders( duckdb_smoke_env_first( array( 'WP_DUCKDB_EXTERNAL_STORAGE_DIR', 'DUCKDB_EXTERNAL_STORAGE_DIR' ) ), $placeholders );
 	$working_database     = duckdb_smoke_expand_placeholders( duckdb_smoke_env_first( array( 'WP_DUCKDB_WORKING_DATABASE_FILE', 'DUCKDB_WORKING_DATABASE_FILE' ) ), $placeholders );
 	$file_extension       = duckdb_smoke_env_first( array( 'WP_DUCKDB_BACKEND_FILE_EXTENSION', 'DUCKDB_BACKEND_FILE_EXTENSION' ) );
+	$preset_read_sql      = null;
+	$preset_write_sql     = null;
+	$preset_setup_sql     = null;
+	$preset_atomic_flush  = null;
+
+	if ( 'pipe_text' === $backend ) {
+		$file_extension   = null === $file_extension ? 'psv' : $file_extension;
+		$preset_read_sql  = "SELECT * FROM read_csv_auto({path}, HEADER = true, DELIM = '|')";
+		$preset_write_sql = "COPY {table} TO {path} (HEADER, DELIMITER '|')";
+	} elseif ( 'sqlite_attach' === $backend ) {
+		$preset_read_sql      = 'SELECT * FROM wp_store.{table}';
+		$preset_write_sql     = 'CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}';
+		$preset_setup_sql     = array(
+			'INSTALL sqlite',
+			'LOAD sqlite',
+			"ATTACH '{database_dir}/wordpress.sqlite' AS wp_store (TYPE sqlite)",
+		);
+		$preset_atomic_flush  = false;
+	}
 
 	if ( null === $external_storage_dir && ( in_array( $backend, array( 'csv', 'json', 'parquet' ), true ) || null !== $file_extension ) ) {
 		$external_storage_dir = $database_dir . 'duckdb-' . $backend_slug . '/';
@@ -272,11 +291,17 @@ if ( ! in_array( $backend, array( 'duckdb', 'duck', 'native', 'file' ), true ) )
 	}
 
 	$read_sql = duckdb_smoke_env_first( array( 'WP_DUCKDB_BACKEND_READ_SQL', 'DUCKDB_BACKEND_READ_SQL' ) );
+	if ( null === $read_sql ) {
+		$read_sql = $preset_read_sql;
+	}
 	if ( null !== $read_sql ) {
 		$config .= 'define( \'DUCKDB_BACKEND_READ_SQL\', ' . var_export( $read_sql, true ) . " );\n";
 	}
 
 	$write_sql = duckdb_smoke_env_first( array( 'WP_DUCKDB_BACKEND_WRITE_SQL', 'DUCKDB_BACKEND_WRITE_SQL' ) );
+	if ( null === $write_sql ) {
+		$write_sql = $preset_write_sql;
+	}
 	if ( null !== $write_sql ) {
 		$config .= 'define( \'DUCKDB_BACKEND_WRITE_SQL\', ' . var_export( $write_sql, true ) . " );\n";
 	}
@@ -295,6 +320,14 @@ if ( ! in_array( $backend, array( 'duckdb', 'duck', 'native', 'file' ), true ) )
 		if ( null !== $setup_sql ) {
 			$setup_sql = duckdb_smoke_expand_placeholders( $setup_sql, $placeholders );
 			$config .= 'define( \'DUCKDB_BACKEND_SETUP_SQL\', ' . var_export( $setup_sql, true ) . " );\n";
+		} elseif ( null !== $preset_setup_sql ) {
+			$setup_sql = array_map(
+				static function ( string $statement ) use ( $placeholders ): string {
+					return duckdb_smoke_expand_placeholders( $statement, $placeholders );
+				},
+				$preset_setup_sql
+			);
+			$config .= 'define( \'DUCKDB_BACKEND_SETUP_SQL\', ' . var_export( $setup_sql, true ) . " );\n";
 		}
 	}
 
@@ -304,6 +337,9 @@ if ( ! in_array( $backend, array( 'duckdb', 'duck', 'native', 'file' ), true ) )
 	}
 
 	$atomic_flush = duckdb_smoke_bool_env( array( 'WP_DUCKDB_BACKEND_ATOMIC_FLUSH', 'DUCKDB_BACKEND_ATOMIC_FLUSH' ) );
+	if ( null === $atomic_flush ) {
+		$atomic_flush = $preset_atomic_flush;
+	}
 	if ( null !== $atomic_flush ) {
 		$config .= 'define( \'DUCKDB_BACKEND_ATOMIC_FLUSH\', ' . ( $atomic_flush ? 'true' : 'false' ) . " );\n";
 	}
