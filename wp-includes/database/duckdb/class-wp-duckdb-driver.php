@@ -43,8 +43,13 @@ class WP_DuckDB_Driver {
 		'autocommit'                              => true,
 		'big_tables'                              => true,
 		'character_set_client'                    => true,
+		'character_set_connection'                => true,
+		'character_set_database'                  => true,
 		'character_set_results'                   => true,
+		'character_set_server'                    => true,
 		'collation_connection'                    => true,
+		'collation_database'                      => true,
+		'collation_server'                        => true,
 		'default_collation_for_utf8mb4'           => true,
 		'default_storage_engine'                  => true,
 		'end_markers_in_json'                     => true,
@@ -79,7 +84,12 @@ class WP_DuckDB_Driver {
 
 	const STRING_SESSION_SYSTEM_VARIABLES = array(
 		'character_set_client'           => true,
+		'character_set_connection'       => true,
+		'character_set_database'         => true,
 		'character_set_results'          => true,
+		'character_set_server'           => true,
+		'collation_database'             => true,
+		'collation_server'               => true,
 		'collation_connection'           => true,
 		'default_collation_for_utf8mb4'  => true,
 		'default_storage_engine'         => true,
@@ -470,7 +480,7 @@ class WP_DuckDB_Driver {
 			throw new InvalidArgumentException( 'DuckDB driver option "database" must not be empty.' );
 		}
 		$this->current_database = $this->database;
-		$this->session_system_variables['group_concat_max_len'] = self::DEFAULT_GROUP_CONCAT_MAX_LEN;
+		$this->session_system_variables = $this->default_session_system_variables();
 
 		if ( isset( $options['connection'] ) ) {
 			if ( ! $options['connection'] instanceof WP_DuckDB_Connection ) {
@@ -488,6 +498,56 @@ class WP_DuckDB_Driver {
 		$this->initialize_session_macros();
 
 		$this->client_info = $this->format_mysql_version();
+	}
+
+	/**
+	 * Get MySQL-shaped default session system variables for WordPress tooling.
+	 *
+	 * @return array<string,int|string|null> Default values.
+	 */
+	private function default_session_system_variables(): array {
+		return array(
+			'autocommit'                              => 1,
+			'big_tables'                              => 0,
+			'character_set_client'                    => 'utf8mb4',
+			'character_set_connection'                => 'utf8mb4',
+			'character_set_database'                  => 'utf8mb4',
+			'character_set_results'                   => 'utf8mb4',
+			'character_set_server'                    => 'utf8mb4',
+			'collation_connection'                    => 'utf8mb4_unicode_ci',
+			'collation_database'                      => 'utf8mb4_unicode_ci',
+			'collation_server'                        => 'utf8mb4_unicode_ci',
+			'default_collation_for_utf8mb4'           => 'utf8mb4_0900_ai_ci',
+			'default_storage_engine'                  => 'InnoDB',
+			'end_markers_in_json'                     => 0,
+			'explicit_defaults_for_timestamp'         => 1,
+			'foreign_key_checks'                      => 1,
+			'group_concat_max_len'                    => self::DEFAULT_GROUP_CONCAT_MAX_LEN,
+			'keep_files_on_create'                    => 0,
+			'max_allowed_packet'                      => 67108864,
+			'old_alter_table'                         => 0,
+			'print_identified_with_as_hex'            => 0,
+			'require_row_format'                      => 0,
+			'resultset_metadata'                      => 'FULL',
+			'select_into_disk_sync'                   => 0,
+			'session_track_gtids'                     => 'OFF',
+			'session_track_schema'                    => 1,
+			'session_track_state_change'              => 0,
+			'session_track_transaction_info'          => 'OFF',
+			'show_create_table_skip_secondary_engine' => 0,
+			'show_create_table_verbosity'             => 0,
+			'sql_auto_is_null'                        => 0,
+			'sql_big_selects'                         => 1,
+			'sql_buffer_result'                       => 0,
+			'sql_notes'                               => 1,
+			'sql_safe_updates'                        => 0,
+			'sql_warnings'                            => 0,
+			'time_zone'                               => 'SYSTEM',
+			'transaction_isolation'                   => 'REPEATABLE-READ',
+			'transaction_read_only'                   => 0,
+			'unique_checks'                           => 1,
+			'use_secondary_engine'                    => 'ON',
+		);
 	}
 
 	/**
@@ -19640,22 +19700,86 @@ class WP_DuckDB_Driver {
 	 */
 	private function execute_show_variables( array $tokens ): WP_DuckDB_Result_Statement {
 		$index = 1;
+		$scope = 'session';
 		if (
 			isset( $tokens[ $index ] )
 			&& in_array( $tokens[ $index ]->id, array( WP_MySQL_Lexer::GLOBAL_SYMBOL, WP_MySQL_Lexer::LOCAL_SYMBOL, WP_MySQL_Lexer::SESSION_SYMBOL ), true )
 		) {
+			$scope = WP_MySQL_Lexer::GLOBAL_SYMBOL === $tokens[ $index ]->id ? 'global' : 'session';
 			++$index;
 		}
 
 		$this->expect_token( $tokens, $index, WP_MySQL_Lexer::VARIABLES_SYMBOL, 'Expected VARIABLES in SHOW VARIABLES statement.' );
 		++$index;
 
-		$this->consume_show_like_or_where_clause( $tokens, $index, 'SHOW VARIABLES' );
-
-		return new WP_DuckDB_Result_Statement(
+		return $this->execute_static_show_metadata_statement(
 			array( 'Variable_name', 'Value' ),
-			array()
+			$this->show_variables_rows( $scope ),
+			'Variable_name',
+			$tokens,
+			$index,
+			'SHOW VARIABLES'
 		);
+	}
+
+	/**
+	 * Build MySQL-shaped SHOW VARIABLES rows.
+	 *
+	 * @param string $scope Variable scope: session or global.
+	 * @return array<int,array{0:string,1:string}> SHOW VARIABLES rows.
+	 */
+	private function show_variables_rows( string $scope ): array {
+		$defaults = $this->default_session_system_variables();
+		$values   = 'global' === $scope
+			? $defaults
+			: array_replace( $defaults, $this->session_system_variables );
+
+		$names = array_keys( $defaults );
+		$index = array_search( 'sql_buffer_result', $names, true );
+		if ( false === $index ) {
+			$names[] = 'sql_mode';
+		} else {
+			array_splice( $names, $index + 1, 0, array( 'sql_mode' ) );
+		}
+
+		$names[] = 'version';
+		$names[] = 'version_comment';
+
+		$rows = array();
+		foreach ( $names as $name ) {
+			$rows[] = array(
+				$name,
+				$this->format_show_variable_value( $name, $values, $scope ),
+			);
+		}
+
+		return $rows;
+	}
+
+	/**
+	 * Format one SHOW VARIABLES value.
+	 *
+	 * @param string                       $name   Variable name.
+	 * @param array<string,int|string|null> $values Scoped variable values.
+	 * @param string                       $scope  Variable scope.
+	 * @return string Value.
+	 */
+	private function format_show_variable_value( string $name, array $values, string $scope ): string {
+		if ( 'sql_mode' === $name ) {
+			return implode( ',', $this->active_sql_modes );
+		}
+		if ( 'version' === $name ) {
+			return $this->format_mysql_system_variable_version();
+		}
+		if ( 'version_comment' === $name ) {
+			return 'MySQL Community Server - GPL';
+		}
+		if ( 'global' === $scope && 'autocommit' === $name ) {
+			return '1';
+		}
+
+		$value = $values[ $name ] ?? null;
+		return null === $value ? '' : (string) $value;
 	}
 
 	/**

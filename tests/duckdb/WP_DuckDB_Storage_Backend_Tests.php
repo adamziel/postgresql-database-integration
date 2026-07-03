@@ -917,6 +917,138 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		}
 	}
 
+	public function test_show_variables_returns_mysql_shaped_emulated_session_state(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$variables = array();
+		foreach ( $driver->query( 'SHOW VARIABLES' )->fetchAll( PDO::FETCH_ASSOC ) as $row ) {
+			$variables[ $row['Variable_name'] ] = $row['Value'];
+		}
+
+		$this->assertGreaterThan( 20, count( $variables ) );
+		$this->assertSame( 'utf8mb4', $variables['character_set_client'] );
+		$this->assertSame( 'utf8mb4', $variables['character_set_connection'] );
+		$this->assertSame( 'utf8mb4', $variables['character_set_results'] );
+		$this->assertSame( 'utf8mb4_unicode_ci', $variables['collation_connection'] );
+		$this->assertSame( 'InnoDB', $variables['default_storage_engine'] );
+		$this->assertSame( '1', $variables['autocommit'] );
+		$this->assertSame( '1', $variables['foreign_key_checks'] );
+		$this->assertSame( '1024', $variables['group_concat_max_len'] );
+		$this->assertSame( '67108864', $variables['max_allowed_packet'] );
+		$this->assertSame( 'SYSTEM', $variables['time_zone'] );
+		$this->assertSame( '8.0.38', $variables['version'] );
+		$this->assertSame( 'MySQL Community Server - GPL', $variables['version_comment'] );
+		$this->assertSame(
+			'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES',
+			$variables['sql_mode']
+		);
+
+		$this->assertSame(
+			array(
+				array(
+					'charset_connection' => 'utf8mb4',
+					'max_allowed_packet' => 67108864,
+					'engine'             => 'InnoDB',
+				),
+			),
+			$driver->query(
+				'SELECT @@character_set_connection AS charset_connection,
+					@@max_allowed_packet AS max_allowed_packet,
+					@@default_storage_engine AS engine'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_show_variables_like_where_and_session_updates_are_emulated(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'group_concat_max_len',
+					'Value'         => '1024',
+				),
+			),
+			$driver->query( "SHOW VARIABLES LIKE 'group_concat_max_len'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$sql_rows = $driver->query( "SHOW VARIABLES LIKE 'sql_%'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame(
+			array(
+				'sql_auto_is_null',
+				'sql_big_selects',
+				'sql_buffer_result',
+				'sql_mode',
+				'sql_notes',
+				'sql_safe_updates',
+				'sql_warnings',
+			),
+			array_column( $sql_rows, 'Variable_name' )
+		);
+
+		$this->assertSame(
+			array(
+				'character_set_client',
+				'character_set_connection',
+				'character_set_database',
+				'character_set_results',
+				'character_set_server',
+			),
+			array_column(
+				$driver->query( "SHOW VARIABLES WHERE Value = 'utf8mb4'" )->fetchAll( PDO::FETCH_ASSOC ),
+				'Variable_name'
+			)
+		);
+
+		$this->assertSame( 0, $driver->query( 'SET SESSION group_concat_max_len = 5' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'group_concat_max_len',
+					'Value'         => '5',
+				),
+			),
+			$driver->query( "SHOW SESSION VARIABLES WHERE Variable_name = 'group_concat_max_len'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( "SET SESSION sql_mode = 'STRICT_ALL_TABLES'" )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'sql_mode',
+					'Value'         => 'STRICT_ALL_TABLES',
+				),
+			),
+			$driver->query( "SHOW VARIABLES WHERE Variable_name = 'sql_mode'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'group_concat_max_len',
+					'Value'         => '1024',
+				),
+			),
+			$driver->query( "SHOW GLOBAL VARIABLES WHERE Variable_name = 'group_concat_max_len'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
 	public function test_insert_select_on_duplicate_key_update_uses_unique_metadata_conflict_target(): void {
 		$this->requireDuckDBRuntime();
 
