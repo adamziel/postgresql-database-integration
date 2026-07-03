@@ -76,9 +76,16 @@ class WP_DuckDB_Driver {
 		'explicit_defaults_for_timestamp'         => true,
 		'foreign_key_checks'                      => true,
 		'group_concat_max_len'                    => true,
+		'innodb_lock_wait_timeout'                => true,
+		'interactive_timeout'                     => true,
 		'keep_files_on_create'                    => true,
+		'lock_wait_timeout'                       => true,
+		'net_read_timeout'                        => true,
+		'net_write_timeout'                       => true,
 		'old_alter_table'                         => true,
 		'print_identified_with_as_hex'            => true,
+		'pseudo_replica_mode'                     => true,
+		'pseudo_slave_mode'                       => true,
 		'require_row_format'                      => true,
 		'resultset_metadata'                      => true,
 		'select_into_disk_sync'                   => true,
@@ -91,15 +98,21 @@ class WP_DuckDB_Driver {
 		'sql_auto_is_null'                        => true,
 		'sql_big_selects'                         => true,
 		'sql_buffer_result'                       => true,
+		'sql_log_bin'                             => true,
 		'sql_mode'                                => true,
 		'sql_notes'                               => true,
+		'sql_quote_show_create'                   => true,
 		'sql_safe_updates'                        => true,
 		'sql_warnings'                            => true,
+		'storage_engine'                          => true,
 		'time_zone'                               => true,
 		'transaction_isolation'                   => true,
 		'transaction_read_only'                   => true,
+		'tx_isolation'                            => true,
+		'tx_read_only'                            => true,
 		'unique_checks'                           => true,
 		'use_secondary_engine'                    => true,
+		'wait_timeout'                            => true,
 	);
 
 	const STRING_SESSION_SYSTEM_VARIABLES = array(
@@ -116,14 +129,32 @@ class WP_DuckDB_Driver {
 		'resultset_metadata'             => true,
 		'session_track_gtids'            => true,
 		'session_track_transaction_info' => true,
+		'storage_engine'                 => true,
 		'time_zone'                      => true,
 		'transaction_isolation'          => true,
+		'tx_isolation'                   => true,
 		'use_secondary_engine'           => true,
 	);
 
+	const INTEGER_SESSION_SYSTEM_VARIABLES = array(
+		'innodb_lock_wait_timeout' => true,
+		'interactive_timeout'      => true,
+		'lock_wait_timeout'        => true,
+		'net_read_timeout'         => true,
+		'net_write_timeout'        => true,
+		'wait_timeout'             => true,
+	);
+
 	const READ_ONLY_SYSTEM_VARIABLES = array(
-		'version'         => true,
-		'version_comment' => true,
+		'hostname'               => true,
+		'large_files_support'    => true,
+		'lower_case_table_names' => true,
+		'port'                   => true,
+		'protocol_version'       => true,
+		'server_id'              => true,
+		'socket'                 => true,
+		'version'                => true,
+		'version_comment'        => true,
 	);
 
 	const READ_ONLY_GLOBAL_SYSTEM_VARIABLES = array(
@@ -543,10 +574,17 @@ class WP_DuckDB_Driver {
 			'explicit_defaults_for_timestamp'         => 1,
 			'foreign_key_checks'                      => 1,
 			'group_concat_max_len'                    => self::DEFAULT_GROUP_CONCAT_MAX_LEN,
+			'innodb_lock_wait_timeout'                => 50,
+			'interactive_timeout'                     => 28800,
 			'keep_files_on_create'                    => 0,
+			'lock_wait_timeout'                       => 31536000,
 			'max_allowed_packet'                      => 67108864,
+			'net_read_timeout'                        => 30,
+			'net_write_timeout'                       => 60,
 			'old_alter_table'                         => 0,
 			'print_identified_with_as_hex'            => 0,
+			'pseudo_replica_mode'                     => 0,
+			'pseudo_slave_mode'                       => 0,
 			'require_row_format'                      => 0,
 			'resultset_metadata'                      => 'FULL',
 			'select_into_disk_sync'                   => 0,
@@ -559,14 +597,42 @@ class WP_DuckDB_Driver {
 			'sql_auto_is_null'                        => 0,
 			'sql_big_selects'                         => 1,
 			'sql_buffer_result'                       => 0,
+			'sql_log_bin'                             => 1,
 			'sql_notes'                               => 1,
+			'sql_quote_show_create'                   => 1,
 			'sql_safe_updates'                        => 0,
 			'sql_warnings'                            => 0,
+			'storage_engine'                          => 'InnoDB',
 			'time_zone'                               => 'SYSTEM',
 			'transaction_isolation'                   => 'REPEATABLE-READ',
 			'transaction_read_only'                   => 0,
+			'tx_isolation'                            => 'REPEATABLE-READ',
+			'tx_read_only'                            => 0,
 			'unique_checks'                           => 1,
 			'use_secondary_engine'                    => 'ON',
+			'wait_timeout'                            => 28800,
+		);
+	}
+
+	/**
+	 * Get MySQL-shaped read-only system variable values.
+	 *
+	 * @return array<string,int|string> Read-only values.
+	 */
+	private function read_only_system_variable_values(): array {
+		return array(
+			'gtid_purged'                     => '',
+			'hostname'                        => 'localhost',
+			'large_files_support'             => 'ON',
+			'log_bin'                         => 0,
+			'log_bin_trust_function_creators' => 0,
+			'lower_case_table_names'          => 0,
+			'port'                            => 3306,
+			'protocol_version'                => 10,
+			'server_id'                       => 0,
+			'socket'                          => '',
+			'version'                         => $this->format_mysql_system_variable_version(),
+			'version_comment'                 => 'MySQL Community Server - GPL',
 		);
 	}
 
@@ -4113,12 +4179,9 @@ class WP_DuckDB_Driver {
 			return implode( ',', $this->active_sql_modes );
 		}
 
-		if ( 'version' === $normalized_name ) {
-			return $this->format_mysql_system_variable_version();
-		}
-
-		if ( 'version_comment' === $normalized_name ) {
-			return 'MySQL Community Server - GPL';
+		$read_only_values = $this->read_only_system_variable_values();
+		if ( isset( self::READ_ONLY_SYSTEM_VARIABLES[ $normalized_name ] ) || isset( self::READ_ONLY_GLOBAL_SYSTEM_VARIABLES[ $normalized_name ] ) ) {
+			return $read_only_values[ $normalized_name ];
 		}
 
 		$normalized_name = $this->normalize_supported_session_system_variable_name( $name );
@@ -4135,6 +4198,7 @@ class WP_DuckDB_Driver {
 	 */
 	private function get_system_variable( string $name, string $scope ) {
 		$normalized_name = strtolower( $name );
+		$read_only_values = $this->read_only_system_variable_values();
 
 		if ( 'global' === $scope ) {
 			if ( 'sql_mode' === $normalized_name ) {
@@ -4142,7 +4206,7 @@ class WP_DuckDB_Driver {
 			}
 
 			if ( isset( self::READ_ONLY_GLOBAL_SYSTEM_VARIABLES[ $normalized_name ] ) ) {
-				return null;
+				return $read_only_values[ $normalized_name ];
 			}
 		}
 
@@ -10774,7 +10838,8 @@ class WP_DuckDB_Driver {
 			return true;
 		}
 
-		return ! $explicit_scope && isset( self::READ_ONLY_SYSTEM_VARIABLES[ $name ] );
+		return ! $explicit_scope
+			&& ( isset( self::READ_ONLY_SYSTEM_VARIABLES[ $name ] ) || isset( self::READ_ONLY_GLOBAL_SYSTEM_VARIABLES[ $name ] ) );
 	}
 
 	/**
@@ -13835,6 +13900,9 @@ class WP_DuckDB_Driver {
 		if ( 'group_concat_max_len' === $name ) {
 			return $this->normalize_set_group_concat_max_len_value( $token );
 		}
+		if ( isset( self::INTEGER_SESSION_SYSTEM_VARIABLES[ $name ] ) ) {
+			return $this->normalize_set_integer_session_system_variable_value( $name, $token );
+		}
 		if ( isset( self::STRING_SESSION_SYSTEM_VARIABLES[ $name ] ) ) {
 			return $this->normalize_set_string_session_system_variable_value( $name, $token );
 		}
@@ -13864,7 +13932,8 @@ class WP_DuckDB_Driver {
 			return 0;
 		}
 		if ( 'default' === $lower ) {
-			return 'DEFAULT';
+			$defaults = $this->default_session_system_variables();
+			return $defaults[ $name ] ?? 'DEFAULT';
 		}
 		if ( WP_MySQL_Lexer::INT_NUMBER === $token->id && ( '0' === $value || '1' === $value ) ) {
 			return (int) $value;
@@ -13937,6 +14006,37 @@ class WP_DuckDB_Driver {
 	}
 
 	/**
+	 * Normalize SET values for integer-valued session variables.
+	 *
+	 * @param string          $name  Normalized variable name.
+	 * @param WP_Parser_Token $token Value token.
+	 * @return int Normalized integer.
+	 */
+	private function normalize_set_integer_session_system_variable_value( string $name, WP_Parser_Token $token ): int {
+		if ( ! $this->is_non_identifier_token( $token ) && 'default' === strtolower( $token->get_value() ) ) {
+			$defaults = $this->default_session_system_variables();
+			return (int) ( $defaults[ $name ] ?? 0 );
+		}
+
+		if ( ! in_array( $token->id, array( WP_MySQL_Lexer::INT_NUMBER, WP_MySQL_Lexer::LONG_NUMBER, WP_MySQL_Lexer::ULONGLONG_NUMBER ), true ) ) {
+			throw $this->new_unsupported_set_session_system_variable_value_exception( $name );
+		}
+
+		$value = ltrim( $token->get_value(), '+' );
+		if ( '' === $value || ! ctype_digit( $value ) ) {
+			throw $this->new_unsupported_set_session_system_variable_value_exception( $name );
+		}
+		if (
+			strlen( $value ) > strlen( (string) PHP_INT_MAX )
+			|| ( strlen( $value ) === strlen( (string) PHP_INT_MAX ) && strcmp( $value, (string) PHP_INT_MAX ) > 0 )
+		) {
+			return PHP_INT_MAX;
+		}
+
+		return (int) $value;
+	}
+
+	/**
 	 * Normalize a restored dump check variable value.
 	 *
 	 * @param string $name  Normalized variable name.
@@ -13987,6 +14087,28 @@ class WP_DuckDB_Driver {
 		if ( 'group_concat_max_len' === $name ) {
 			if ( null === $value || 'DEFAULT' === $value ) {
 				return self::DEFAULT_GROUP_CONCAT_MAX_LEN;
+			}
+			if ( is_int( $value ) ) {
+				return max( 0, $value );
+			}
+			if ( is_string( $value ) && ctype_digit( $value ) ) {
+				if (
+					strlen( $value ) > strlen( (string) PHP_INT_MAX )
+					|| ( strlen( $value ) === strlen( (string) PHP_INT_MAX ) && strcmp( $value, (string) PHP_INT_MAX ) > 0 )
+				) {
+					return PHP_INT_MAX;
+				}
+
+				return (int) $value;
+			}
+
+			throw $this->new_unsupported_set_session_system_variable_value_exception( $name );
+		}
+
+		if ( isset( self::INTEGER_SESSION_SYSTEM_VARIABLES[ $name ] ) ) {
+			if ( null === $value || 'DEFAULT' === $value ) {
+				$defaults = $this->default_session_system_variables();
+				return (int) ( $defaults[ $name ] ?? 0 );
 			}
 			if ( is_int( $value ) ) {
 				return max( 0, $value );
@@ -19868,6 +19990,7 @@ class WP_DuckDB_Driver {
 		$values   = 'global' === $scope
 			? $defaults
 			: array_replace( $defaults, $this->session_system_variables );
+		$read_only_values = $this->read_only_system_variable_values();
 
 		$names = array_keys( $defaults );
 		$index = array_search( 'sql_buffer_result', $names, true );
@@ -19877,8 +20000,11 @@ class WP_DuckDB_Driver {
 			array_splice( $names, $index + 1, 0, array( 'sql_mode' ) );
 		}
 
-		$names[] = 'version';
-		$names[] = 'version_comment';
+		foreach ( array_keys( $read_only_values ) as $read_only_name ) {
+			if ( ! in_array( $read_only_name, $names, true ) ) {
+				$names[] = $read_only_name;
+			}
+		}
 
 		$rows = array();
 		foreach ( $names as $name ) {
@@ -19903,17 +20029,12 @@ class WP_DuckDB_Driver {
 		if ( 'sql_mode' === $name ) {
 			return implode( ',', $this->active_sql_modes );
 		}
-		if ( 'version' === $name ) {
-			return $this->format_mysql_system_variable_version();
-		}
-		if ( 'version_comment' === $name ) {
-			return 'MySQL Community Server - GPL';
-		}
 		if ( 'global' === $scope && 'autocommit' === $name ) {
 			return '1';
 		}
 
-		$value = $values[ $name ] ?? null;
+		$read_only_values = $this->read_only_system_variable_values();
+		$value            = $values[ $name ] ?? ( $read_only_values[ $name ] ?? null );
 		return null === $value ? '' : (string) $value;
 	}
 

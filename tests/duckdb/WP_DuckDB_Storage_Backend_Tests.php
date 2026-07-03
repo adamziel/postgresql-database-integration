@@ -995,7 +995,9 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 				'sql_big_selects',
 				'sql_buffer_result',
 				'sql_mode',
+				'sql_log_bin',
 				'sql_notes',
+				'sql_quote_show_create',
 				'sql_safe_updates',
 				'sql_warnings',
 			),
@@ -1202,6 +1204,126 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 				),
 			),
 			$driver->query( 'SELECT @@character_set_client AS charset_client' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_wp_cli_dump_system_variable_probes_are_emulated_for_duckdb(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$this->assertSame(
+			array(
+				array(
+					'@@GLOBAL.gtid_purged'                     => '',
+					'@@GLOBAL.log_bin'                         => 0,
+					'@@GLOBAL.log_bin_trust_function_creators' => 0,
+					'@@SESSION.max_allowed_packet'             => 67108864,
+					'@@lower_case_table_names'                 => 0,
+					'@@hostname'                               => 'localhost',
+					'@@protocol_version'                       => 10,
+				),
+			),
+			$driver->query(
+				'SELECT @@GLOBAL.gtid_purged,
+					@@GLOBAL.log_bin,
+					@@GLOBAL.log_bin_trust_function_creators,
+					@@SESSION.max_allowed_packet,
+					@@lower_case_table_names,
+					@@hostname,
+					@@protocol_version'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'log_bin',
+					'Value'         => '0',
+				),
+			),
+			$driver->query( "SHOW VARIABLES LIKE 'log_bin'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_wp_cli_import_system_variable_toggles_are_emulated_for_duckdb(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$this->assertSame( 0, $driver->query( 'SET @old_sql_log_bin = @@sql_log_bin' )->rowCount() );
+		$this->assertSame( 0, $driver->query( 'SET @@sql_log_bin = 0' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'@@sql_log_bin' => 0,
+				),
+			),
+			$driver->query( 'SELECT @@sql_log_bin' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( 'SET @@sql_log_bin = DEFAULT' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'@@sql_log_bin' => 1,
+				),
+			),
+			$driver->query( 'SELECT @@sql_log_bin' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( 'SET @old_wait_timeout = @@wait_timeout' )->rowCount() );
+		$this->assertSame( 0, $driver->query( 'SET wait_timeout = 100' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'@@wait_timeout' => 100,
+				),
+			),
+			$driver->query( 'SELECT @@wait_timeout' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( 'SET wait_timeout = @old_wait_timeout' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'@@wait_timeout' => 28800,
+				),
+			),
+			$driver->query( 'SELECT @@wait_timeout' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( 'SET sql_quote_show_create = OFF, pseudo_replica_mode = ON' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'@@sql_quote_show_create' => 0,
+					'@@pseudo_replica_mode'   => 1,
+				),
+			),
+			$driver->query( 'SELECT @@sql_quote_show_create, @@pseudo_replica_mode' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'wait_timeout',
+					'Value'         => '28800',
+				),
+			),
+			$driver->query( "SHOW VARIABLES WHERE Variable_name = 'wait_timeout'" )->fetchAll( PDO::FETCH_ASSOC )
 		);
 	}
 
