@@ -805,6 +805,11 @@ class WP_DuckDB_Driver {
 			return $stored_procedure_result;
 		}
 
+		$static_show_result = $this->execute_static_show_fast_path_statement( $query );
+		if ( null !== $static_show_result ) {
+			return $static_show_result;
+		}
+
 		$wordpress_options_update_result = $this->execute_wordpress_options_update_fast_path_statement( $query );
 		if ( null !== $wordpress_options_update_result ) {
 			return $wordpress_options_update_result;
@@ -947,6 +952,100 @@ class WP_DuckDB_Driver {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Execute static SHOW metadata statements before the MySQL parser rejects
+	 * MySQL-compatible filters it does not yet model.
+	 *
+	 * @param string $query MySQL query.
+	 * @return WP_DuckDB_Result_Statement|null Fast-path result, or null.
+	 */
+	private function execute_static_show_fast_path_statement( string $query ): ?WP_DuckDB_Result_Statement {
+		if ( ! preg_match( '/^\s*SHOW\b/i', $query ) ) {
+			return null;
+		}
+
+		$lexer  = new WP_MySQL_Lexer( $query, $this->mysql_version );
+		$tokens = $this->lexer_tokens_to_array( $lexer );
+
+		$this->assert_single_statement( $tokens );
+
+		$tokens = array_values( $this->without_eof( $tokens ) );
+		if ( count( $tokens ) > 0 && WP_MySQL_Lexer::SEMICOLON_SYMBOL === $tokens[ count( $tokens ) - 1 ]->id ) {
+			array_pop( $tokens );
+		}
+
+		if ( ! $this->is_static_show_fast_path_statement( $tokens ) ) {
+			return null;
+		}
+
+		return $this->record_found_rows_from_result( $this->execute_show( $tokens ) );
+	}
+
+	/**
+	 * Check whether a SHOW statement can be answered by bounded static metadata.
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @return bool Whether the statement is safe for static SHOW fast-path execution.
+	 */
+	private function is_static_show_fast_path_statement( array $tokens ): bool {
+		if (
+			! isset( $tokens[0], $tokens[1] )
+			|| WP_MySQL_Lexer::SHOW_SYMBOL !== $tokens[0]->id
+		) {
+			return false;
+		}
+
+		if (
+			in_array(
+				$tokens[1]->id,
+				array(
+					WP_MySQL_Lexer::ENGINES_SYMBOL,
+					WP_MySQL_Lexer::EVENTS_SYMBOL,
+					WP_MySQL_Lexer::PLUGINS_SYMBOL,
+					WP_MySQL_Lexer::PROCESSLIST_SYMBOL,
+					WP_MySQL_Lexer::TRIGGERS_SYMBOL,
+				),
+				true
+			)
+		) {
+			return true;
+		}
+
+		if ( ! isset( $tokens[2] ) ) {
+			return false;
+		}
+
+		if (
+			WP_MySQL_Lexer::FULL_SYMBOL === $tokens[1]->id
+			&& WP_MySQL_Lexer::PROCESSLIST_SYMBOL === $tokens[2]->id
+		) {
+			return true;
+		}
+
+		if (
+			WP_MySQL_Lexer::STORAGE_SYMBOL === $tokens[1]->id
+			&& WP_MySQL_Lexer::ENGINES_SYMBOL === $tokens[2]->id
+		) {
+			return true;
+		}
+
+		if (
+			WP_MySQL_Lexer::OPEN_SYMBOL === $tokens[1]->id
+			&& WP_MySQL_Lexer::TABLES_SYMBOL === $tokens[2]->id
+		) {
+			return true;
+		}
+
+		return in_array(
+			$tokens[1]->id,
+			array(
+				WP_MySQL_Lexer::FUNCTION_SYMBOL,
+				WP_MySQL_Lexer::PROCEDURE_SYMBOL,
+			),
+			true
+		) && WP_MySQL_Lexer::STATUS_SYMBOL === $tokens[2]->id;
 	}
 
 	/**

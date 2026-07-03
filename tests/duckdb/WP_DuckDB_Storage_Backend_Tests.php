@@ -1708,6 +1708,12 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		$this->assertSame( 'DEFAULT', $all_rows[0]['Support'] );
 		$this->assertSame( 'YES', $all_rows[0]['Transactions'] );
 		$this->assertSame( 'YES', $all_rows[0]['Savepoints'] );
+
+		$like_rows = $driver->query( "SHOW ENGINES LIKE 'M%'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( array( 'MEMORY', 'MyISAM' ), array_column( $like_rows, 'Engine' ) );
+
+		$default_rows = $driver->query( "SHOW STORAGE ENGINES WHERE `Support` = 'DEFAULT'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( array( 'InnoDB' ), array_column( $default_rows, 'Engine' ) );
 	}
 
 	public function test_show_status_returns_bounded_mysql_shaped_rows_for_duckdb(): void {
@@ -1797,10 +1803,14 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		$cases = array(
 			'SHOW EVENTS'           => array( 'Db', 'Name', 'Definer', 'Time zone', 'Type', 'Execute at', 'Interval value', 'Interval field', 'Starts', 'Ends', 'Status', 'Originator', 'character_set_client', 'collation_connection', 'Database Collation' ),
 			"SHOW EVENTS LIKE 'ev_%'" => array( 'Db', 'Name', 'Definer', 'Time zone', 'Type', 'Execute at', 'Interval value', 'Interval field', 'Starts', 'Ends', 'Status', 'Originator', 'character_set_client', 'collation_connection', 'Database Collation' ),
+			"SHOW EVENTS FROM wp WHERE Status = 'ENABLED' AND Name = 'ev_options'" => array( 'Db', 'Name', 'Definer', 'Time zone', 'Type', 'Execute at', 'Interval value', 'Interval field', 'Starts', 'Ends', 'Status', 'Originator', 'character_set_client', 'collation_connection', 'Database Collation' ),
 			'SHOW FUNCTION STATUS'  => array( 'Db', 'Name', 'Type', 'Definer', 'Modified', 'Created', 'Security_type', 'Comment', 'character_set_client', 'collation_connection', 'Database Collation' ),
+			"SHOW FUNCTION STATUS WHERE Name = 'missing'" => array( 'Db', 'Name', 'Type', 'Definer', 'Modified', 'Created', 'Security_type', 'Comment', 'character_set_client', 'collation_connection', 'Database Collation' ),
 			"SHOW PROCEDURE STATUS LIKE 'proc_%'" => array( 'Db', 'Name', 'Type', 'Definer', 'Modified', 'Created', 'Security_type', 'Comment', 'character_set_client', 'collation_connection', 'Database Collation' ),
 			'SHOW PLUGINS'          => array( 'Name', 'Status', 'Type', 'Library', 'License' ),
+			"SHOW PLUGINS LIKE 'auth%'" => array( 'Name', 'Status', 'Type', 'Library', 'License' ),
 			'SHOW TRIGGERS'         => array( 'Trigger', 'Event', 'Table', 'Statement', 'Timing', 'Created', 'sql_mode', 'Definer', 'character_set_client', 'collation_connection', 'Database Collation' ),
+			"SHOW TRIGGERS FROM wp LIKE 'trg_%'" => array( 'Trigger', 'Event', 'Table', 'Statement', 'Timing', 'Created', 'sql_mode', 'Definer', 'character_set_client', 'collation_connection', 'Database Collation' ),
 			"SHOW TRIGGERS WHERE Event = 'INSERT'" => array( 'Trigger', 'Event', 'Table', 'Statement', 'Timing', 'Created', 'sql_mode', 'Definer', 'character_set_client', 'collation_connection', 'Database Collation' ),
 		);
 
@@ -1858,6 +1868,9 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 			)
 		);
 
+		$filtered = $driver->query( "SHOW PROCESSLIST WHERE Command = 'Query'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( array( 1 ), array_column( $filtered, 'Id' ) );
+
 		$this->assertSame(
 			array(
 				array(
@@ -1886,6 +1899,9 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 
 		$filtered = $driver->query( "SHOW OPEN TABLES LIKE 'wptests_temp_%'" )->fetchAll( PDO::FETCH_ASSOC );
 		$this->assertSame( array( 'wptests_temp_probe' ), array_column( $filtered, 'Table' ) );
+
+		$filtered_from_database = $driver->query( "SHOW OPEN TABLES FROM wp LIKE 'wptests_%'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( array( 'wptests_options', 'wptests_temp_probe' ), array_column( $filtered_from_database, 'Table' ) );
 
 		$other_database = $driver->query( 'SHOW OPEN TABLES FROM other_database' )->fetchAll( PDO::FETCH_ASSOC );
 		$this->assertSame( array(), $other_database );
