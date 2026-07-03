@@ -1873,6 +1873,173 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		$this->assertSame( array( 'InnoDB' ), array_column( $default_rows, 'Engine' ) );
 	}
 
+	public function test_direct_information_schema_static_relations_expose_show_backed_metadata_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$engines = $driver->query(
+			"SELECT ENGINE, SUPPORT, TRANSACTIONS
+			FROM information_schema.engines
+			WHERE ENGINE = 'InnoDB'"
+		);
+
+		$this->assertSame(
+			array(
+				array(
+					'ENGINE'       => 'InnoDB',
+					'SUPPORT'      => 'DEFAULT',
+					'TRANSACTIONS' => 'YES',
+				),
+			),
+			$engines->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( 'USE information_schema' )->rowCount() );
+		$engine_columns = $driver->query( "SHOW COLUMNS FROM engines WHERE Field = 'ENGINE'" );
+
+		$this->assertSame(
+			array(
+				array(
+					'Field'   => 'ENGINE',
+					'Type'    => 'varchar(512)',
+					'Null'    => 'YES',
+					'Key'     => '',
+					'Default' => null,
+					'Extra'   => '',
+				),
+			),
+			$engine_columns->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_direct_information_schema_character_sets_and_collations_selects_return_mysql_shape_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$character_sets = $driver->query( 'SELECT * FROM INFORMATION_SCHEMA.CHARACTER_SETS ORDER BY CHARACTER_SET_NAME' );
+
+		$this->assertSame(
+			array(
+				array(
+					'CHARACTER_SET_NAME'   => 'binary',
+					'DEFAULT_COLLATE_NAME' => 'binary',
+					'DESCRIPTION'          => 'Binary pseudo charset',
+					'MAXLEN'               => '1',
+				),
+				array(
+					'CHARACTER_SET_NAME'   => 'utf8',
+					'DEFAULT_COLLATE_NAME' => 'utf8_general_ci',
+					'DESCRIPTION'          => 'UTF-8 Unicode',
+					'MAXLEN'               => '3',
+				),
+				array(
+					'CHARACTER_SET_NAME'   => 'utf8mb4',
+					'DEFAULT_COLLATE_NAME' => 'utf8mb4_0900_ai_ci',
+					'DESCRIPTION'          => 'UTF-8 Unicode',
+					'MAXLEN'               => '4',
+				),
+			),
+			$character_sets->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$collations = $driver->query( 'SELECT * FROM INFORMATION_SCHEMA.COLLATIONS ORDER BY COLLATION_NAME' );
+
+		$this->assertSame(
+			array(
+				array(
+					'COLLATION_NAME'     => 'binary',
+					'CHARACTER_SET_NAME' => 'binary',
+					'ID'                 => '63',
+					'IS_DEFAULT'         => 'Yes',
+					'IS_COMPILED'        => 'Yes',
+					'SORTLEN'            => '1',
+					'PAD_ATTRIBUTE'      => 'NO PAD',
+				),
+				array(
+					'COLLATION_NAME'     => 'utf8_bin',
+					'CHARACTER_SET_NAME' => 'utf8',
+					'ID'                 => '83',
+					'IS_DEFAULT'         => '',
+					'IS_COMPILED'        => 'Yes',
+					'SORTLEN'            => '1',
+					'PAD_ATTRIBUTE'      => 'PAD SPACE',
+				),
+				array(
+					'COLLATION_NAME'     => 'utf8_general_ci',
+					'CHARACTER_SET_NAME' => 'utf8',
+					'ID'                 => '33',
+					'IS_DEFAULT'         => 'Yes',
+					'IS_COMPILED'        => 'Yes',
+					'SORTLEN'            => '1',
+					'PAD_ATTRIBUTE'      => 'PAD SPACE',
+				),
+				array(
+					'COLLATION_NAME'     => 'utf8_unicode_ci',
+					'CHARACTER_SET_NAME' => 'utf8',
+					'ID'                 => '192',
+					'IS_DEFAULT'         => '',
+					'IS_COMPILED'        => 'Yes',
+					'SORTLEN'            => '8',
+					'PAD_ATTRIBUTE'      => 'PAD SPACE',
+				),
+				array(
+					'COLLATION_NAME'     => 'utf8mb4_0900_ai_ci',
+					'CHARACTER_SET_NAME' => 'utf8mb4',
+					'ID'                 => '255',
+					'IS_DEFAULT'         => 'Yes',
+					'IS_COMPILED'        => 'Yes',
+					'SORTLEN'            => '0',
+					'PAD_ATTRIBUTE'      => 'NO PAD',
+				),
+				array(
+					'COLLATION_NAME'     => 'utf8mb4_bin',
+					'CHARACTER_SET_NAME' => 'utf8mb4',
+					'ID'                 => '46',
+					'IS_DEFAULT'         => '',
+					'IS_COMPILED'        => 'Yes',
+					'SORTLEN'            => '1',
+					'PAD_ATTRIBUTE'      => 'PAD SPACE',
+				),
+				array(
+					'COLLATION_NAME'     => 'utf8mb4_unicode_ci',
+					'CHARACTER_SET_NAME' => 'utf8mb4',
+					'ID'                 => '224',
+					'IS_DEFAULT'         => '',
+					'IS_COMPILED'        => 'Yes',
+					'SORTLEN'            => '8',
+					'PAD_ATTRIBUTE'      => 'PAD SPACE',
+				),
+			),
+			$collations->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( 'USE information_schema' )->rowCount() );
+
+		$defaults = $driver->query(
+			"SELECT cs.character_set_name, c.collation_name
+			FROM character_sets AS cs
+			JOIN collations AS c ON c.character_set_name = cs.character_set_name
+			WHERE c.is_default = 'Yes'
+			ORDER BY c.collation_name"
+		);
+
+		$this->assertSame(
+			array(
+				array(
+					'CHARACTER_SET_NAME' => 'binary',
+					'COLLATION_NAME'     => 'binary',
+				),
+				array(
+					'CHARACTER_SET_NAME' => 'utf8',
+					'COLLATION_NAME'     => 'utf8_general_ci',
+				),
+				array(
+					'CHARACTER_SET_NAME' => 'utf8mb4',
+					'COLLATION_NAME'     => 'utf8mb4_0900_ai_ci',
+				),
+			),
+			$defaults->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
 	public function test_show_status_returns_bounded_mysql_shaped_rows_for_duckdb(): void {
 		$driver = $this->create_in_memory_duckdb_driver();
 

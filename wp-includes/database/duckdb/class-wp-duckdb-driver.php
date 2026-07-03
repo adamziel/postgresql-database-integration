@@ -830,6 +830,11 @@ class WP_DuckDB_Driver {
 			return null;
 		}
 
+		$static_information_schema_result = $this->execute_static_information_schema_fast_path_statement( $normalized );
+		if ( null !== $static_information_schema_result ) {
+			return $static_information_schema_result;
+		}
+
 		$information_schema_columns_name_collation_result = $this->execute_information_schema_columns_name_collation_fast_path_statement( $normalized );
 		if ( null !== $information_schema_columns_name_collation_result ) {
 			return $information_schema_columns_name_collation_result;
@@ -1047,6 +1052,297 @@ class WP_DuckDB_Driver {
 			),
 			true
 		) && WP_MySQL_Lexer::STATUS_SYMBOL === $tokens[2]->id;
+	}
+
+	/**
+	 * Execute bounded MySQL information_schema compatibility relations.
+	 *
+	 * DuckDB exposes a different information_schema than MySQL. These static
+	 * relations mirror the SHOW metadata rows that WordPress and dump/import
+	 * tooling probe directly.
+	 *
+	 * @param string $normalized_query Normalized MySQL query.
+	 * @return WP_DuckDB_Result_Statement|null Fast-path result, or null.
+	 */
+	private function execute_static_information_schema_fast_path_statement( string $normalized_query ): ?WP_DuckDB_Result_Statement {
+		$default_collations_result = $this->execute_static_information_schema_default_collations_join( $normalized_query );
+		if ( null !== $default_collations_result ) {
+			return $default_collations_result;
+		}
+
+		if ( false !== stripos( $normalized_query, ' JOIN ' ) ) {
+			return null;
+		}
+
+		$identifier_pattern = '`?(?:[A-Za-z_][A-Za-z0-9_]*)`?';
+		if (
+			! preg_match(
+				'/^SELECT\s+(?<select>.+?)\s+FROM\s+(?:(?<schema>' . $identifier_pattern . ')\s*\.\s*)?(?<relation>' . $identifier_pattern . ')(?:\s+(?:AS\s+)?(?<alias>(?!(?:WHERE|ORDER|GROUP|HAVING|LIMIT|JOIN)\b)' . $identifier_pattern . '))?(?:\s+WHERE\s+(?<where>.+?))?(?:\s+ORDER\s+BY\s+(?<order>.+))?$/i',
+				$normalized_query,
+				$matches
+			)
+		) {
+			return null;
+		}
+
+		if (
+			isset( $matches['schema'] )
+			&& '' !== $matches['schema']
+			&& ! $this->fast_path_identifier_matches( 'information_schema', $matches['schema'] )
+		) {
+			return null;
+		}
+
+		if (
+			(
+				! isset( $matches['schema'] )
+				|| '' === $matches['schema']
+			)
+			&& 0 !== strcasecmp( $this->current_database, 'information_schema' )
+		) {
+			return null;
+		}
+
+		$definition = $this->static_information_schema_relation_definition(
+			$this->fast_path_mysql_identifier_value( $matches['relation'] )
+		);
+		if ( null === $definition ) {
+			return null;
+		}
+
+		$select_fragment = $matches['select'];
+		$where_fragment  = $matches['where'] ?? '';
+		$order_fragment  = $matches['order'] ?? '';
+		if (
+			! $this->static_information_schema_fragment_is_supported( $select_fragment )
+			|| ( '' !== $where_fragment && ! $this->static_information_schema_fragment_is_supported( $where_fragment ) )
+			|| ( '' !== $order_fragment && ! $this->static_information_schema_fragment_is_supported( $order_fragment ) )
+		) {
+			return null;
+		}
+
+		$alias = isset( $matches['alias'] ) && '' !== $matches['alias']
+			? $this->fast_path_mysql_identifier_value( $matches['alias'] )
+			: $this->fast_path_mysql_identifier_value( $matches['relation'] );
+
+		$sql = 'SELECT '
+			. $this->translate_static_information_schema_fragment( $select_fragment )
+			. ' FROM '
+			. $this->static_information_schema_values_table_sql( $definition['columns'], $definition['rows'], $alias );
+
+		if ( '' !== $where_fragment ) {
+			$sql .= ' WHERE ' . $this->translate_static_information_schema_fragment( $where_fragment );
+		}
+
+		if ( '' !== $order_fragment ) {
+			$sql .= ' ORDER BY ' . $this->translate_static_information_schema_fragment( $order_fragment );
+		}
+
+		return $this->record_found_rows_from_result(
+			$this->execute_duckdb_query(
+				$sql,
+				'Failed to execute static information_schema relation query'
+			)
+		);
+	}
+
+	/**
+	 * Execute the default charset/collation join used against information_schema.
+	 *
+	 * @param string $normalized_query Normalized MySQL query.
+	 * @return WP_DuckDB_Result_Statement|null Fast-path result, or null.
+	 */
+	private function execute_static_information_schema_default_collations_join( string $normalized_query ): ?WP_DuckDB_Result_Statement {
+		if (
+			false === stripos( $normalized_query, 'information_schema' )
+			&& 0 !== strcasecmp( $this->current_database, 'information_schema' )
+		) {
+			return null;
+		}
+
+		if (
+			! preg_match(
+				'/^SELECT\s+`?cs`?\s*\.\s*`?character_set_name`?\s*,\s*`?c`?\s*\.\s*`?collation_name`?\s+FROM\s+(?:(?:`?information_schema`?)\s*\.\s*)?`?character_sets`?\s+(?:AS\s+)?`?cs`?\s+JOIN\s+(?:(?:`?information_schema`?)\s*\.\s*)?`?collations`?\s+(?:AS\s+)?`?c`?\s+ON\s+`?c`?\s*\.\s*`?character_set_name`?\s*=\s*`?cs`?\s*\.\s*`?character_set_name`?\s+WHERE\s+`?c`?\s*\.\s*`?is_default`?\s*=\s*\'Yes\'\s+ORDER\s+BY\s+`?c`?\s*\.\s*`?collation_name`?$/i',
+				$normalized_query
+			)
+		) {
+			return null;
+		}
+
+		$rows = array();
+		foreach ( $this->show_collation_rows() as $row ) {
+			if ( 'Yes' !== $row[3] ) {
+				continue;
+			}
+			$rows[] = array(
+				(string) $row[1],
+				(string) $row[0],
+			);
+		}
+
+		usort(
+			$rows,
+			static function ( array $left, array $right ): int {
+				return strcmp( $left[1], $right[1] );
+			}
+		);
+
+		return $this->record_found_rows_from_result(
+			new WP_DuckDB_Result_Statement(
+				array( 'CHARACTER_SET_NAME', 'COLLATION_NAME' ),
+				$rows
+			)
+		);
+	}
+
+	/**
+	 * Check whether a static information_schema SQL fragment stays bounded.
+	 *
+	 * @param string $fragment SQL fragment.
+	 * @return bool Whether the fragment can be forwarded to DuckDB.
+	 */
+	private function static_information_schema_fragment_is_supported( string $fragment ): bool {
+		return 1 !== preg_match(
+			'/\b(?:FROM|JOIN|UNION|INTERSECT|EXCEPT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|ATTACH|DETACH|COPY|PRAGMA|CALL|WITH|LIMIT)\b/i',
+			$fragment
+		);
+	}
+
+	/**
+	 * Translate MySQL identifier quotes in a static information_schema fragment.
+	 *
+	 * @param string $fragment SQL fragment.
+	 * @return string DuckDB SQL fragment.
+	 */
+	private function translate_static_information_schema_fragment( string $fragment ): string {
+		return preg_replace_callback(
+			'/`((?:``|[^`])+)`/',
+			function ( array $matches ): string {
+				return $this->connection->quote_identifier( str_replace( '``', '`', $matches[1] ) );
+			},
+			$fragment
+		);
+	}
+
+	/**
+	 * Build a DuckDB VALUES relation for static information_schema rows.
+	 *
+	 * @param string[]                $columns Column names.
+	 * @param array<int,array<mixed>> $rows    Rows.
+	 * @param string                  $alias   Relation alias.
+	 * @return string VALUES relation SQL.
+	 */
+	private function static_information_schema_values_table_sql( array $columns, array $rows, string $alias ): string {
+		$aliased_columns = array_map(
+			function ( string $column ): string {
+				return $this->connection->quote_identifier( $column );
+			},
+			$columns
+		);
+
+		$value_rows = array();
+		foreach ( $rows as $row ) {
+			$value_rows[] = '(' . implode(
+				', ',
+				array_map(
+					function ( $value ): string {
+						return $this->connection->quote( $value );
+					},
+					$row
+				)
+			) . ')';
+		}
+
+		return '(VALUES '
+			. implode( ', ', $value_rows )
+			. ') AS '
+			. $this->connection->quote_identifier( $alias )
+			. '('
+			. implode( ', ', $aliased_columns )
+			. ')';
+	}
+
+	/**
+	 * Return static MySQL information_schema relation definitions.
+	 *
+	 * @param string $relation Relation name.
+	 * @return array{columns:string[],rows:array<int,array<mixed>>,types:array<string,string>}|null Relation definition, or null.
+	 */
+	private function static_information_schema_relation_definition( string $relation ): ?array {
+		switch ( strtolower( $relation ) ) {
+			case 'engines':
+				return array(
+					'columns' => array( 'ENGINE', 'SUPPORT', 'COMMENT', 'TRANSACTIONS', 'XA', 'SAVEPOINTS' ),
+					'rows'    => $this->static_information_schema_string_rows( $this->show_engine_rows() ),
+					'types'   => array(
+						'ENGINE'       => 'varchar(512)',
+						'SUPPORT'      => 'varchar(512)',
+						'COMMENT'      => 'varchar(512)',
+						'TRANSACTIONS' => 'varchar(512)',
+						'XA'           => 'varchar(512)',
+						'SAVEPOINTS'   => 'varchar(512)',
+					),
+				);
+
+			case 'character_sets':
+				return array(
+					'columns' => array( 'CHARACTER_SET_NAME', 'DEFAULT_COLLATE_NAME', 'DESCRIPTION', 'MAXLEN' ),
+					'rows'    => array_map(
+						static function ( array $row ): array {
+							return array(
+								(string) $row[0],
+								(string) $row[2],
+								(string) $row[1],
+								(string) $row[3],
+							);
+						},
+						$this->show_character_set_rows()
+					),
+					'types'   => array(
+						'CHARACTER_SET_NAME'   => 'varchar(512)',
+						'DEFAULT_COLLATE_NAME' => 'varchar(512)',
+						'DESCRIPTION'          => 'varchar(512)',
+						'MAXLEN'               => 'varchar(512)',
+					),
+				);
+
+			case 'collations':
+				return array(
+					'columns' => array( 'COLLATION_NAME', 'CHARACTER_SET_NAME', 'ID', 'IS_DEFAULT', 'IS_COMPILED', 'SORTLEN', 'PAD_ATTRIBUTE' ),
+					'rows'    => $this->static_information_schema_string_rows( $this->show_collation_rows() ),
+					'types'   => array(
+						'COLLATION_NAME'     => 'varchar(512)',
+						'CHARACTER_SET_NAME' => 'varchar(512)',
+						'ID'                 => 'varchar(512)',
+						'IS_DEFAULT'         => 'varchar(512)',
+						'IS_COMPILED'        => 'varchar(512)',
+						'SORTLEN'            => 'varchar(512)',
+						'PAD_ATTRIBUTE'      => 'varchar(512)',
+					),
+				);
+		}
+
+		return null;
+	}
+
+	/**
+	 * Cast static information_schema row values to strings.
+	 *
+	 * @param array<int,array<mixed>> $rows Rows.
+	 * @return array<int,array<mixed>> Rows with non-null values stringified.
+	 */
+	private function static_information_schema_string_rows( array $rows ): array {
+		return array_map(
+			static function ( array $row ): array {
+				return array_map(
+					static function ( $value ) {
+						return null === $value ? null : (string) $value;
+					},
+					$row
+				);
+			},
+			$rows
+		);
 	}
 
 	/**
@@ -21469,6 +21765,16 @@ class WP_DuckDB_Driver {
 		$requested_reference = $this->parse_metadata_table_reference( $tokens, $index, true );
 		$index               = $requested_reference['next_index'];
 
+		$static_information_schema_columns = $this->execute_static_information_schema_show_columns(
+			$requested_reference,
+			$tokens,
+			$index,
+			$full
+		);
+		if ( null !== $static_information_schema_columns ) {
+			return $static_information_schema_columns;
+		}
+
 		if ( 0 !== strcasecmp( $requested_reference['database'], $this->database ) ) {
 			throw new WP_DuckDB_Driver_Exception( "Table '{$requested_reference['database']}.{$requested_reference['table_name']}' doesn't exist" );
 		}
@@ -21495,6 +21801,67 @@ class WP_DuckDB_Driver {
 		return $this->execute_static_show_metadata_statement(
 			array( 'Field', 'Type', 'Collation', 'Null', 'Key', 'Default', 'Extra', 'Privileges', 'Comment' ),
 			$this->full_describe_column_rows( $table_reference['table_name'], $table_reference['temporary'] ),
+			'Field',
+			$tokens,
+			$index,
+			'SHOW COLUMNS'
+		);
+	}
+
+	/**
+	 * Execute SHOW COLUMNS for static information_schema compatibility relations.
+	 *
+	 * @param array{database:string,table_name:string,database_explicit:bool,next_index:int} $requested_reference Parsed table reference.
+	 * @param WP_Parser_Token[]                                                            $tokens              MySQL tokens.
+	 * @param int                                                                          $index               Index after the table reference.
+	 * @param bool                                                                         $full                Whether SHOW FULL COLUMNS was requested.
+	 * @return WP_DuckDB_Result_Statement|null Result, or null when the table is not a static relation.
+	 */
+	private function execute_static_information_schema_show_columns( array $requested_reference, array $tokens, int $index, bool $full ): ?WP_DuckDB_Result_Statement {
+		if ( 0 !== strcasecmp( $requested_reference['database'], 'information_schema' ) ) {
+			return null;
+		}
+
+		$definition = $this->static_information_schema_relation_definition( $requested_reference['table_name'] );
+		if ( null === $definition ) {
+			return null;
+		}
+
+		$rows = array();
+		foreach ( $definition['columns'] as $column ) {
+			$type = $definition['types'][ $column ] ?? 'varchar(512)';
+			if ( ! $full ) {
+				$rows[] = array( $column, $type, 'YES', '', null, '' );
+				continue;
+			}
+
+			$rows[] = array(
+				$column,
+				$type,
+				null,
+				'YES',
+				'',
+				null,
+				'',
+				'select,insert,update,references',
+				'',
+			);
+		}
+
+		if ( ! $full ) {
+			return $this->execute_static_show_metadata_statement(
+				array( 'Field', 'Type', 'Null', 'Key', 'Default', 'Extra' ),
+				$rows,
+				'Field',
+				$tokens,
+				$index,
+				'SHOW COLUMNS'
+			);
+		}
+
+		return $this->execute_static_show_metadata_statement(
+			array( 'Field', 'Type', 'Collation', 'Null', 'Key', 'Default', 'Extra', 'Privileges', 'Comment' ),
+			$rows,
 			'Field',
 			$tokens,
 			$index,
