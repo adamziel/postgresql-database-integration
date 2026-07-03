@@ -1750,6 +1750,103 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		$this->assertSame( array(), $literal_left_rows );
 	}
 
+	public function test_show_grants_returns_static_mysql_shaped_row_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$grants = $driver->query( 'SHOW GRANTS' );
+
+		$this->assertSame(
+			array(
+				array(
+					'Grants for root@%' => $this->show_grants_expected_value(),
+				),
+			),
+			$grants->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame( 1, $grants->columnCount() );
+		$this->assertSame( 'Grants for root@%', $grants->getColumnMeta( 0 )['name'] );
+
+		$num = $driver->query( 'SHOW GRANTS' )->fetchAll( PDO::FETCH_NUM );
+		$this->assertSame( array( array( $this->show_grants_expected_value() ) ), $num );
+	}
+
+	public function test_show_grants_for_and_using_forms_return_static_row_for_duckdb(): void {
+		$queries = array(
+			'SHOW GRANTS FOR current_user();',
+			'SHOW GRANTS FOR CURRENT_USER',
+			'sHoW gRaNtS FoR CuRrEnT_UsEr()',
+			'SHOW GRANTS FOR root',
+			"SHOW GRANTS FOR 'root'@'localhost'",
+			'SHOW GRANTS USING role1',
+			'SHOW GRANTS FOR CURRENT_USER() USING role1',
+			'SHOW GRANTS FOR u@h USING r1,r2',
+		);
+
+		foreach ( $queries as $query ) {
+			$driver = $this->create_in_memory_duckdb_driver();
+
+			$this->assertSame(
+				array(
+					array(
+						'Grants for root@%' => $this->show_grants_expected_value(),
+					),
+				),
+				$driver->query( $query )->fetchAll( PDO::FETCH_ASSOC ),
+				$query
+			);
+		}
+	}
+
+	public function test_show_grants_updates_found_rows_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$driver->query( 'SHOW GRANTS' );
+
+		$this->assertSame(
+			array(
+				array(
+					'FOUND_ROWS()' => 1,
+				),
+			),
+			$driver->query( 'SELECT FOUND_ROWS()' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_show_grants_after_use_information_schema_returns_static_row_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$this->assertSame( 0, $driver->query( 'USE information_schema' )->rowCount() );
+
+		$this->assertSame(
+			array(
+				array(
+					'Grants for root@%' => $this->show_grants_expected_value(),
+				),
+			),
+			$driver->query( 'SHOW GRANTS' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_malformed_show_grants_syntax_fails_closed_for_duckdb(): void {
+		$driver  = $this->create_in_memory_duckdb_driver();
+		$queries = array(
+			'SHOW GRANTS FOR',
+			'SHOW GRANTS USING',
+			'SHOW GRANTS FOR CURRENT_USER(1)',
+			'SHOW GRANTS FOR root USING',
+			"SHOW GRANTS FOR root USING role1 WHERE User = 'root'",
+		);
+
+		foreach ( $queries as $query ) {
+			try {
+				$driver->query( $query );
+				$this->fail( 'Expected unsupported SHOW GRANTS statement to throw.' );
+			} catch ( WP_DuckDB_Driver_Exception $e ) {
+				$this->assertSame( 'Unsupported SHOW GRANTS statement in DuckDB driver.', $e->getMessage(), $query );
+			}
+		}
+	}
+
 	public function test_show_engines_returns_mysql_shaped_static_rows_for_duckdb(): void {
 		$driver = $this->create_in_memory_duckdb_driver();
 
@@ -2773,6 +2870,13 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		}
 
 		throw new InvalidArgumentException( 'Unsupported DuckDB backend: ' . $backend );
+	}
+
+	private function show_grants_expected_value(): string {
+		return 'GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, RELOAD, SHUTDOWN, ' .
+			'PROCESS, FILE, REFERENCES, INDEX, ALTER, SHOW DATABASES, SUPER, CREATE TEMPORARY TABLES, LOCK TABLES, ' .
+			'EXECUTE, REPLICATION SLAVE, REPLICATION CLIENT, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, ' .
+			'CREATE USER, EVENT, TRIGGER, CREATE TABLESPACE, CREATE ROLE, DROP ROLE ON *.* TO `root`@`localhost` WITH GRANT OPTION';
 	}
 
 	private function create_temp_dir(): string {

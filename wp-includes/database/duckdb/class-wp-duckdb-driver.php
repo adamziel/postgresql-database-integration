@@ -1003,6 +1003,7 @@ class WP_DuckDB_Driver {
 				array(
 					WP_MySQL_Lexer::ENGINES_SYMBOL,
 					WP_MySQL_Lexer::EVENTS_SYMBOL,
+					WP_MySQL_Lexer::GRANTS_SYMBOL,
 					WP_MySQL_Lexer::PLUGINS_SYMBOL,
 					WP_MySQL_Lexer::PROCESSLIST_SYMBOL,
 					WP_MySQL_Lexer::TRIGGERS_SYMBOL,
@@ -20502,13 +20503,23 @@ class WP_DuckDB_Driver {
 	private function execute_show_grants( array $tokens ): WP_DuckDB_Result_Statement {
 		$this->expect_token( $tokens, 1, WP_MySQL_Lexer::GRANTS_SYMBOL, 'Expected GRANTS in SHOW GRANTS statement.' );
 
-		if ( 2 !== count( $tokens ) ) {
-			if (
-				! isset( $tokens[2], $tokens[3] )
-				|| WP_MySQL_Lexer::FOR_SYMBOL !== $tokens[2]->id
-			) {
-				throw new WP_DuckDB_Driver_Exception( 'Unsupported SHOW GRANTS statement in DuckDB driver. Use SHOW GRANTS or SHOW GRANTS FOR a parsed target.' );
+		$index = 2;
+		if ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::FOR_SYMBOL === $tokens[ $index ]->id ) {
+			$index = $this->parse_supported_show_grants_principal( $tokens, $index + 1 );
+			if ( null === $index ) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported SHOW GRANTS statement in DuckDB driver.' );
 			}
+		}
+
+		if ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::USING_SYMBOL === $tokens[ $index ]->id ) {
+			$index = $this->parse_supported_show_grants_role_list( $tokens, $index + 1 );
+			if ( null === $index ) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported SHOW GRANTS statement in DuckDB driver.' );
+			}
+		}
+
+		if ( count( $tokens ) !== $index ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported SHOW GRANTS statement in DuckDB driver.' );
 		}
 
 		return new WP_DuckDB_Result_Statement(
@@ -20519,6 +20530,102 @@ class WP_DuckDB_Driver {
 				),
 			)
 		);
+	}
+
+	/**
+	 * Parse a supported SHOW GRANTS principal.
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @param int               $index  Principal start index.
+	 * @return int|null Index after the principal, or null when unsupported.
+	 */
+	private function parse_supported_show_grants_principal( array $tokens, int $index ): ?int {
+		if ( ! isset( $tokens[ $index ] ) ) {
+			return null;
+		}
+
+		if ( WP_MySQL_Lexer::CURRENT_USER_SYMBOL === $tokens[ $index ]->id ) {
+			++$index;
+			if (
+				isset( $tokens[ $index ], $tokens[ $index + 1 ] )
+				&& WP_MySQL_Lexer::OPEN_PAR_SYMBOL === $tokens[ $index ]->id
+				&& WP_MySQL_Lexer::CLOSE_PAR_SYMBOL === $tokens[ $index + 1 ]->id
+			) {
+				$index += 2;
+			}
+			return $index;
+		}
+
+		return $this->parse_supported_show_grants_account_name( $tokens, $index );
+	}
+
+	/**
+	 * Parse a supported SHOW GRANTS role list.
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @param int               $index  Role-list start index.
+	 * @return int|null Index after the role list, or null when unsupported.
+	 */
+	private function parse_supported_show_grants_role_list( array $tokens, int $index ): ?int {
+		$index = $this->parse_supported_show_grants_account_name( $tokens, $index );
+		if ( null === $index ) {
+			return null;
+		}
+
+		while ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::COMMA_SYMBOL === $tokens[ $index ]->id ) {
+			$index = $this->parse_supported_show_grants_account_name( $tokens, $index + 1 );
+			if ( null === $index ) {
+				return null;
+			}
+		}
+
+		return $index;
+	}
+
+	/**
+	 * Parse a supported SHOW GRANTS account or role name.
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @param int               $index  Account-name start index.
+	 * @return int|null Index after the account name, or null when unsupported.
+	 */
+	private function parse_supported_show_grants_account_name( array $tokens, int $index ): ?int {
+		if ( ! $this->is_supported_show_grants_name_part( $tokens[ $index ] ?? null ) ) {
+			return null;
+		}
+
+		++$index;
+		if ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::AT_TEXT_SUFFIX === $tokens[ $index ]->id ) {
+			return $index + 1;
+		}
+
+		if ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::AT_SIGN_SYMBOL === $tokens[ $index ]->id ) {
+			if ( ! $this->is_supported_show_grants_name_part( $tokens[ $index + 1 ] ?? null ) ) {
+				return null;
+			}
+			return $index + 2;
+		}
+
+		return $index;
+	}
+
+	/**
+	 * Check whether a token can be part of a supported SHOW GRANTS name.
+	 *
+	 * @param WP_Parser_Token|null $token Token.
+	 * @return bool Whether the token is a name part.
+	 */
+	private function is_supported_show_grants_name_part( ?WP_Parser_Token $token ): bool {
+		return null !== $token
+			&& in_array(
+				$token->id,
+				array(
+					WP_MySQL_Lexer::IDENTIFIER,
+					WP_MySQL_Lexer::BACK_TICK_QUOTED_ID,
+					WP_MySQL_Lexer::SINGLE_QUOTED_TEXT,
+				),
+				true
+			);
 	}
 
 	/**
