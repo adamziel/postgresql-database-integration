@@ -20890,8 +20890,17 @@ class WP_DuckDB_Driver {
 			$column_map[ strtolower( $column ) ] = $column;
 		}
 
-		$pieces = array();
+		$comparison_rewrites = $this->static_show_string_comparison_rewrites( $tokens, $column_map );
+		$pieces              = array();
 		foreach ( $tokens as $index => $token ) {
+			if ( isset( $comparison_rewrites['skip'][ $index ] ) ) {
+				continue;
+			}
+			if ( isset( $comparison_rewrites['sql'][ $index ] ) ) {
+				$pieces[] = $comparison_rewrites['sql'][ $index ];
+				continue;
+			}
+
 			if ( WP_MySQL_Lexer::BACK_TICK_QUOTED_ID === $token->id ) {
 				$column   = $column_map[ strtolower( $token->get_value() ) ] ?? null;
 				$pieces[] = $this->connection->quote_identifier( $column ?? $token->get_value() );
@@ -20916,6 +20925,112 @@ class WP_DuckDB_Driver {
 		}
 
 		return $this->join_sql_pieces( $pieces );
+	}
+
+	/**
+	 * Build rewrites for MySQL-like case-insensitive static SHOW string filters.
+	 *
+	 * @param WP_Parser_Token[] $tokens     WHERE expression tokens.
+	 * @param array<string,string> $column_map Lowercase column aliases to canonical names.
+	 * @return array{sql:array<int,string>,skip:array<int,bool>} SQL rewrites and skipped token indexes.
+	 */
+	private function static_show_string_comparison_rewrites( array $tokens, array $column_map ): array {
+		$rewrites = array(
+			'sql'  => array(),
+			'skip' => array(),
+		);
+
+		foreach ( $tokens as $index => $token ) {
+			$binary_left = false;
+			$left_index  = $index;
+			if (
+				WP_MySQL_Lexer::BINARY_SYMBOL === $token->id
+				&& isset( $tokens[ $index + 1 ] )
+			) {
+				$binary_left = true;
+				$left_index  = $index + 1;
+			} elseif (
+				$index > 0
+				&& WP_MySQL_Lexer::BINARY_SYMBOL === $tokens[ $index - 1 ]->id
+			) {
+				continue;
+			}
+
+			$left_column = $this->static_show_column_for_token( $tokens[ $left_index ] ?? null, $column_map );
+			if ( null !== $left_column ) {
+				$operator_index = $left_index + 1;
+				$right_index    = $left_index + 2;
+				if (
+					isset( $tokens[ $operator_index ], $tokens[ $right_index ] )
+					&& $this->is_static_show_string_comparison_operator( $tokens[ $operator_index ] )
+					&& $this->is_string_literal_token( $tokens[ $right_index ] )
+				) {
+					if ( $binary_left ) {
+						$rewrites['skip'][ $index ]    = true;
+						$rewrites['sql'][ $left_index ] = $this->connection->quote_identifier( $left_column );
+						$rewrites['sql'][ $right_index ] = $this->connection->quote( $tokens[ $right_index ]->get_value() );
+					} else {
+						$rewrites['sql'][ $left_index ]  = 'LOWER(CAST(' . $this->connection->quote_identifier( $left_column ) . ' AS VARCHAR))';
+						$rewrites['sql'][ $right_index ] = 'LOWER(' . $this->connection->quote( $tokens[ $right_index ]->get_value() ) . ')';
+					}
+				}
+			}
+
+			if (
+				$this->is_string_literal_token( $token )
+				&& isset( $tokens[ $index + 1 ], $tokens[ $index + 2 ] )
+				&& in_array( $tokens[ $index + 1 ]->id, array( WP_MySQL_Lexer::EQUAL_OPERATOR, WP_MySQL_Lexer::NOT_EQUAL_OPERATOR ), true )
+			) {
+				$right_column = $this->static_show_column_for_token( $tokens[ $index + 2 ], $column_map );
+				if ( null !== $right_column ) {
+					$rewrites['sql'][ $index ]     = 'LOWER(' . $this->connection->quote( $token->get_value() ) . ')';
+					$rewrites['sql'][ $index + 2 ] = 'LOWER(CAST(' . $this->connection->quote_identifier( $right_column ) . ' AS VARCHAR))';
+				}
+			}
+		}
+
+		return $rewrites;
+	}
+
+	/**
+	 * Resolve a static SHOW output column token.
+	 *
+	 * @param WP_Parser_Token|null $token      Token to inspect.
+	 * @param array<string,string> $column_map Lowercase column aliases to canonical names.
+	 * @return string|null Canonical column name, or null.
+	 */
+	private function static_show_column_for_token( ?WP_Parser_Token $token, array $column_map ): ?string {
+		if ( null === $token ) {
+			return null;
+		}
+
+		if ( WP_MySQL_Lexer::BACK_TICK_QUOTED_ID === $token->id ) {
+			return $column_map[ strtolower( $token->get_value() ) ] ?? null;
+		}
+
+		if ( $this->is_non_identifier_token( $token ) ) {
+			return null;
+		}
+
+		return $column_map[ strtolower( $token->get_value() ) ] ?? null;
+	}
+
+	/**
+	 * Check whether a token is a supported static SHOW string comparison operator.
+	 *
+	 * @param WP_Parser_Token $token Token.
+	 * @return bool Whether the operator compares strings.
+	 */
+	private function is_static_show_string_comparison_operator( WP_Parser_Token $token ): bool {
+		return in_array(
+			$token->id,
+			array(
+				WP_MySQL_Lexer::EQUAL_OPERATOR,
+				WP_MySQL_Lexer::NOT_EQUAL_OPERATOR,
+				WP_MySQL_Lexer::LIKE_SYMBOL,
+			),
+			true
+		);
 	}
 
 	/**

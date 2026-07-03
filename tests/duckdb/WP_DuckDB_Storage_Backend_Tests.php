@@ -1690,6 +1690,66 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		$this->assertSame( array( 'utf8mb4' ), array_column( $where_expression_rows, 'Charset' ) );
 	}
 
+	public function test_show_collation_returns_mysql_shaped_static_rows_for_duckdb(): void {
+		$driver = $this->create_in_memory_duckdb_driver();
+
+		$rows     = $driver->query( 'SHOW COLLATION' );
+		$all_rows = $rows->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame(
+			array(
+				'binary',
+				'utf8_bin',
+				'utf8_general_ci',
+				'utf8_unicode_ci',
+				'utf8mb4_bin',
+				'utf8mb4_unicode_ci',
+				'utf8mb4_0900_ai_ci',
+			),
+			array_column( $all_rows, 'Collation' )
+		);
+		$this->assertSame(
+			array( 'Collation', 'Charset', 'Id', 'Default', 'Compiled', 'Sortlen', 'Pad_attribute' ),
+			array_map(
+				function ( int $index ) use ( $rows ): string {
+					return (string) $rows->getColumnMeta( $index )['name'];
+				},
+				range( 0, 6 )
+			)
+		);
+
+		$like_rows = $driver->query( "SHOW COLLATION LIKE 'utf8%'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertCount( 6, $like_rows );
+		$this->assertSame( 'utf8_bin', $like_rows[0]['Collation'] );
+		$this->assertSame( 'utf8mb4_0900_ai_ci', $like_rows[5]['Collation'] );
+
+		$where_rows = $driver->query( "SHOW COLLATION WHERE Collation = 'utf8_bin'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( array( 'utf8_bin' ), array_column( $where_rows, 'Collation' ) );
+
+		$case_insensitive_charset_rows = $driver->query( "SHOW COLLATION WHERE Charset = 'UTF8'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame(
+			array( 'utf8_bin', 'utf8_general_ci', 'utf8_unicode_ci' ),
+			array_column( $case_insensitive_charset_rows, 'Collation' )
+		);
+
+		$binary_charset_rows = $driver->query( "SHOW COLLATION WHERE BINARY Charset = 'UTF8'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( array(), $binary_charset_rows );
+
+		$where_expression_rows = $driver->query( "SHOW COLLATION WHERE Collation LIKE 'utf8%' AND Charset = 'utf8'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame(
+			array( 'utf8_bin', 'utf8_general_ci', 'utf8_unicode_ci' ),
+			array_column( $where_expression_rows, 'Collation' )
+		);
+
+		$not_equal_rows = $driver->query( "SHOW COLLATION WHERE Collation <> 'binary' AND Charset = 'utf8mb4'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame(
+			array( 'utf8mb4_bin', 'utf8mb4_unicode_ci', 'utf8mb4_0900_ai_ci' ),
+			array_column( $not_equal_rows, 'Collation' )
+		);
+
+		$literal_left_rows = $driver->query( "SHOW COLLATION WHERE 'Collation' = 'utf8_bin'" )->fetchAll( PDO::FETCH_ASSOC );
+		$this->assertSame( array(), $literal_left_rows );
+	}
+
 	public function test_show_engines_returns_mysql_shaped_static_rows_for_duckdb(): void {
 		$driver = $this->create_in_memory_duckdb_driver();
 
