@@ -857,6 +857,104 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		$this->assertSame( 'found_rows', $found_rows->getColumnMeta( 0 )['name'] );
 	}
 
+	public function test_savepoint_statements_restore_dml_rows(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query( 'CREATE TABLE wptests_savepoint_state (id INT)' );
+		$driver->query( 'BEGIN' );
+		$driver->query( 'INSERT INTO wptests_savepoint_state (id) VALUES (1)' );
+		$driver->query( 'SAVEPOINT sp1' );
+		$driver->query( 'INSERT INTO wptests_savepoint_state (id) VALUES (2)' );
+		$driver->query( 'SAVEPOINT sp2' );
+		$driver->query( 'INSERT INTO wptests_savepoint_state (id) VALUES (3)' );
+
+		$this->assertSame( 0, $driver->query( 'ROLLBACK TO SAVEPOINT sp1' )->rowCount() );
+		$this->assertSame(
+			array( array( 'id' => 1 ) ),
+			$driver->query( 'SELECT id FROM wptests_savepoint_state ORDER BY id' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		try {
+			$driver->query( 'RELEASE SAVEPOINT sp2' );
+			$this->fail( 'Expected savepoints newer than the rollback target to be released.' );
+		} catch ( WP_DuckDB_Driver_Exception $e ) {
+			$this->assertSame( 'SAVEPOINT does not exist: sp2.', $e->getMessage() );
+		}
+
+		$this->assertSame( 0, $driver->query( 'RELEASE SAVEPOINT sp1' )->rowCount() );
+		$this->assertSame( 0, $driver->query( 'ROLLBACK WORK' )->rowCount() );
+		$this->assertSame(
+			array(),
+			$driver->query( 'SELECT id FROM wptests_savepoint_state ORDER BY id' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_rollback_work_to_savepoint_restores_rows_and_preserves_transaction(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query( 'CREATE TABLE wptests_savepoint_work (id INT)' );
+		$driver->query( 'START TRANSACTION' );
+		$driver->query( 'SAVEPOINT before_second_insert' );
+		$driver->query( 'INSERT INTO wptests_savepoint_work (id) VALUES (1)' );
+		$driver->query( 'ROLLBACK WORK TO before_second_insert' );
+		$driver->query( 'INSERT INTO wptests_savepoint_work (id) VALUES (2)' );
+		$driver->query( 'COMMIT' );
+
+		$this->assertSame(
+			array( array( 'id' => 2 ) ),
+			$driver->query( 'SELECT id FROM wptests_savepoint_work ORDER BY id' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_savepoint_rollback_rejects_ddl_changes_without_aborting_transaction(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$driver->query( 'CREATE TABLE wptests_savepoint_ddl_base (id INT)' );
+		$driver->query( 'BEGIN' );
+		$driver->query( 'SAVEPOINT before_ddl' );
+		$driver->query( 'CREATE TABLE wptests_savepoint_ddl_new (id INT)' );
+
+		try {
+			$driver->query( 'ROLLBACK TO SAVEPOINT before_ddl' );
+			$this->fail( 'Expected DDL after a DuckDB emulated savepoint to be rejected.' );
+		} catch ( WP_DuckDB_Driver_Exception $e ) {
+			$this->assertSame(
+				'Unsupported SAVEPOINT rollback in DuckDB driver. Tables created after the savepoint cannot be rolled back.',
+				$e->getMessage()
+			);
+		}
+
+		$driver->query( 'ROLLBACK' );
+		$this->assertSame(
+			array(),
+			$driver->query( "SHOW TABLES LIKE 'wptests_savepoint_ddl_new'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
 	public function test_native_backend_aliases_use_duckdb_file_backend(): void {
 		foreach ( array( 'duckdb', 'duck', 'native', 'file' ) as $alias ) {
 			$backend = new WP_DuckDB_Storage_Backend(

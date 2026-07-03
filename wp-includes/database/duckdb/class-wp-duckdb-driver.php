@@ -434,6 +434,20 @@ class WP_DuckDB_Driver {
 	private $table_lock_active = false;
 
 	/**
+	 * Driver-emulated savepoints for DuckDB, which has no native SAVEPOINT SQL.
+	 *
+	 * @var array<string,array{name:string,sequence:int,snapshots:array<int,array{table_name:string,temporary:bool,snapshot_table:string}>}>
+	 */
+	private $emulated_savepoints = array();
+
+	/**
+	 * Monotonic identifier used for savepoint snapshot table names.
+	 *
+	 * @var int
+	 */
+	private $emulated_savepoint_sequence = 0;
+
+	/**
 	 * MySQL-compatible server version string.
 	 *
 	 * @var string
@@ -519,6 +533,12 @@ class WP_DuckDB_Driver {
 				case WP_MySQL_Lexer::ROLLBACK_SYMBOL:
 					$this->found_rows = 0;
 					return $this->execute_rollback_statement( $tokens );
+				case WP_MySQL_Lexer::SAVEPOINT_SYMBOL:
+					$this->found_rows = 0;
+					return $this->execute_savepoint_statement( $tokens );
+				case WP_MySQL_Lexer::RELEASE_SYMBOL:
+					$this->found_rows = 0;
+					return $this->execute_release_savepoint_statement( $tokens );
 				case WP_MySQL_Lexer::LOCK_SYMBOL:
 					$this->found_rows = 0;
 					return $this->execute_lock_tables_statement( $tokens );
@@ -729,6 +749,7 @@ class WP_DuckDB_Driver {
 		if ( 0 === strcasecmp( $normalized, 'COMMIT' ) || 0 === strcasecmp( $normalized, 'COMMIT WORK' ) ) {
 			$this->found_rows = 0;
 			if ( $this->connection->inTransaction() ) {
+				$this->release_all_emulated_savepoints();
 				$this->last_duckdb_queries[] = 'COMMIT';
 				$this->connection->commit();
 			}
@@ -742,6 +763,7 @@ class WP_DuckDB_Driver {
 				$this->last_duckdb_queries[] = 'ROLLBACK';
 				$this->connection->rollback();
 				$this->clear_schema_state_after_rollback();
+				$this->clear_emulated_savepoints();
 			}
 			$this->table_lock_active = false;
 			return $this->empty_ddl_result();
@@ -3888,12 +3910,14 @@ class WP_DuckDB_Driver {
 				$this->last_duckdb_queries[] = 'ROLLBACK';
 				$this->connection->rollbackNativeTransaction();
 				$this->clear_schema_state_after_rollback();
+				$this->clear_emulated_savepoints();
 			}
 			return;
 		}
 
 		$this->connection->rollback();
 		$this->clear_schema_state_after_rollback();
+		$this->clear_emulated_savepoints();
 	}
 
 	/**
@@ -14714,6 +14738,7 @@ class WP_DuckDB_Driver {
 	private function execute_commit_statement( array $tokens ): WP_DuckDB_Result_Statement {
 		$this->assert_optional_work_only( $tokens, 'COMMIT' );
 		if ( $this->connection->inTransaction() ) {
+			$this->release_all_emulated_savepoints();
 			$this->last_duckdb_queries[] = 'COMMIT';
 			$this->connection->commit();
 		}
@@ -14728,14 +14753,257 @@ class WP_DuckDB_Driver {
 	 * @return WP_DuckDB_Result_Statement
 	 */
 	private function execute_rollback_statement( array $tokens ): WP_DuckDB_Result_Statement {
+		if (
+			isset( $tokens[1] )
+			&& (
+				WP_MySQL_Lexer::TO_SYMBOL === $tokens[1]->id
+				|| (
+					WP_MySQL_Lexer::WORK_SYMBOL === $tokens[1]->id
+					&& isset( $tokens[2] )
+					&& WP_MySQL_Lexer::TO_SYMBOL === $tokens[2]->id
+				)
+			)
+		) {
+			return $this->execute_rollback_to_savepoint_statement( $tokens );
+		}
+
 		$this->assert_optional_work_only( $tokens, 'ROLLBACK' );
 		if ( $this->connection->inTransaction() ) {
 			$this->last_duckdb_queries[] = 'ROLLBACK';
 			$this->connection->rollback();
 			$this->clear_schema_state_after_rollback();
+			$this->clear_emulated_savepoints();
 		}
 		$this->table_lock_active = false;
 		return $this->empty_ddl_result();
+	}
+
+	/**
+	 * Execute SAVEPOINT name by snapshotting visible user tables.
+	 *
+	 * DuckDB currently rejects native SAVEPOINT SQL. WordPress plugins use
+	 * savepoints mostly to guard DML, so the driver emulates that case by taking
+	 * connection-local temporary table snapshots inside the active transaction.
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @return WP_DuckDB_Result_Statement
+	 */
+	private function execute_savepoint_statement( array $tokens ): WP_DuckDB_Result_Statement {
+		if ( 2 !== count( $tokens ) ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported SAVEPOINT statement in DuckDB driver.' );
+		}
+
+		if ( ! $this->connection->inTransaction() ) {
+			$this->begin_user_transaction();
+		}
+
+		$name = $this->identifier_value( $tokens[1] );
+		$key  = strtolower( $name );
+		if ( isset( $this->emulated_savepoints[ $key ] ) ) {
+			$this->release_emulated_savepoint( $key );
+		}
+
+		$this->emulated_savepoints[ $key ] = array(
+			'name'      => $name,
+			'sequence'  => ++$this->emulated_savepoint_sequence,
+			'snapshots' => $this->create_emulated_savepoint_snapshots( $key ),
+		);
+
+		return $this->empty_ddl_result();
+	}
+
+	/**
+	 * Execute ROLLBACK [WORK] TO [SAVEPOINT] name.
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @return WP_DuckDB_Result_Statement
+	 */
+	private function execute_rollback_to_savepoint_statement( array $tokens ): WP_DuckDB_Result_Statement {
+		$index = 1;
+		if ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::WORK_SYMBOL === $tokens[ $index ]->id ) {
+			++$index;
+		}
+		if ( ! isset( $tokens[ $index ] ) || WP_MySQL_Lexer::TO_SYMBOL !== $tokens[ $index ]->id ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported SAVEPOINT statement in DuckDB driver.' );
+		}
+		++$index;
+		if ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::SAVEPOINT_SYMBOL === $tokens[ $index ]->id ) {
+			++$index;
+		}
+		if ( ! isset( $tokens[ $index ] ) || isset( $tokens[ $index + 1 ] ) ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported SAVEPOINT statement in DuckDB driver.' );
+		}
+
+		$key = strtolower( $this->identifier_value( $tokens[ $index ] ) );
+		if ( ! isset( $this->emulated_savepoints[ $key ] ) ) {
+			throw new WP_DuckDB_Driver_Exception( 'SAVEPOINT does not exist: ' . $tokens[ $index ]->get_bytes() . '.' );
+		}
+
+		$this->restore_emulated_savepoint( $key );
+		$this->release_emulated_savepoints_after( $this->emulated_savepoints[ $key ]['sequence'] );
+
+		return $this->empty_ddl_result();
+	}
+
+	/**
+	 * Execute RELEASE SAVEPOINT name.
+	 *
+	 * @param WP_Parser_Token[] $tokens MySQL tokens.
+	 * @return WP_DuckDB_Result_Statement
+	 */
+	private function execute_release_savepoint_statement( array $tokens ): WP_DuckDB_Result_Statement {
+		if (
+			3 !== count( $tokens )
+			|| WP_MySQL_Lexer::RELEASE_SYMBOL !== $tokens[0]->id
+			|| WP_MySQL_Lexer::SAVEPOINT_SYMBOL !== $tokens[1]->id
+		) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported SAVEPOINT statement in DuckDB driver.' );
+		}
+
+		$key = strtolower( $this->identifier_value( $tokens[2] ) );
+		if ( ! isset( $this->emulated_savepoints[ $key ] ) ) {
+			throw new WP_DuckDB_Driver_Exception( 'SAVEPOINT does not exist: ' . $tokens[2]->get_bytes() . '.' );
+		}
+
+		$this->release_emulated_savepoint( $key );
+		return $this->empty_ddl_result();
+	}
+
+	/**
+	 * Snapshot all visible user tables for an emulated savepoint.
+	 *
+	 * @param string $key Normalized savepoint name.
+	 * @return array<int,array{table_name:string,temporary:bool,snapshot_table:string}>
+	 */
+	private function create_emulated_savepoint_snapshots( string $key ): array {
+		$snapshots = array();
+		$table_sets = array(
+			array(
+				'temporary' => false,
+				'tables'    => $this->user_table_names(),
+			),
+			array(
+				'temporary' => true,
+				'tables'    => $this->temporary_user_table_names(),
+			),
+		);
+
+		foreach ( $table_sets as $table_set ) {
+			foreach ( $table_set['tables'] as $table_name ) {
+				$snapshot_table = sprintf(
+					'__wp_duckdb_savepoint_%d_%s',
+					$this->emulated_savepoint_sequence,
+					substr( md5( $key . ':' . ( $table_set['temporary'] ? 't:' : 'p:' ) . $table_name ), 0, 20 )
+				);
+				$this->execute_duckdb_query(
+					'CREATE TEMPORARY TABLE '
+						. $this->connection->quote_identifier( $snapshot_table )
+						. ' AS SELECT * FROM '
+						. $this->connection->quote_identifier( $table_name ),
+					'Failed to create DuckDB SAVEPOINT snapshot'
+				);
+				$snapshots[] = array(
+					'table_name'      => $table_name,
+					'temporary'       => (bool) $table_set['temporary'],
+					'snapshot_table'  => $snapshot_table,
+				);
+			}
+		}
+
+		return $snapshots;
+	}
+
+	/**
+	 * Restore all DML rows captured by an emulated savepoint.
+	 *
+	 * @param string $key Normalized savepoint name.
+	 */
+	private function restore_emulated_savepoint( string $key ): void {
+		$savepoint      = $this->emulated_savepoints[ $key ];
+		$snapshot_names = array();
+		foreach ( $savepoint['snapshots'] as $snapshot ) {
+			$snapshot_names[ ( $snapshot['temporary'] ? 'temporary:' : 'persistent:' ) . strtolower( $snapshot['table_name'] ) ] = true;
+		}
+
+		foreach ( array( false, true ) as $temporary ) {
+			$current_names = $temporary ? $this->temporary_user_table_names() : $this->user_table_names();
+			foreach ( $current_names as $table_name ) {
+				$current_key = ( $temporary ? 'temporary:' : 'persistent:' ) . strtolower( $table_name );
+				if ( ! isset( $snapshot_names[ $current_key ] ) ) {
+					throw new WP_DuckDB_Driver_Exception( 'Unsupported SAVEPOINT rollback in DuckDB driver. Tables created after the savepoint cannot be rolled back.' );
+				}
+			}
+		}
+
+		foreach ( $savepoint['snapshots'] as $snapshot ) {
+			$reference = $snapshot['temporary']
+				? $this->resolve_temporary_user_table_reference( $snapshot['table_name'] )
+				: $this->resolve_visible_user_table_reference( $snapshot['table_name'] );
+			if ( null === $reference || (bool) $reference['temporary'] !== (bool) $snapshot['temporary'] ) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported SAVEPOINT rollback in DuckDB driver. Tables dropped after the savepoint cannot be rolled back.' );
+			}
+
+			$this->execute_duckdb_query(
+				'DELETE FROM ' . $this->connection->quote_identifier( $reference['table_name'] ),
+				'Failed to restore DuckDB SAVEPOINT rows'
+			);
+			$this->execute_duckdb_query(
+				'INSERT INTO '
+					. $this->connection->quote_identifier( $reference['table_name'] )
+					. ' SELECT * FROM '
+					. $this->connection->quote_identifier( $snapshot['snapshot_table'] ),
+				'Failed to restore DuckDB SAVEPOINT rows'
+			);
+		}
+	}
+
+	/**
+	 * Release all savepoints created after a sequence number.
+	 *
+	 * @param int $sequence Savepoint sequence to keep.
+	 */
+	private function release_emulated_savepoints_after( int $sequence ): void {
+		foreach ( array_keys( $this->emulated_savepoints ) as $key ) {
+			if ( $this->emulated_savepoints[ $key ]['sequence'] > $sequence ) {
+				$this->release_emulated_savepoint( $key );
+			}
+		}
+	}
+
+	/**
+	 * Drop snapshot tables and forget one emulated savepoint.
+	 *
+	 * @param string $key Normalized savepoint name.
+	 */
+	private function release_emulated_savepoint( string $key ): void {
+		if ( ! isset( $this->emulated_savepoints[ $key ] ) ) {
+			return;
+		}
+
+		foreach ( $this->emulated_savepoints[ $key ]['snapshots'] as $snapshot ) {
+			$this->execute_duckdb_query(
+				'DROP TABLE IF EXISTS ' . $this->connection->quote_identifier( $snapshot['snapshot_table'] ),
+				'Failed to release DuckDB SAVEPOINT snapshot'
+			);
+		}
+
+		unset( $this->emulated_savepoints[ $key ] );
+	}
+
+	/**
+	 * Drop every snapshot table for the current transaction.
+	 */
+	private function release_all_emulated_savepoints(): void {
+		foreach ( array_keys( $this->emulated_savepoints ) as $key ) {
+			$this->release_emulated_savepoint( $key );
+		}
+	}
+
+	/**
+	 * Forget every emulated savepoint without issuing SQL.
+	 */
+	private function clear_emulated_savepoints(): void {
+		$this->emulated_savepoints = array();
 	}
 
 	/**
@@ -14745,6 +15013,7 @@ class WP_DuckDB_Driver {
 	 */
 	private function begin_user_transaction(): void {
 		if ( $this->connection->inTransaction() ) {
+			$this->release_all_emulated_savepoints();
 			$this->last_duckdb_queries[] = 'COMMIT';
 			$this->connection->commit();
 			$this->table_lock_active = false;
