@@ -39,6 +39,26 @@ class WP_DuckDB_Driver {
 	const TRANSACTION_RECOVERY_PROBE_TABLE          = '__wp_duckdb_transaction_recovery_probe';
 	const DEFAULT_GROUP_CONCAT_MAX_LEN              = 1024;
 
+	const MYSQL_CHARSET_SESSION_VARIABLES = array(
+		'character_set_client',
+		'character_set_connection',
+		'character_set_database',
+		'character_set_results',
+		'character_set_server',
+	);
+
+	const MYSQL_COLLATION_SESSION_VARIABLES = array(
+		'collation_connection',
+		'collation_database',
+		'collation_server',
+	);
+
+	const MYSQL_DEFAULT_COLLATIONS_BY_CHARSET = array(
+		'latin1'  => 'latin1_swedish_ci',
+		'utf8'    => 'utf8_general_ci',
+		'utf8mb4' => 'utf8mb4_unicode_ci',
+	);
+
 	const SUPPORTED_SESSION_SYSTEM_VARIABLES = array(
 		'autocommit'                              => true,
 		'big_tables'                              => true,
@@ -13504,7 +13524,7 @@ class WP_DuckDB_Driver {
 
 		$default_scope = WP_MySQL_Lexer::SESSION_SYMBOL;
 		foreach ( $assignments as $assignment ) {
-			if ( $this->is_set_charset_bootstrap_assignment( $assignment ) ) {
+			if ( $this->apply_set_charset_assignment( $assignment ) ) {
 				continue;
 			}
 
@@ -13520,29 +13540,144 @@ class WP_DuckDB_Driver {
 	}
 
 	/**
-	 * Check whether a SET statement is a charset bootstrap no-op.
+	 * Apply a SET NAMES/CHARSET assignment to emulated MySQL session state.
 	 *
 	 * @param WP_Parser_Token[] $tokens MySQL tokens.
 	 * @return bool Whether the assignment is SET NAMES, SET CHARSET, or SET CHARACTER SET.
 	 */
-	private function is_set_charset_bootstrap_assignment( array $tokens ): bool {
+	private function apply_set_charset_assignment( array $tokens ): bool {
 		if ( ! isset( $tokens[0] ) ) {
 			return false;
 		}
 
-		if ( WP_MySQL_Lexer::NAMES_SYMBOL === $tokens[0]->id || WP_MySQL_Lexer::CHARSET_SYMBOL === $tokens[0]->id ) {
+		if ( WP_MySQL_Lexer::NAMES_SYMBOL === $tokens[0]->id ) {
+			if ( ! isset( $tokens[1] ) ) {
+				return false;
+			}
+
+			$charset   = $this->normalize_mysql_charset_token( $tokens[1] );
+			$collation = null;
+			$index     = 2;
+
+			if ( isset( $tokens[ $index ] ) && WP_MySQL_Lexer::COLLATE_SYMBOL === $tokens[ $index ]->id ) {
+				if ( ! isset( $tokens[ $index + 1 ] ) ) {
+					return false;
+				}
+				$collation = $this->normalize_mysql_collation_token( $tokens[ $index + 1 ] );
+				$index    += 2;
+			}
+
+			if ( count( $tokens ) !== $index ) {
+				return false;
+			}
+
+			$this->set_mysql_charset_session_state( $charset, $collation );
+			return true;
+		}
+
+		if (
+			WP_MySQL_Lexer::CHARSET_SYMBOL === $tokens[0]->id
+			&& isset( $tokens[1] )
+			&& 2 === count( $tokens )
+		) {
+			$this->set_mysql_charset_session_state( $this->normalize_mysql_charset_token( $tokens[1] ), null );
 			return true;
 		}
 
 		if (
 			( WP_MySQL_Lexer::CHARACTER_SYMBOL === $tokens[0]->id || WP_MySQL_Lexer::CHAR_SYMBOL === $tokens[0]->id )
-			&& isset( $tokens[1] )
+			&& isset( $tokens[1], $tokens[2] )
 			&& WP_MySQL_Lexer::SET_SYMBOL === $tokens[1]->id
+			&& 3 === count( $tokens )
 		) {
+			$this->set_mysql_charset_session_state( $this->normalize_mysql_charset_token( $tokens[2] ), null );
 			return true;
 		}
 
 		return false;
+	}
+
+	/**
+	 * Normalize a MySQL charset token.
+	 *
+	 * @param WP_Parser_Token $token Charset token.
+	 * @return string Normalized charset.
+	 */
+	private function normalize_mysql_charset_token( WP_Parser_Token $token ): string {
+		$charset = $this->normalize_mysql_charset_name( $this->charset_or_collation_token_value( $token ) );
+		if ( '' === $charset ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported SET NAMES/CHARSET statement in DuckDB driver.' );
+		}
+
+		return $charset;
+	}
+
+	/**
+	 * Normalize a MySQL collation token.
+	 *
+	 * @param WP_Parser_Token $token Collation token.
+	 * @return string Normalized collation.
+	 */
+	private function normalize_mysql_collation_token( WP_Parser_Token $token ): string {
+		$collation = strtolower( trim( $this->charset_or_collation_token_value( $token ), "'\"` \t\n\r\0\x0B" ) );
+		if ( '' === $collation ) {
+			throw new WP_DuckDB_Driver_Exception( 'Unsupported SET NAMES COLLATE statement in DuckDB driver.' );
+		}
+		if ( 0 === strpos( $collation, 'utf8mb3_' ) ) {
+			return 'utf8_' . substr( $collation, strlen( 'utf8mb3_' ) );
+		}
+
+		return $collation;
+	}
+
+	/**
+	 * Get a charset/collation token value.
+	 *
+	 * @param WP_Parser_Token $token Token.
+	 * @return string Token value.
+	 */
+	private function charset_or_collation_token_value( WP_Parser_Token $token ): string {
+		if ( WP_MySQL_Lexer::BACK_TICK_QUOTED_ID === $token->id || $this->is_non_identifier_token( $token ) ) {
+			if ( WP_MySQL_Lexer::SINGLE_QUOTED_TEXT !== $token->id && WP_MySQL_Lexer::DOUBLE_QUOTED_TEXT !== $token->id ) {
+				throw new WP_DuckDB_Driver_Exception( 'Unsupported SET NAMES/CHARSET token in DuckDB driver.' );
+			}
+		}
+
+		return $this->token_value( $token );
+	}
+
+	/**
+	 * Normalize a MySQL charset name.
+	 *
+	 * @param string $charset Charset.
+	 * @return string Normalized charset.
+	 */
+	private function normalize_mysql_charset_name( string $charset ): string {
+		$charset = strtolower( trim( $charset, "'\"` \t\n\r\0\x0B" ) );
+		return 'utf8mb3' === $charset ? 'utf8' : $charset;
+	}
+
+	/**
+	 * Update charset/collation session variables together.
+	 *
+	 * @param string      $charset   MySQL charset.
+	 * @param string|null $collation Optional MySQL collation.
+	 */
+	private function set_mysql_charset_session_state( string $charset, ?string $collation ): void {
+		if ( 'default' === $charset ) {
+			$defaults  = $this->default_session_system_variables();
+			$charset   = (string) $defaults['character_set_client'];
+			$collation = (string) $defaults['collation_connection'];
+		} elseif ( null === $collation || '' === $collation ) {
+			$collation = self::MYSQL_DEFAULT_COLLATIONS_BY_CHARSET[ $charset ] ?? $charset . '_general_ci';
+		}
+
+		foreach ( self::MYSQL_CHARSET_SESSION_VARIABLES as $name ) {
+			$this->session_system_variables[ $name ] = $charset;
+		}
+		foreach ( self::MYSQL_COLLATION_SESSION_VARIABLES as $name ) {
+			$this->session_system_variables[ $name ] = $collation;
+		}
 	}
 
 	/**

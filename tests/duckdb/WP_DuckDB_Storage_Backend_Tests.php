@@ -1049,6 +1049,162 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		);
 	}
 
+	public function test_set_names_updates_duckdb_show_variables_session_state(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$this->assertSame( 0, $driver->query( "SET NAMES 'utf8' COLLATE 'utf8_general_ci'" )->rowCount() );
+
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'character_set_client',
+					'Value'         => 'utf8',
+				),
+			),
+			$driver->query( "SHOW VARIABLES WHERE Variable_name = 'character_set_client'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'collation_connection',
+					'Value'         => 'utf8_general_ci',
+				),
+			),
+			$driver->query( "SHOW VARIABLES WHERE Variable_name = 'collation_connection'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame(
+			array(
+				array(
+					'charset_client'        => 'utf8',
+					'charset_connection'    => 'utf8',
+					'charset_database'      => 'utf8',
+					'charset_results'       => 'utf8',
+					'charset_server'        => 'utf8',
+					'collation_connection'  => 'utf8_general_ci',
+					'collation_database'    => 'utf8_general_ci',
+					'collation_server'      => 'utf8_general_ci',
+				),
+			),
+			$driver->query(
+				'SELECT @@character_set_client AS charset_client,
+					@@character_set_connection AS charset_connection,
+					@@character_set_database AS charset_database,
+					@@character_set_results AS charset_results,
+					@@character_set_server AS charset_server,
+					@@collation_connection AS collation_connection,
+					@@collation_database AS collation_database,
+					@@collation_server AS collation_server'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( 'SET NAMES DEFAULT' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'charset_client'       => 'utf8mb4',
+					'collation_connection' => 'utf8mb4_unicode_ci',
+				),
+			),
+			$driver->query(
+				'SELECT @@character_set_client AS charset_client,
+					@@collation_connection AS collation_connection'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_set_charset_aliases_update_duckdb_show_variables_session_state(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$this->assertSame( 0, $driver->query( 'SET CHARSET utf8' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'charset_client'       => 'utf8',
+					'collation_connection' => 'utf8_general_ci',
+				),
+			),
+			$driver->query(
+				'SELECT @@character_set_client AS charset_client,
+					@@collation_connection AS collation_connection'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( 'SET CHARACTER SET utf8mb4' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'charset_client'       => 'utf8mb4',
+					'collation_connection' => 'utf8mb4_unicode_ci',
+				),
+			),
+			$driver->query(
+				'SELECT @@character_set_client AS charset_client,
+					@@collation_connection AS collation_connection'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( 'SET CHAR SET utf8mb3' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'Variable_name' => 'character_set_client',
+					'Value'         => 'utf8',
+				),
+			),
+			$driver->query( "SHOW VARIABLES LIKE 'character_set_client'" )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_conditional_comment_charset_set_wrappers_update_duckdb_session_state(): void {
+		$this->requireDuckDBRuntime();
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'       => 'duckdb',
+				'database_path' => ':memory:',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+
+		$this->assertSame( 0, $driver->query( '/*!50503 SET NAMES utf8 */;' )->rowCount() );
+		$this->assertSame( 0, $driver->query( '/*!40101 SET @saved_cs_client = @@character_set_client */; ' )->rowCount() );
+		$this->assertSame( 0, $driver->query( '/*!50503 SET character_set_client = latin1 */;' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'charset_client' => 'latin1',
+				),
+			),
+			$driver->query( 'SELECT @@character_set_client AS charset_client' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$this->assertSame( 0, $driver->query( '/*!40101 SET character_set_client = @saved_cs_client */;' )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'charset_client' => 'utf8',
+				),
+			),
+			$driver->query( 'SELECT @@character_set_client AS charset_client' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
 	public function test_insert_select_on_duplicate_key_update_uses_unique_metadata_conflict_target(): void {
 		$this->requireDuckDBRuntime();
 
