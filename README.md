@@ -102,7 +102,7 @@ storage backends with WordPress 7.0, WooCommerce, and Query Monitor:
 | Local Parquet files | Proven in CI | One Parquet file per WordPress table. |
 | Custom file templates | Proven in CI | The CI smoke uses pipe-delimited `.psv` files through custom read/write SQL. |
 | Attached SQLite via DuckDB | Proven in CI | DuckDB hydrates from and flushes to an attached SQLite database file. |
-| S3-compatible object storage | Configurable, not CI-proven yet | Requires `httpfs`, writable S3 credentials, a table source strategy, and backend-specific testing. |
+| S3-compatible Parquet object storage | Proven in CI against MinIO | Uses DuckDB `httpfs`, S3 secrets, `s3://` paths, and a local metadata manifest. |
 | Attached PostgreSQL/MySQL via DuckDB | Configurable, not CI-proven yet | Prefer the native PostgreSQL backend when PostgreSQL should be the actual WordPress database. |
 | Lakehouse/extension backends | Configurable, not CI-proven yet | Only usable when the extension can fully hydrate and flush every WordPress table. |
 
@@ -247,7 +247,7 @@ define( 'DUCKDB_BACKEND_TABLES', array(
 	'wp_usermeta',
 ) );
 define( 'DUCKDB_BACKEND_READ_SQL', 'SELECT * FROM read_parquet({path})' );
-define( 'DUCKDB_BACKEND_WRITE_SQL', 'COPY {table} TO {path} (FORMAT PARQUET)' );
+define( 'DUCKDB_BACKEND_WRITE_SQL', 'COPY {table} TO {path} (FORMAT PARQUET, OVERWRITE_OR_IGNORE true)' );
 define( 'DUCKDB_BACKEND_ATOMIC_FLUSH', false );
 ```
 
@@ -360,18 +360,18 @@ backward-compatible `DATABASE_ENGINE` constant.
 
 ## DuckDB External Storage Backends
 
-The DuckDB suite includes focused proof that Parquet, CSV, JSON, and custom
-DuckDB SQL-template backends can act as durable WordPress table storage through
-the configured backend:
+The DuckDB suite includes focused proof that Parquet, CSV, JSON, S3-compatible
+Parquet, and custom DuckDB SQL-template backends can act as durable WordPress
+table storage through the configured backend:
 
 - It creates WordPress-shaped `wptests_posts`, `wptests_postmeta`, and
   `wptests_options` data.
 - It proves read-only file-backed views can serve WordPress-style reads,
   including `SQL_CALC_FOUND_ROWS`, joins, ordering, and autoloaded options.
 - It proves mutable storage by hydrating real DuckDB tables from Parquet, CSV,
-  and JSON files, mutating them through `WP_DuckDB_Driver`, flushing them back
-  to the external files with `COPY`, and reloading fresh DuckDB connections to
-  verify the mutations persisted.
+  JSON, and MinIO-backed `s3://` Parquet storage, mutating them through
+  `WP_DuckDB_Driver`, flushing them back to the external backend with `COPY`,
+  and reloading fresh DuckDB connections to verify the mutations persisted.
 - It proves `DUCKDB_BACKEND`-style configuration by connecting through
   `WP_DuckDB_Storage_Backend`, mutating WordPress tables and a custom table,
   flushing the configured backend, and reconnecting from the same external
@@ -482,6 +482,21 @@ WP_DUCKDB_BACKEND_FILE_EXTENSION=psv \
 WP_DUCKDB_BACKEND_READ_SQL="SELECT * FROM read_csv_auto({path}, HEADER = true, DELIM = '|')" \
 WP_DUCKDB_BACKEND_WRITE_SQL="COPY {table} TO {path} (HEADER, DELIMITER '|')" \
 ./bin/duckdb-wordpress-plugin-smoke.sh pipe_text
+```
+
+Run it against MinIO or another local S3-compatible server:
+
+```bash
+WORDPRESS_VERSION=7.0 \
+WOOCOMMERCE_VERSION=10.9.1 \
+QUERY_MONITOR_VERSION=4.0.7 \
+WP_DUCKDB_EXTERNAL_STORAGE_DIR='s3://duckdb-wordpress-smoke/wordpress/' \
+WP_DUCKDB_BACKEND_FILE_EXTENSION=parquet \
+WP_DUCKDB_BACKEND_SETUP_SQL_JSON='["INSTALL httpfs","LOAD httpfs","CREATE OR REPLACE SECRET wp_s3 (TYPE s3, PROVIDER config, KEY_ID '\''minioadmin'\'', SECRET '\''minioadmin'\'', REGION '\''us-east-1'\'', ENDPOINT '\''127.0.0.1:9000'\'', URL_STYLE '\''path'\'', USE_SSL false, SCOPE '\''s3://duckdb-wordpress-smoke/wordpress/'\'')"]' \
+WP_DUCKDB_BACKEND_READ_SQL='SELECT * FROM read_parquet({path})' \
+WP_DUCKDB_BACKEND_WRITE_SQL='COPY {table} TO {path} (FORMAT PARQUET, OVERWRITE_OR_IGNORE true)' \
+WP_DUCKDB_BACKEND_ATOMIC_FLUSH=0 \
+./bin/duckdb-wordpress-plugin-smoke.sh s3_parquet
 ```
 
 Run it against DuckDB's SQLite extension:

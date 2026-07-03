@@ -295,40 +295,53 @@ jobs:
       matrix:
         include:
           - backend: duckdb
+            external_storage_dir: ''
             file_extension: ''
             read_sql: ''
             write_sql: ''
             setup_sql_json: ''
             atomic_flush: ''
           - backend: json
+            external_storage_dir: ''
             file_extension: ''
             read_sql: ''
             write_sql: ''
             setup_sql_json: ''
             atomic_flush: ''
           - backend: csv
+            external_storage_dir: ''
             file_extension: ''
             read_sql: ''
             write_sql: ''
             setup_sql_json: ''
             atomic_flush: ''
           - backend: parquet
+            external_storage_dir: ''
             file_extension: ''
             read_sql: ''
             write_sql: ''
             setup_sql_json: ''
             atomic_flush: ''
           - backend: pipe_text
+            external_storage_dir: ''
             file_extension: psv
             read_sql: 'SELECT * FROM read_csv_auto({path}, HEADER = true, DELIM = ''|'')'
             write_sql: 'COPY {table} TO {path} (HEADER, DELIMITER ''|'')'
             setup_sql_json: ''
             atomic_flush: ''
           - backend: sqlite_attach
+            external_storage_dir: ''
             file_extension: ''
             read_sql: 'SELECT * FROM wp_store.{table}'
             write_sql: 'CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}'
             setup_sql_json: '["INSTALL sqlite","LOAD sqlite","ATTACH ''{database_dir}/wordpress.sqlite'' AS wp_store (TYPE sqlite)"]'
+            atomic_flush: '0'
+          - backend: s3_parquet
+            external_storage_dir: 's3://duckdb-wordpress-smoke/wordpress/'
+            file_extension: parquet
+            read_sql: 'SELECT * FROM read_parquet({path})'
+            write_sql: 'COPY {table} TO {path} (FORMAT PARQUET, OVERWRITE_OR_IGNORE true)'
+            setup_sql_json: '["INSTALL httpfs","LOAD httpfs","CREATE OR REPLACE SECRET wp_s3 (TYPE s3, PROVIDER config, KEY_ID ''minioadmin'', SECRET ''minioadmin'', REGION ''us-east-1'', ENDPOINT ''127.0.0.1:9000'', URL_STYLE ''path'', USE_SSL false, SCOPE ''s3://duckdb-wordpress-smoke/wordpress/'')"]'
             atomic_flush: '0'
 
     env:
@@ -349,8 +362,34 @@ jobs:
           coverage: none
 
       - name: Run WordPress plugin smoke on DuckDB
-        run: ./bin/duckdb-wordpress-plugin-smoke.sh ${{ matrix.backend }}
+        run: |
+          set -euo pipefail
+          if [ '${{ matrix.backend }}' = 's3_parquet' ]; then
+            mkdir -p "$RUNNER_TEMP/minio-bin" "$RUNNER_TEMP/minio-data"
+            curl -fsSL https://dl.min.io/server/minio/release/linux-amd64/minio -o "$RUNNER_TEMP/minio-bin/minio"
+            curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o "$RUNNER_TEMP/minio-bin/mc"
+            chmod +x "$RUNNER_TEMP/minio-bin/minio" "$RUNNER_TEMP/minio-bin/mc"
+            MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin \
+              "$RUNNER_TEMP/minio-bin/minio" server "$RUNNER_TEMP/minio-data" --address 127.0.0.1:9000 \
+              > "$RUNNER_TEMP/minio.log" 2>&1 &
+            minio_pid=$!
+            trap 'kill "$minio_pid" >/dev/null 2>&1 || true' EXIT
+            for attempt in $(seq 1 60); do
+              if curl -fsS http://127.0.0.1:9000/minio/health/ready >/dev/null; then
+                break
+              fi
+              if [ "$attempt" -eq 60 ]; then
+                tail -100 "$RUNNER_TEMP/minio.log"
+                exit 1
+              fi
+              sleep 1
+            done
+            "$RUNNER_TEMP/minio-bin/mc" alias set local http://127.0.0.1:9000 minioadmin minioadmin
+            "$RUNNER_TEMP/minio-bin/mc" mb -p local/duckdb-wordpress-smoke
+          fi
+          ./bin/duckdb-wordpress-plugin-smoke.sh ${{ matrix.backend }}
         env:
+          WP_DUCKDB_EXTERNAL_STORAGE_DIR: ${{ matrix.external_storage_dir }}
           WP_DUCKDB_BACKEND_FILE_EXTENSION: ${{ matrix.file_extension }}
           WP_DUCKDB_BACKEND_READ_SQL: ${{ matrix.read_sql }}
           WP_DUCKDB_BACKEND_WRITE_SQL: ${{ matrix.write_sql }}
