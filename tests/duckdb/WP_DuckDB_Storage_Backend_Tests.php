@@ -250,6 +250,161 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		);
 	}
 
+	public function test_s3_compatible_parquet_backend_round_trips_wordpress_mutations(): void {
+		$this->requireDuckDBRuntime();
+
+		if ( '1' !== getenv( 'WP_DUCKDB_S3_TESTS' ) ) {
+			$this->markTestSkipped( 'S3-compatible DuckDB tests require WP_DUCKDB_S3_TESTS=1.' );
+		}
+
+		$external_dir = $this->duckdb_s3_external_storage_dir();
+		$setup_sql    = $this->duckdb_s3_setup_sql();
+		$temp_dir     = $this->create_temp_dir();
+		$manifest     = $temp_dir . '/s3-metadata.json';
+		$tables       = array( 'wptests_options', 'wptests_posts' );
+
+		$seed_storage = new WP_DuckDB_Storage_Backend(
+			$this->s3_parquet_backend_options(
+				$temp_dir . '/seed.duckdb',
+				$external_dir,
+				$manifest,
+				$setup_sql
+			)
+		);
+		$seed_driver  = $seed_storage->create_driver( 'wp' );
+
+		$seed_driver->query(
+			"CREATE TABLE wptests_options (
+				option_id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				option_name varchar(191) NOT NULL DEFAULT '',
+				option_value longtext NOT NULL,
+				autoload varchar(20) NOT NULL DEFAULT 'yes',
+				PRIMARY KEY (option_id),
+				UNIQUE KEY option_name (option_name)
+			)"
+		);
+		$seed_driver->query(
+			"INSERT INTO wptests_options (option_name, option_value, autoload)
+			VALUES
+				('siteurl', 'https://example.test', 'yes'),
+				('blogname', 'S3 External Site', 'yes')"
+		);
+		$seed_driver->query(
+			"CREATE TABLE wptests_posts (
+				ID bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				post_title varchar(255) NOT NULL DEFAULT '',
+				post_status varchar(20) NOT NULL DEFAULT 'publish',
+				PRIMARY KEY (ID)
+			)"
+		);
+		$seed_driver->query(
+			"INSERT INTO wptests_posts (post_title, post_status)
+			VALUES
+				('First S3 post', 'publish'),
+				('Draft S3 post', 'draft')"
+		);
+		$seed_storage->flush();
+		unset( $seed_driver, $seed_storage );
+
+		$this->assertFileExists( $manifest );
+
+		$fresh_storage = new WP_DuckDB_Storage_Backend(
+			$this->s3_parquet_backend_options(
+				$temp_dir . '/fresh.duckdb',
+				$external_dir,
+				$manifest,
+				$setup_sql,
+				$tables
+			)
+		);
+		$fresh_driver  = $fresh_storage->create_driver( 'wp' );
+
+		$this->assertSame(
+			array(
+				array(
+					'option_name'  => 'blogname',
+					'option_value' => 'S3 External Site',
+				),
+			),
+			$fresh_driver->query(
+				"SELECT option_name, option_value
+				FROM wptests_options
+				WHERE option_name = 'blogname'"
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+
+		$fresh_driver->query(
+			"INSERT INTO wptests_options (option_name, option_value, autoload)
+			VALUES ('blogname', 'Changed Through S3 Backend', 'no')
+			ON DUPLICATE KEY UPDATE option_value = VALUES(option_value), autoload = VALUES(autoload)"
+		);
+		$this->assertSame(
+			1,
+			$fresh_driver->query(
+				"INSERT INTO wptests_posts (post_title, post_status)
+				VALUES ('Created after S3 reload', 'publish')"
+			)->rowCount()
+		);
+		$this->assertSame( 3, $fresh_driver->get_insert_id() );
+		$fresh_storage->flush();
+		unset( $fresh_driver, $fresh_storage );
+
+		$final_storage = new WP_DuckDB_Storage_Backend(
+			$this->s3_parquet_backend_options(
+				$temp_dir . '/final.duckdb',
+				$external_dir,
+				$manifest,
+				$setup_sql,
+				$tables
+			)
+		);
+		$final_driver  = $final_storage->create_driver( 'wp' );
+
+		$this->assertSame(
+			array(
+				array(
+					'option_name'  => 'blogname',
+					'option_value' => 'Changed Through S3 Backend',
+					'autoload'     => 'no',
+				),
+				array(
+					'option_name'  => 'siteurl',
+					'option_value' => 'https://example.test',
+					'autoload'     => 'yes',
+				),
+			),
+			$final_driver->query(
+				'SELECT option_name, option_value, autoload
+				FROM wptests_options
+				ORDER BY option_name'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame(
+			array(
+				array(
+					'ID'          => 1,
+					'post_title'  => 'First S3 post',
+					'post_status' => 'publish',
+				),
+				array(
+					'ID'          => 2,
+					'post_title'  => 'Draft S3 post',
+					'post_status' => 'draft',
+				),
+				array(
+					'ID'          => 3,
+					'post_title'  => 'Created after S3 reload',
+					'post_status' => 'publish',
+				),
+			),
+			$final_driver->query(
+				'SELECT ID, post_title, post_status
+				FROM wptests_posts
+				ORDER BY ID'
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
 	public function test_non_scannable_backend_uses_working_database_tables_as_source_registry(): void {
 		$this->requireDuckDBRuntime();
 
@@ -3122,6 +3277,56 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		}
 
 		throw new InvalidArgumentException( 'Unsupported DuckDB backend: ' . $backend );
+	}
+
+	private function duckdb_s3_external_storage_dir(): string {
+		$value = getenv( 'WP_DUCKDB_S3_EXTERNAL_STORAGE_DIR' );
+		if ( false === $value || '' === $value ) {
+			$value = getenv( 'WP_DUCKDB_EXTERNAL_STORAGE_DIR' );
+		}
+		if ( false === $value || '' === $value ) {
+			$this->markTestSkipped( 'Set WP_DUCKDB_S3_EXTERNAL_STORAGE_DIR to an s3:// prefix.' );
+		}
+
+		return rtrim( $value, '/' ) . '/phpunit-' . getmypid() . '-' . str_replace( '.', '-', uniqid( '', true ) );
+	}
+
+	private function duckdb_s3_setup_sql(): array {
+		$value = getenv( 'WP_DUCKDB_S3_SETUP_SQL_JSON' );
+		if ( false === $value || '' === $value ) {
+			$value = getenv( 'WP_DUCKDB_BACKEND_SETUP_SQL_JSON' );
+		}
+		if ( false === $value || '' === $value ) {
+			$this->markTestSkipped( 'Set WP_DUCKDB_S3_SETUP_SQL_JSON to the DuckDB httpfs setup SQL JSON array.' );
+		}
+
+		$statements = json_decode( $value, true );
+		if ( ! is_array( $statements ) ) {
+			throw new InvalidArgumentException( 'WP_DUCKDB_S3_SETUP_SQL_JSON must be a JSON array of SQL strings.' );
+		}
+
+		foreach ( $statements as $statement ) {
+			if ( ! is_string( $statement ) || '' === trim( $statement ) ) {
+				throw new InvalidArgumentException( 'WP_DUCKDB_S3_SETUP_SQL_JSON must contain only non-empty SQL strings.' );
+			}
+		}
+
+		return array_values( $statements );
+	}
+
+	private function s3_parquet_backend_options( string $database, string $external_dir, string $manifest, array $setup_sql, array $tables = array() ): array {
+		return array(
+			'backend'                => 's3_parquet',
+			'database_path'          => $database,
+			'external_storage_dir'   => $external_dir,
+			'file_extension'         => 'parquet',
+			'metadata_manifest_path' => $manifest,
+			'read_sql_template'      => 'SELECT * FROM read_parquet({path})',
+			'write_sql_template'     => 'COPY {table} TO {path} (FORMAT PARQUET, OVERWRITE_OR_IGNORE true)',
+			'setup_sql'              => $setup_sql,
+			'tables'                 => $tables,
+			'atomic_flush'           => false,
+		);
 	}
 
 	private function show_grants_expected_value(): string {

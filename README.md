@@ -376,11 +376,15 @@ table storage through the configured backend:
   `WP_DuckDB_Storage_Backend`, mutating WordPress tables and a custom table,
   flushing the configured backend, and reconnecting from the same external
   files.
+- It includes an opt-in MinIO-backed S3 PHPUnit test that writes WordPress-style
+  tables to `s3://` Parquet objects, reconnects from a fresh working database,
+  and verifies persisted rows, unique-key upserts, and auto-increment state.
 - It proves an arbitrary custom backend name using custom DuckDB read/write
   templates, so support is not limited to the built-in presets.
 
 This is a mutable WordPress storage model backed by external files. It is not
-in-place mutation of Parquet/CSV/JSON scan functions.
+in-place mutation of Parquet/CSV/JSON scan functions, and it is not the same
+direct OLTP storage model as the PostgreSQL or SQLite backends.
 
 Run the proof locally:
 
@@ -400,6 +404,13 @@ composer run test-duckdb
 The external-format and configured-backend test classes are
 `tests/duckdb/WP_DuckDB_External_Format_Backend_Tests.php` and
 `tests/duckdb/WP_DuckDB_Storage_Backend_Tests.php`.
+
+The focused S3 PHPUnit test is skipped by default. To run it, start MinIO or
+another S3-compatible server, create a bucket, then set
+`WP_DUCKDB_S3_TESTS=1`, `WP_DUCKDB_S3_EXTERNAL_STORAGE_DIR`, and
+`WP_DUCKDB_S3_SETUP_SQL_JSON` before running `composer run test-duckdb` or the
+single `test_s3_compatible_parquet_backend_round_trips_wordpress_mutations`
+PHPUnit filter.
 
 For a runnable WordPress site using DuckDB JSON storage, start with the
 [Docker quick start](#quick-start-wordpress-on-duckdb-json).
@@ -530,9 +541,10 @@ lints root-owned PHP files, runs the PostgreSQL PHPUnit suite and smoke test
 against PostgreSQL 16, runs the DuckDB PHPUnit suite with the native DuckDB PHP
 client, keeps the existing WordPress core PostgreSQL PHPUnit job, and runs the
 focused WordPress core DB test class against DuckDB. It also runs the
-WooCommerce and Query Monitor smoke matrix against native DuckDB, JSON, CSV, and
-Parquet storage, a custom pipe-delimited file backend, and DuckDB's attached
-SQLite extension.
+focused DuckDB S3 PHPUnit test against local MinIO. The WordPress plugin smoke
+matrix runs WooCommerce and Query Monitor against native DuckDB, JSON, CSV,
+Parquet storage, a custom pipe-delimited file backend, DuckDB's attached SQLite
+extension, and S3-compatible Parquet object storage backed by MinIO.
 
 The full WordPress core PHPUnit suite also runs against DuckDB as a required CI
 gate. That job runs with debug output, has bounded PHPUnit and DuckDB lock
@@ -556,8 +568,8 @@ runs and publishes that zip to GitHub Releases for tags matching `v*`.
 
 - Existing MySQL databases are not migrated.
 - DuckDB support requires a separately installed PHP client and native library.
-- DuckDB external file storage currently uses an explicit hydrate/mutate/flush
-  cycle for Parquet, CSV, and JSON.
+- DuckDB external storage currently uses an explicit hydrate/mutate/flush cycle
+  for Parquet, CSV, JSON, S3-compatible object storage, and custom templates.
 - External DuckDB storage keeps table data outside the working database, but
   non-scannable backends still need an explicit `DUCKDB_BACKEND_TABLES` list and
   a durable local metadata manifest for MySQL-facing schema/index metadata.

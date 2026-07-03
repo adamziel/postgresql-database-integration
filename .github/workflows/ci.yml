@@ -103,6 +103,40 @@ jobs:
           WP_DUCKDB_AUTOLOAD: ${{ github.workspace }}/vendor/autoload.php
           DUCKDB_PHP_AUTOLOAD: ${{ github.workspace }}/vendor/autoload.php
 
+      - name: Run DuckDB S3 PHPUnit smoke against MinIO
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/minio-bin" "$RUNNER_TEMP/minio-data"
+          curl -fsSL https://dl.min.io/server/minio/release/linux-amd64/minio -o "$RUNNER_TEMP/minio-bin/minio"
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o "$RUNNER_TEMP/minio-bin/mc"
+          chmod +x "$RUNNER_TEMP/minio-bin/minio" "$RUNNER_TEMP/minio-bin/mc"
+          MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin \
+            "$RUNNER_TEMP/minio-bin/minio" server "$RUNNER_TEMP/minio-data" --address 127.0.0.1:9000 \
+            > "$RUNNER_TEMP/minio.log" 2>&1 &
+          minio_pid=$!
+          trap 'kill "$minio_pid" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/ready >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              tail -100 "$RUNNER_TEMP/minio.log"
+              exit 1
+            fi
+            sleep 1
+          done
+          "$RUNNER_TEMP/minio-bin/mc" alias set local http://127.0.0.1:9000 minioadmin minioadmin
+          "$RUNNER_TEMP/minio-bin/mc" mb -p local/duckdb-wordpress-phpunit
+          vendor/bin/phpunit --configuration phpunit-duckdb.xml.dist --filter test_s3_compatible_parquet_backend_round_trips_wordpress_mutations
+        env:
+          WP_DUCKDB_TESTS: '1'
+          WP_DUCKDB_AUTOLOAD: ${{ github.workspace }}/vendor/autoload.php
+          DUCKDB_PHP_AUTOLOAD: ${{ github.workspace }}/vendor/autoload.php
+          WP_DUCKDB_S3_TESTS: '1'
+          WP_DUCKDB_S3_EXTERNAL_STORAGE_DIR: s3://duckdb-wordpress-phpunit/wordpress/
+          WP_DUCKDB_S3_SETUP_SQL_JSON: '["INSTALL httpfs","LOAD httpfs","CREATE OR REPLACE SECRET wp_s3_phpunit (TYPE s3, PROVIDER config, KEY_ID ''minioadmin'', SECRET ''minioadmin'', REGION ''us-east-1'', ENDPOINT ''127.0.0.1:9000'', URL_STYLE ''path'', USE_SSL false, SCOPE ''s3://duckdb-wordpress-phpunit/wordpress/'')"]'
+
   package:
     name: Plugin package
     runs-on: ubuntu-latest
@@ -375,7 +409,7 @@ jobs:
             minio_pid=$!
             trap 'kill "$minio_pid" >/dev/null 2>&1 || true' EXIT
             for attempt in $(seq 1 60); do
-              if curl -fsS http://127.0.0.1:9000/minio/health/ready >/dev/null; then
+              if curl -fsS http://127.0.0.1:9000/minio/health/ready >/dev/null 2>&1; then
                 break
               fi
               if [ "$attempt" -eq 60 ]; then
