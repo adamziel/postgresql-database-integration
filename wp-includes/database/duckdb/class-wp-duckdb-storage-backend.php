@@ -6,6 +6,7 @@
 class WP_DuckDB_Storage_Backend {
 	const DEFAULT_BACKEND = 'duckdb';
 	const DEFAULT_LOCK_TIMEOUT_SECONDS = 30.0;
+	const METADATA_MANIFEST_FILE = '.wp-duckdb-metadata';
 
 	/**
 	 * Canonical backend name.
@@ -34,6 +35,13 @@ class WP_DuckDB_Storage_Backend {
 	 * @var string|null
 	 */
 	private $file_extension;
+
+	/**
+	 * Local metadata manifest path for external backends.
+	 *
+	 * @var string|null
+	 */
+	private $metadata_manifest_path;
 
 	/**
 	 * SQL relation template used to hydrate one table.
@@ -116,14 +124,15 @@ class WP_DuckDB_Storage_Backend {
 		$backend = isset( $options['backend'] ) ? (string) $options['backend'] : self::DEFAULT_BACKEND;
 		$spec    = self::builtin_backend_spec( $backend );
 
-		$this->backend              = self::normalize_backend( $backend );
-		$this->database_path        = isset( $options['database_path'] ) ? $this->normalize_optional_path( $options['database_path'], 'database_path' ) : null;
-		$this->external_storage_dir = isset( $options['external_storage_dir'] ) ? $this->normalize_optional_path( $options['external_storage_dir'], 'external_storage_dir' ) : null;
-		$this->file_extension       = isset( $options['file_extension'] ) ? $this->normalize_file_extension( $options['file_extension'] ) : ( $spec['file_extension'] ?? null );
-		$this->read_sql_template    = isset( $options['read_sql_template'] ) ? $this->normalize_sql_template( $options['read_sql_template'], 'read_sql_template' ) : ( $spec['read_sql_template'] ?? null );
-		$this->write_sql_template   = isset( $options['write_sql_template'] ) ? $this->normalize_sql_template( $options['write_sql_template'], 'write_sql_template' ) : ( $spec['write_sql_template'] ?? null );
-		$this->setup_sql            = isset( $options['setup_sql'] ) ? $this->normalize_sql_statements( $options['setup_sql'], 'setup_sql' ) : array();
-		$this->tables               = isset( $options['tables'] ) ? $this->normalize_table_names( $options['tables'] ) : array();
+		$this->backend                = self::normalize_backend( $backend );
+		$this->database_path          = isset( $options['database_path'] ) ? $this->normalize_optional_path( $options['database_path'], 'database_path' ) : null;
+		$this->external_storage_dir   = isset( $options['external_storage_dir'] ) ? $this->normalize_optional_path( $options['external_storage_dir'], 'external_storage_dir' ) : null;
+		$this->file_extension         = isset( $options['file_extension'] ) ? $this->normalize_file_extension( $options['file_extension'] ) : ( $spec['file_extension'] ?? null );
+		$this->metadata_manifest_path = isset( $options['metadata_manifest_path'] ) ? $this->normalize_optional_path( $options['metadata_manifest_path'], 'metadata_manifest_path' ) : null;
+		$this->read_sql_template      = isset( $options['read_sql_template'] ) ? $this->normalize_sql_template( $options['read_sql_template'], 'read_sql_template' ) : ( $spec['read_sql_template'] ?? null );
+		$this->write_sql_template     = isset( $options['write_sql_template'] ) ? $this->normalize_sql_template( $options['write_sql_template'], 'write_sql_template' ) : ( $spec['write_sql_template'] ?? null );
+		$this->setup_sql              = isset( $options['setup_sql'] ) ? $this->normalize_sql_statements( $options['setup_sql'], 'setup_sql' ) : array();
+		$this->tables                 = isset( $options['tables'] ) ? $this->normalize_table_names( $options['tables'] ) : array();
 
 		if ( null === $this->database_path ) {
 			$this->database_path = ':memory:';
@@ -191,16 +200,17 @@ class WP_DuckDB_Storage_Backend {
 
 		return new self(
 			array(
-				'backend'              => $normalized_backend,
-				'database_path'        => $database_path,
-				'external_storage_dir' => $external_storage_dir,
-				'file_extension'       => self::constant_value( array( 'DUCKDB_BACKEND_FILE_EXTENSION', 'DUCKDB_EXTERNAL_FILE_EXTENSION', 'WP_DUCKDB_BACKEND_FILE_EXTENSION' ) ),
-				'read_sql_template'    => self::constant_value( array( 'DUCKDB_BACKEND_READ_SQL', 'WP_DUCKDB_BACKEND_READ_SQL' ) ),
-				'write_sql_template'   => self::constant_value( array( 'DUCKDB_BACKEND_WRITE_SQL', 'WP_DUCKDB_BACKEND_WRITE_SQL' ) ),
-				'setup_sql'            => self::constant_value( array( 'DUCKDB_BACKEND_SETUP_SQL', 'WP_DUCKDB_BACKEND_SETUP_SQL' ), array() ),
-				'tables'               => self::constant_value( array( 'DUCKDB_BACKEND_TABLES', 'WP_DUCKDB_BACKEND_TABLES' ), array() ),
-				'atomic_flush'         => self::constant_value( array( 'DUCKDB_BACKEND_ATOMIC_FLUSH', 'WP_DUCKDB_BACKEND_ATOMIC_FLUSH' ) ),
-				'lock_timeout_seconds' => self::constant_value( array( 'DUCKDB_LOCK_TIMEOUT_SECONDS', 'WP_DUCKDB_LOCK_TIMEOUT_SECONDS' ) ),
+				'backend'                => $normalized_backend,
+				'database_path'          => $database_path,
+				'external_storage_dir'   => $external_storage_dir,
+				'file_extension'         => self::constant_value( array( 'DUCKDB_BACKEND_FILE_EXTENSION', 'DUCKDB_EXTERNAL_FILE_EXTENSION', 'WP_DUCKDB_BACKEND_FILE_EXTENSION' ) ),
+				'metadata_manifest_path' => self::constant_value( array( 'DUCKDB_METADATA_MANIFEST_FILE', 'WP_DUCKDB_METADATA_MANIFEST_FILE' ) ),
+				'read_sql_template'      => self::constant_value( array( 'DUCKDB_BACKEND_READ_SQL', 'WP_DUCKDB_BACKEND_READ_SQL' ) ),
+				'write_sql_template'     => self::constant_value( array( 'DUCKDB_BACKEND_WRITE_SQL', 'WP_DUCKDB_BACKEND_WRITE_SQL' ) ),
+				'setup_sql'              => self::constant_value( array( 'DUCKDB_BACKEND_SETUP_SQL', 'WP_DUCKDB_BACKEND_SETUP_SQL' ), array() ),
+				'tables'                 => self::constant_value( array( 'DUCKDB_BACKEND_TABLES', 'WP_DUCKDB_BACKEND_TABLES' ), array() ),
+				'atomic_flush'           => self::constant_value( array( 'DUCKDB_BACKEND_ATOMIC_FLUSH', 'WP_DUCKDB_BACKEND_ATOMIC_FLUSH' ) ),
+				'lock_timeout_seconds'   => self::constant_value( array( 'DUCKDB_LOCK_TIMEOUT_SECONDS', 'WP_DUCKDB_LOCK_TIMEOUT_SECONDS' ) ),
 			)
 		);
 	}
@@ -255,6 +265,7 @@ class WP_DuckDB_Storage_Backend {
 		$this->run_setup_sql();
 
 		if ( $this->is_external() ) {
+			$this->restore_external_metadata_manifest();
 			$this->hydrate_external_storage();
 		}
 
@@ -282,6 +293,7 @@ class WP_DuckDB_Storage_Backend {
 		foreach ( $this->list_mutable_tables() as $table ) {
 			$this->copy_table_to_external_storage( $table, $this->source_for_table( $table ) );
 		}
+		$this->write_external_metadata_manifest();
 	}
 
 	/**
@@ -669,6 +681,12 @@ class WP_DuckDB_Storage_Backend {
 		if ( null !== $this->external_storage_dir && '' !== $this->external_storage_dir ) {
 			$this->external_storage_dir = rtrim( $this->external_storage_dir, '/\\' );
 		}
+		if ( null !== $this->metadata_manifest_path && 1 === preg_match( '#^[a-z][a-z0-9+.-]*://#i', $this->metadata_manifest_path ) ) {
+			throw new InvalidArgumentException( 'DuckDB metadata manifests must use a local file path.' );
+		}
+		if ( null === $this->metadata_manifest_path ) {
+			$this->metadata_manifest_path = $this->default_metadata_manifest_path();
+		}
 
 		if ( $this->template_uses_path( $this->read_sql_template ) || $this->template_uses_path( $this->write_sql_template ) ) {
 			if ( null === $this->external_storage_dir || '' === $this->external_storage_dir ) {
@@ -704,6 +722,274 @@ class WP_DuckDB_Storage_Backend {
 		}
 
 		$this->hydrated = true;
+	}
+
+	/**
+	 * Restore MySQL-facing metadata from external storage before hydrating tables.
+	 *
+	 * @return void
+	 */
+	private function restore_external_metadata_manifest(): void {
+		$path = $this->metadata_manifest_path();
+		if ( null === $path || ! is_file( $path ) ) {
+			return;
+		}
+
+		$contents = file_get_contents( $path );
+		if ( false === $contents ) {
+			throw new WP_DuckDB_Driver_Exception( 'Failed to read DuckDB external metadata manifest: ' . $path );
+		}
+
+		$manifest = json_decode( $contents, true );
+		if ( ! is_array( $manifest ) ) {
+			throw new WP_DuckDB_Driver_Exception( 'Invalid DuckDB external metadata manifest: ' . $path );
+		}
+
+		$this->ensure_persistent_metadata_tables();
+		foreach ( $this->metadata_manifest_definitions() as $key => $definition ) {
+			if ( ! isset( $manifest[ $key ] ) ) {
+				continue;
+			}
+			if ( ! is_array( $manifest[ $key ] ) ) {
+				throw new WP_DuckDB_Driver_Exception( 'Invalid DuckDB external metadata manifest section: ' . $key );
+			}
+
+			$this->connection->query( 'DELETE FROM ' . $this->connection->quote_identifier( $definition['table'] ) );
+			$this->insert_metadata_manifest_rows( $definition['table'], $definition['columns'], $manifest[ $key ] );
+		}
+	}
+
+	/**
+	 * Write MySQL-facing metadata beside local external storage files.
+	 *
+	 * External formats such as JSON cannot infer column names or indexes from
+	 * empty files. The manifest lets a fresh working DuckDB database hydrate the
+	 * mutable tables with the same WordPress schema metadata recorded earlier.
+	 *
+	 * @return void
+	 */
+	private function write_external_metadata_manifest(): void {
+		$path = $this->metadata_manifest_path();
+		if ( null === $path ) {
+			return;
+		}
+
+		$manifest = array(
+			'version' => 1,
+		);
+		foreach ( $this->metadata_manifest_definitions() as $key => $definition ) {
+			$manifest[ $key ] = $this->metadata_manifest_rows( $definition['table'], $definition['columns'], $definition['order_by'] );
+		}
+
+		$json = json_encode( $manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
+		if ( ! is_string( $json ) ) {
+			throw new WP_DuckDB_Driver_Exception( 'Failed to encode DuckDB external metadata manifest.' );
+		}
+
+		$directory = dirname( $path );
+		if ( ! is_dir( $directory ) && ! mkdir( $directory, 0777, true ) && ! is_dir( $directory ) ) {
+			throw new WP_DuckDB_Driver_Exception( 'Failed to create DuckDB external metadata manifest directory: ' . $directory );
+		}
+
+		if ( false === file_put_contents( $path, $json . "\n" ) ) {
+			throw new WP_DuckDB_Driver_Exception( 'Failed to write DuckDB external metadata manifest: ' . $path );
+		}
+	}
+
+	/**
+	 * Get the local metadata manifest path.
+	 *
+	 * @return string|null Manifest path, or null when sidecar metadata cannot be used.
+	 */
+	private function metadata_manifest_path(): ?string {
+		if ( ! $this->is_external() ) {
+			return null;
+		}
+
+		return $this->metadata_manifest_path;
+	}
+
+	/**
+	 * Get the default local metadata manifest path for an external backend.
+	 *
+	 * @return string|null Manifest path, or null when no local durable location is available.
+	 */
+	private function default_metadata_manifest_path(): ?string {
+		if ( null !== $this->external_storage_dir && $this->is_local_storage_dir() ) {
+			return rtrim( $this->external_storage_dir, '/\\' ) . '/' . self::METADATA_MANIFEST_FILE;
+		}
+
+		if ( null === $this->database_path || '' === $this->database_path || ':memory:' === $this->database_path ) {
+			return null;
+		}
+		if ( 1 === preg_match( '#^[a-z][a-z0-9+.-]*://#i', $this->database_path ) ) {
+			return null;
+		}
+
+		return dirname( $this->database_path ) . '/.wp-duckdb-' . $this->backend . '-metadata';
+	}
+
+	/**
+	 * Return persistent metadata table manifest definitions.
+	 *
+	 * @return array<string,array{table:string,columns:string[],order_by:string}>
+	 */
+	private function metadata_manifest_definitions(): array {
+		if ( ! class_exists( 'WP_DuckDB_Driver' ) ) {
+			return array();
+		}
+
+		return array(
+			'columns'      => array(
+				'table'    => WP_DuckDB_Driver::COLUMN_METADATA_TABLE,
+				'columns'  => array( 'table_name', 'ordinal_position', 'column_name', 'column_type', 'is_nullable', 'column_key', 'column_default', 'extra', 'collation_name', 'comment' ),
+				'order_by' => 'table_name, ordinal_position',
+			),
+			'indexes'      => array(
+				'table'    => WP_DuckDB_Driver::INDEX_METADATA_TABLE,
+				'columns'  => array( 'table_name', 'index_name', 'non_unique', 'seq_in_index', 'column_name', 'sub_part', 'index_type' ),
+				'order_by' => 'table_name, index_name, seq_in_index',
+			),
+			'tables'       => array(
+				'table'    => WP_DuckDB_Driver::TABLE_METADATA_TABLE,
+				'columns'  => array( 'table_name', 'engine', 'row_format', 'table_collation', 'table_comment', 'create_options', 'create_time' ),
+				'order_by' => 'table_name',
+			),
+			'checks'       => array(
+				'table'    => WP_DuckDB_Driver::CHECK_METADATA_TABLE,
+				'columns'  => array( 'table_name', 'constraint_name', 'check_clause', 'enforced' ),
+				'order_by' => 'table_name, constraint_name',
+			),
+			'foreign_keys' => array(
+				'table'    => WP_DuckDB_Driver::FOREIGN_KEY_METADATA_TABLE,
+				'columns'  => array( 'table_name', 'constraint_name', 'ordinal_position', 'column_name', 'referenced_table_name', 'referenced_column_name', 'update_rule', 'delete_rule' ),
+				'order_by' => 'table_name, constraint_name, ordinal_position',
+			),
+		);
+	}
+
+	/**
+	 * Ensure persistent internal metadata tables exist.
+	 *
+	 * @return void
+	 */
+	private function ensure_persistent_metadata_tables(): void {
+		if ( ! class_exists( 'WP_DuckDB_Driver' ) ) {
+			return;
+		}
+
+		$this->connection->query(
+			'CREATE TABLE IF NOT EXISTS '
+				. $this->connection->quote_identifier( WP_DuckDB_Driver::COLUMN_METADATA_TABLE )
+				. ' (table_name VARCHAR, ordinal_position INTEGER, column_name VARCHAR, column_type VARCHAR, is_nullable VARCHAR, column_key VARCHAR, column_default VARCHAR, extra VARCHAR, collation_name VARCHAR, comment VARCHAR)'
+		);
+		$this->connection->query(
+			'CREATE TABLE IF NOT EXISTS '
+				. $this->connection->quote_identifier( WP_DuckDB_Driver::INDEX_METADATA_TABLE )
+				. ' (table_name VARCHAR, index_name VARCHAR, non_unique INTEGER, seq_in_index INTEGER, column_name VARCHAR, sub_part INTEGER, index_type VARCHAR)'
+		);
+		$index_type_columns = $this->connection->query(
+			'SELECT name FROM pragma_table_info(' . $this->connection->quote( WP_DuckDB_Driver::INDEX_METADATA_TABLE ) . ") WHERE name = 'index_type'"
+		)->fetchAll( PDO::FETCH_ASSOC );
+		if ( count( $index_type_columns ) === 0 ) {
+			$this->connection->query(
+				'ALTER TABLE '
+					. $this->connection->quote_identifier( WP_DuckDB_Driver::INDEX_METADATA_TABLE )
+					. " ADD COLUMN index_type VARCHAR DEFAULT 'BTREE'"
+			);
+		}
+		$this->connection->query(
+			'CREATE TABLE IF NOT EXISTS '
+				. $this->connection->quote_identifier( WP_DuckDB_Driver::TABLE_METADATA_TABLE )
+				. ' (table_name VARCHAR, engine VARCHAR, row_format VARCHAR, table_collation VARCHAR, table_comment VARCHAR, create_options VARCHAR, create_time VARCHAR)'
+		);
+		$this->connection->query(
+			'CREATE TABLE IF NOT EXISTS '
+				. $this->connection->quote_identifier( WP_DuckDB_Driver::CHECK_METADATA_TABLE )
+				. ' (table_name VARCHAR, constraint_name VARCHAR, check_clause VARCHAR, enforced VARCHAR)'
+		);
+		$this->connection->query(
+			'CREATE TABLE IF NOT EXISTS '
+				. $this->connection->quote_identifier( WP_DuckDB_Driver::FOREIGN_KEY_METADATA_TABLE )
+				. ' (table_name VARCHAR, constraint_name VARCHAR, ordinal_position INTEGER, column_name VARCHAR, referenced_table_name VARCHAR, referenced_column_name VARCHAR, update_rule VARCHAR, delete_rule VARCHAR)'
+		);
+	}
+
+	/**
+	 * Read one metadata manifest section from the working database.
+	 *
+	 * @param string   $table    Metadata table name.
+	 * @param string[] $columns  Column names.
+	 * @param string   $order_by ORDER BY clause.
+	 * @return array<int,array<string,mixed>> Metadata rows.
+	 */
+	private function metadata_manifest_rows( string $table, array $columns, string $order_by ): array {
+		try {
+			$stmt = $this->connection->query(
+				'SELECT '
+					. implode(
+						', ',
+						array_map(
+							function ( string $column ): string {
+								return $this->connection->quote_identifier( $column );
+							},
+							$columns
+						)
+					)
+					. ' FROM '
+					. $this->connection->quote_identifier( $table )
+					. ' ORDER BY '
+					. $order_by
+			);
+		} catch ( Throwable $e ) {
+			return array();
+		}
+
+		return $stmt->fetchAll( PDO::FETCH_ASSOC );
+	}
+
+	/**
+	 * Insert metadata rows restored from a manifest.
+	 *
+	 * @param string                  $table   Metadata table name.
+	 * @param string[]                $columns Column names.
+	 * @param array<int,mixed>        $rows    Manifest rows.
+	 * @return void
+	 */
+	private function insert_metadata_manifest_rows( string $table, array $columns, array $rows ): void {
+		$value_rows = array();
+		foreach ( $rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+
+			$values = array();
+			foreach ( $columns as $column ) {
+				$values[] = $this->connection->quote( array_key_exists( $column, $row ) ? $row[ $column ] : null );
+			}
+			$value_rows[] = '(' . implode( ', ', $values ) . ')';
+		}
+
+		if ( count( $value_rows ) === 0 ) {
+			return;
+		}
+
+		$this->connection->query(
+			'INSERT INTO '
+				. $this->connection->quote_identifier( $table )
+				. ' ('
+				. implode(
+					', ',
+					array_map(
+						function ( string $column ): string {
+							return $this->connection->quote_identifier( $column );
+						},
+						$columns
+					)
+				)
+				. ') VALUES '
+				. implode( ', ', $value_rows )
+		);
 	}
 
 	/**

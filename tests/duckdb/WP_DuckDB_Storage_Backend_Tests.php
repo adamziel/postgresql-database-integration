@@ -306,6 +306,79 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		);
 	}
 
+	public function test_non_scannable_backend_restores_metadata_after_cold_reload(): void {
+		$this->requireDuckDBRuntime();
+
+		$temp_dir      = $this->create_temp_dir();
+		$database      = $temp_dir . '/working.duckdb';
+		$store         = $temp_dir . '/attached-store.duckdb';
+		$manifest_path = $temp_dir . '/.wp-duckdb-attached_duckdb-metadata';
+		$attach_store  = "ATTACH '" . str_replace( "'", "''", $store ) . "' AS wp_store";
+
+		$storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'            => 'attached_duckdb',
+				'database_path'      => $database,
+				'setup_sql'          => array( $attach_store ),
+				'read_sql_template'  => 'SELECT * FROM wp_store.{table}',
+				'write_sql_template' => 'CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}',
+			)
+		);
+		$driver  = $storage->create_driver( 'wp' );
+		$driver->query(
+			'CREATE TABLE wptests_woocommerce_sessions (
+				session_id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				session_key char(32) NOT NULL,
+				session_value longtext NOT NULL,
+				session_expiry bigint(20) unsigned NOT NULL,
+				PRIMARY KEY (session_id),
+				UNIQUE KEY session_key (session_key)
+			)'
+		);
+		$driver->query(
+			"INSERT INTO wptests_woocommerce_sessions (session_key, session_value, session_expiry)
+			VALUES ('session-key', 'first', 1781870576)"
+		);
+		$storage->flush();
+		unset( $driver, $storage );
+
+		$this->assertFileExists( $manifest_path );
+		@unlink( $database );
+		@unlink( $database . '.wal' );
+		@unlink( $database . '.lock' );
+
+		$fresh_storage = new WP_DuckDB_Storage_Backend(
+			array(
+				'backend'            => 'attached_duckdb',
+				'database_path'      => $database,
+				'setup_sql'          => array( $attach_store ),
+				'read_sql_template'  => 'SELECT * FROM wp_store.{table}',
+				'write_sql_template' => 'CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}',
+				'tables'             => array( 'wptests_woocommerce_sessions' ),
+			)
+		);
+		$fresh_driver  = $fresh_storage->create_driver( 'wp' );
+
+		$upsert = "INSERT INTO wptests_woocommerce_sessions (`session_key`, `session_value`, `session_expiry`)
+			VALUES ('session-key', 'second', 1781870577)
+			ON DUPLICATE KEY UPDATE `session_value` = VALUES(`session_value`), `session_expiry` = VALUES(`session_expiry`)";
+
+		$this->assertSame( 1, $fresh_driver->query( $upsert )->rowCount() );
+		$this->assertSame(
+			array(
+				array(
+					'session_value'  => 'second',
+					'session_expiry' => 1781870577,
+				),
+			),
+			$fresh_driver->query(
+				"SELECT session_value, session_expiry
+				FROM wptests_woocommerce_sessions
+				WHERE session_key = 'session-key'"
+			)->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
 	public function test_json_backend_hydrates_empty_metadata_backed_tables(): void {
 		$this->requireDuckDBRuntime();
 
@@ -335,6 +408,10 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 
 		$this->assertFileExists( $external_dir . '/wptests_commentmeta.json' );
 		$this->assertSame( 0, filesize( $external_dir . '/wptests_commentmeta.json' ) );
+		$this->assertFileExists( $external_dir . '/' . WP_DuckDB_Storage_Backend::METADATA_MANIFEST_FILE );
+		@unlink( $database );
+		@unlink( $database . '.wal' );
+		@unlink( $database . '.lock' );
 
 		$fresh_storage = new WP_DuckDB_Storage_Backend(
 			array(
@@ -387,6 +464,10 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		unset( $driver, $storage );
 
 		file_put_contents( $external_dir . '/wptests_commentmeta.json', '[]' );
+		$this->assertFileExists( $external_dir . '/' . WP_DuckDB_Storage_Backend::METADATA_MANIFEST_FILE );
+		@unlink( $database );
+		@unlink( $database . '.wal' );
+		@unlink( $database . '.lock' );
 
 		$fresh_storage = new WP_DuckDB_Storage_Backend(
 			array(
@@ -442,6 +523,10 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		);
 		$storage->flush();
 		unset( $driver, $storage );
+		$this->assertFileExists( $external_dir . '/' . WP_DuckDB_Storage_Backend::METADATA_MANIFEST_FILE );
+		@unlink( $database );
+		@unlink( $database . '.wal' );
+		@unlink( $database . '.lock' );
 
 		$fresh_storage = new WP_DuckDB_Storage_Backend(
 			array(

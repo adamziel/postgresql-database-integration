@@ -98,6 +98,10 @@ class WP_DuckDB_External_Format_Backend_Tests extends WP_DuckDB_TestCase {
 		$driver->query( "INSERT INTO wptests_comments (comment_approved) VALUES ('1')" );
 		$backend->flush();
 		unset( $driver, $backend );
+		$this->assertFileExists( $temp_dir . '/' . WP_DuckDB_Storage_Backend::METADATA_MANIFEST_FILE );
+		@unlink( $database );
+		@unlink( $database . '.wal' );
+		@unlink( $database . '.lock' );
 
 		$fresh_backend = new WP_DuckDB_Storage_Backend(
 			array(

@@ -126,6 +126,7 @@ Common constants:
 | `DUCKDB_BACKEND` | Backend name. Built-in presets: `parquet`, `csv`, `json`. Any other name uses custom SQL templates. |
 | `DUCKDB_EXTERNAL_STORAGE_DIR` | Directory or URI prefix that stores one file per WordPress table, such as `wp_options.parquet`. |
 | `DUCKDB_WORKING_DATABASE_FILE` | Mutable DuckDB working database. Defaults to `FQDUCKDB`; keep this even for external backends. |
+| `DUCKDB_METADATA_MANIFEST_FILE` | Optional local file for WordPress schema/index metadata. Defaults to `.wp-duckdb-metadata` inside a local external storage directory, or `.wp-duckdb-{backend}-metadata` beside the working database for custom SQL-template backends. |
 | `DUCKDB_BACKEND_FILE_EXTENSION` | File extension for path-based custom backends, such as `psv` or `parquet`. |
 | `DUCKDB_BACKEND_READ_SQL` | SQL relation template used to hydrate one local working table. |
 | `DUCKDB_BACKEND_WRITE_SQL` | SQL statement template used to flush one local working table. |
@@ -140,6 +141,13 @@ SQL templates support these placeholders:
 | `{table}` or `{table_identifier}` | The local DuckDB table as a quoted identifier, for example `"wp_options"`. |
 | `{table_name}` | The table name as a quoted string literal, for example `'wp_options'`. |
 | `{path}` or `{source}` | The per-table path/URI as a quoted string literal, for example `'s3://bucket/wp/wp_options.parquet'`. |
+
+External backends also persist WordPress-facing schema metadata, including column
+types, primary keys, unique indexes, and auto-increment state. That metadata is
+stored in a local manifest file because formats such as JSON, CSV, Parquet, and
+attached databases do not preserve all MySQL DDL semantics by themselves. Keep
+`DUCKDB_METADATA_MANIFEST_FILE` on durable disk when the working DuckDB database
+can be deleted or rebuilt.
 
 #### Native DuckDB File
 
@@ -245,8 +253,9 @@ define( 'DUCKDB_BACKEND_ATOMIC_FLUSH', false );
 
 The table list above is intentionally short. Add every WordPress and plugin table
 that should survive a fresh connection; tables that are not listed cannot be
-hydrated when PHP cannot scan the backend and the persistent working DuckDB file
-does not already know about them.
+hydrated when PHP cannot scan the backend. Keep the metadata manifest durable as
+well, because the table data backend does not store WordPress' MySQL-facing
+schema and index metadata.
 
 For public HTTPS files, DuckDB can read files through `httpfs`, but regular
 HTTP(S) does not provide a write API. Do not use plain HTTPS as the only mutable
@@ -271,6 +280,7 @@ define( 'DUCKDB_BACKEND_SETUP_SQL', array(
 define( 'DUCKDB_BACKEND_TABLES', array( 'wp_options', 'wp_posts', 'wp_postmeta' ) );
 define( 'DUCKDB_BACKEND_READ_SQL', 'SELECT * FROM wp_store.{table}' );
 define( 'DUCKDB_BACKEND_WRITE_SQL', 'CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}' );
+define( 'DUCKDB_METADATA_MANIFEST_FILE', __DIR__ . '/wp-content/database/.wp-duckdb-sqlite_attach-metadata' );
 define( 'DUCKDB_BACKEND_ATOMIC_FLUSH', false );
 ```
 
@@ -533,9 +543,9 @@ runs and publishes that zip to GitHub Releases for tags matching `v*`.
 - DuckDB support requires a separately installed PHP client and native library.
 - DuckDB external file storage currently uses an explicit hydrate/mutate/flush
   cycle for Parquet, CSV, and JSON.
-- External DuckDB storage depends on the persistent working DuckDB database for
-  schema metadata and table discovery. The external files or attached database
-  hold table data, but the working database is still part of the backend state.
+- External DuckDB storage keeps table data outside the working database, but
+  non-scannable backends still need an explicit `DUCKDB_BACKEND_TABLES` list and
+  a durable local metadata manifest for MySQL-facing schema/index metadata.
 - SQLite support is routed to the upstream submodule rather than imported as
   root-owned source.
 - Full browser/editor E2E coverage for DuckDB and SQLite is not included yet.

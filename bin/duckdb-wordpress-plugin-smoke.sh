@@ -401,6 +401,14 @@ foreach ( array( 'query-monitor/query-monitor.php', 'woocommerce/woocommerce.php
 
 if ( class_exists( 'WC_Install' ) ) {
 	WC_Install::install();
+	if ( class_exists( '\Automattic\WooCommerce\Internal\DataStores\Orders\CustomOrdersTableController' ) ) {
+		update_option( \Automattic\WooCommerce\Internal\DataStores\Orders\CustomOrdersTableController::CUSTOM_ORDERS_TABLE_USAGE_ENABLED_OPTION, 'yes' );
+	}
+	if ( class_exists( '\Automattic\WooCommerce\Internal\DataStores\Orders\DataSynchronizer' ) ) {
+		update_option( \Automattic\WooCommerce\Internal\DataStores\Orders\DataSynchronizer::ORDERS_DATA_SYNC_ENABLED_OPTION, 'yes' );
+	}
+	WC_Install::create_tables();
+	WC_Install::verify_base_tables( false, true );
 }
 
 if ( function_exists( 'wc_get_product' ) && class_exists( 'WC_Product_Simple' ) ) {
@@ -480,6 +488,27 @@ if ( $product_count < 1 ) {
 if ( count( $order_tables ) < 1 ) {
 	fwrite( STDERR, "Expected WooCommerce custom tables to exist.\n" );
 	exit( 1 );
+}
+
+$tables_file = getenv( 'WP_DUCKDB_SMOKE_TABLES_FILE' );
+if ( false !== $tables_file && '' !== $tables_file ) {
+	$tables = $wpdb->get_col( 'SHOW TABLES' );
+	if ( is_array( $tables ) ) {
+		$tables = array_values(
+			array_filter(
+				array_unique( $tables ),
+				static function ( $table ): bool {
+					return is_string( $table ) && 0 !== stripos( $table, '__wp_duckdb_' );
+				}
+			)
+		);
+		sort( $tables, SORT_STRING );
+		$tables_dir = dirname( $tables_file );
+		if ( ! is_dir( $tables_dir ) ) {
+			mkdir( $tables_dir, 0777, true );
+		}
+		file_put_contents( $tables_file, implode( "\n", $tables ) . "\n" );
+	}
 }
 
 if ( isset( $GLOBALS['wpdb'] ) && method_exists( $GLOBALS['wpdb'], 'flush_storage_backend' ) ) {
@@ -684,6 +713,51 @@ check_logs() {
 	fi
 }
 
+is_native_duckdb_backend() {
+	case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+		duckdb|duck|native|file)
+			return 0
+			;;
+	esac
+
+	return 1
+}
+
+cold_reload_external_backend() {
+	local wp_root=$1
+	local backend=$2
+	local backend_slug=$3
+	local site_url=$4
+	local tables_file=$5
+	local database_dir="$wp_root/wp-content/database/"
+	local working_database="${WP_DUCKDB_WORKING_DATABASE_FILE:-${DUCKDB_WORKING_DATABASE_FILE:-}}"
+
+	if is_native_duckdb_backend "$backend"; then
+		return
+	fi
+
+	if [ ! -s "$tables_file" ]; then
+		echo "Expected a non-empty DuckDB backend table list for cold reload: $tables_file" >&2
+		return 1
+	fi
+
+	WP_DUCKDB_BACKEND_TABLES_FILE="$tables_file" write_wp_config "$wp_root" "$backend" "$site_url"
+
+	if [ -n "$working_database" ]; then
+		working_database=${working_database//\{root\}/$wp_root}
+		working_database=${working_database//\{database_dir\}/$database_dir}
+		working_database=${working_database//\{backend\}/$backend}
+		working_database=${working_database//\{backend_slug\}/$backend_slug}
+	else
+		working_database="$database_dir.ht.duckdb-plugin-smoke-$backend_slug-working"
+	fi
+
+	rm -f -- "$working_database" "$working_database.wal" "$working_database.lock" "$working_database.tmp"
+
+	echo "Cold reloading backend=$backend from external storage."
+	WP_DUCKDB_SMOKE_TABLES_FILE="$tables_file" php_verify_site "$wp_root"
+}
+
 run_backend() {
 	local backend=$1
 	local backend_slug
@@ -706,7 +780,8 @@ run_backend() {
 	if [ "${WP_DUCKDB_SMOKE_REWRITE_CONFIG_WITH_TABLES:-0}" = "1" ]; then
 		WP_DUCKDB_BACKEND_TABLES_FILE="$tables_file" write_wp_config "$wp_root" "$backend" "$site_url"
 	fi
-	php_verify_site "$wp_root"
+	WP_DUCKDB_SMOKE_TABLES_FILE="$tables_file" php_verify_site "$wp_root"
+	cold_reload_external_backend "$wp_root" "$backend" "$backend_slug" "$site_url" "$tables_file"
 
 	start_server "$wp_root" "$port" "$server_log"
 	server_pid=$START_SERVER_PID
