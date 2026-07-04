@@ -5518,9 +5518,17 @@ class WP_DuckDB_Driver {
 		}
 
 		try {
-			$metadata_rows = $this->table_column_metadata_rows( $table_name, false );
+			$table_reference = $this->resolve_visible_user_table_reference( $table_name );
+			if ( null === $table_reference ) {
+				return false;
+			}
+
+			$metadata_rows = $this->column_metadata_rows(
+				$table_reference['table_name'],
+				$table_reference['temporary']
+			);
 			if ( empty( $metadata_rows ) ) {
-				$metadata_rows = $this->table_column_metadata_rows( $table_name, true );
+				$metadata_rows = $this->pragma_column_metadata_rows( $table_reference['table_name'] );
 			}
 		} catch ( Throwable $e ) {
 			return false;

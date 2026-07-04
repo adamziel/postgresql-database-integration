@@ -54,6 +54,8 @@ $db->query( 'DROP TABLE IF EXISTS table_collation_check_2' );
 $db->query( 'CREATE TABLE table_collation_check_2 ( a VARCHAR(50) COLLATE utf8_unicode_ci )' );
 $unsafe_collation = $db->check_safe_collation_for_test( "SELECT * FROM table_collation_check_2 WHERE a='{$emoji}'" );
 
+$db->query( 'CREATE TEMPORARY TABLE temporary_charset_table ( a VARCHAR(50) CHARACTER SET big5, b TEXT CHARACTER SET koi8r )' );
+
 $payload = array(
 	'table_charset'     => $db->table_charset_for_test( 'test_get_table_charset_1' ),
 	'table_charset_uc'  => $db->table_charset_for_test( 'TEST_GET_TABLE_CHARSET_1' ),
@@ -62,6 +64,8 @@ $payload = array(
 	'stripped_insert'   => $stripped_insert,
 	'safe_collation'    => $safe_collation,
 	'unsafe_collation'  => $unsafe_collation,
+	'temporary_table'   => $db->table_charset_for_test( 'temporary_charset_table' ),
+	'temporary_col'     => $db->get_col_charset( 'TEMPORARY_CHARSET_TABLE', 'B' ),
 );
 
 $db->close();
@@ -79,6 +83,8 @@ PHP
 				'stripped_insert'   => "INSERT INTO strip_invalid_text_from_query_table_1 VALUES ('foobar', 'foo')",
 				'safe_collation'    => true,
 				'unsafe_collation'  => false,
+				'temporary_table'   => 'ascii',
+				'temporary_col'     => 'koi8r',
 			),
 			$result
 		);
