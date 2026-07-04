@@ -22,7 +22,7 @@ if [ "$#" -gt 0 ]; then
 elif [ -n "${WP_DUCKDB_BENCHMARK_BACKENDS:-}" ]; then
 	read -r -a backends <<<"$WP_DUCKDB_BENCHMARK_BACKENDS"
 else
-	backends=(mysql sqlite duckdb json csv parquet s3_parquet)
+	backends=(mysql sqlite duckdb sqlite_attach mysql_attach json csv parquet s3_parquet)
 fi
 
 read -r -a concurrency_levels <<<"${WP_DUCKDB_BENCHMARK_CONCURRENCY:-1 2 4 8}"
@@ -253,7 +253,7 @@ stop_minio_server() {
 	fi
 }
 
-clear_s3_benchmark_env() {
+clear_duckdb_backend_env() {
 	unset WP_DUCKDB_EXTERNAL_STORAGE_DIR
 	unset WP_DUCKDB_BACKEND_FILE_EXTENSION
 	unset WP_DUCKDB_BACKEND_SETUP_SQL_JSON
@@ -272,8 +272,8 @@ cleanup_backend() {
 	stop_mysql_server "$mysql_pid"
 	stop_minio_server "$minio_pid"
 
-	if [ -n "$backend" ] && is_s3_parquet_backend "$backend"; then
-		clear_s3_benchmark_env
+	if [ -n "$backend" ] && uses_duckdb_external_config "$backend"; then
+		clear_duckdb_backend_env
 	fi
 }
 
@@ -930,8 +930,20 @@ is_sqlite_backend() {
 	[ "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" = "sqlite" ]
 }
 
+is_sqlite_attach_backend() {
+	[ "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" = "sqlite_attach" ]
+}
+
+is_mysql_attach_backend() {
+	[ "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" = "mysql_attach" ]
+}
+
 is_s3_parquet_backend() {
 	[ "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" = "s3_parquet" ]
+}
+
+uses_duckdb_external_config() {
+	is_s3_parquet_backend "$1" || is_sqlite_attach_backend "$1" || is_mysql_attach_backend "$1"
 }
 
 remove_working_database() {
@@ -1133,6 +1145,7 @@ run_backend() {
 	local server_pid=''
 	local mysql_pid=''
 	local minio_pid=''
+	local mysql_port=''
 	local expected_write_events=0
 	local verification_output
 	local verification_status
@@ -1150,10 +1163,12 @@ run_backend() {
 	mkdir -p "$output_dir"
 	trap 'cleanup_backend "${server_pid:-}" "${mysql_pid:-}" "${minio_pid:-}" "$backend"' EXIT
 
-	if is_mysql_backend "$backend"; then
+	if is_mysql_backend "$backend" || is_mysql_attach_backend "$backend"; then
 		start_mysql_server "$backend_slug"
 		mysql_pid=$MYSQL_SERVER_PID
-	elif is_s3_parquet_backend "$backend"; then
+	fi
+
+	if is_s3_parquet_backend "$backend"; then
 		start_minio_server "$backend_slug"
 		minio_pid=$MINIO_SERVER_PID
 		export WP_DUCKDB_EXTERNAL_STORAGE_DIR="s3://$MINIO_BENCHMARK_BUCKET/wordpress/"
@@ -1161,6 +1176,17 @@ run_backend() {
 		export WP_DUCKDB_BACKEND_SETUP_SQL_JSON="[\"INSTALL httpfs\",\"LOAD httpfs\",\"CREATE OR REPLACE SECRET wp_s3_benchmark (TYPE s3, PROVIDER config, KEY_ID 'minioadmin', SECRET 'minioadmin', REGION 'us-east-1', ENDPOINT '$MINIO_BENCHMARK_ENDPOINT', URL_STYLE 'path', USE_SSL false, SCOPE 's3://$MINIO_BENCHMARK_BUCKET/wordpress/')\"]"
 		export WP_DUCKDB_BACKEND_READ_SQL='SELECT * FROM read_parquet({path})'
 		export WP_DUCKDB_BACKEND_WRITE_SQL='COPY {table} TO {path} (FORMAT PARQUET, OVERWRITE_OR_IGNORE true)'
+		export WP_DUCKDB_BACKEND_ATOMIC_FLUSH=0
+	elif is_sqlite_attach_backend "$backend"; then
+		export WP_DUCKDB_BACKEND_SETUP_SQL_JSON='["INSTALL sqlite","LOAD sqlite","ATTACH '\''{database_dir}/wordpress.sqlite'\'' AS wp_store (TYPE sqlite)"]'
+		export WP_DUCKDB_BACKEND_READ_SQL='SELECT * FROM wp_store.{table}'
+		export WP_DUCKDB_BACKEND_WRITE_SQL='CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}'
+		export WP_DUCKDB_BACKEND_ATOMIC_FLUSH=0
+	elif is_mysql_attach_backend "$backend"; then
+		mysql_port=${MYSQL_BENCHMARK_HOST##*:}
+		export WP_DUCKDB_BACKEND_SETUP_SQL_JSON="[\"INSTALL mysql\",\"LOAD mysql\",\"ATTACH 'host=127.0.0.1 port=$mysql_port user=wordpress password=wordpress database=wordpress' AS wp_store (TYPE mysql)\"]"
+		export WP_DUCKDB_BACKEND_READ_SQL='SELECT * FROM wp_store.{table}'
+		export WP_DUCKDB_BACKEND_WRITE_SQL='CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}'
 		export WP_DUCKDB_BACKEND_ATOMIC_FLUSH=0
 	fi
 

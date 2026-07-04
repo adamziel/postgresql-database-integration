@@ -553,12 +553,13 @@ renders database query output, and fails if WordPress logs DuckDB/database
 errors. Custom backend setup SQL can use `{root}`, `{database_dir}`, `{backend}`,
 and `{backend_slug}` placeholders in this smoke harness.
 
-Run a real local WordPress HTTP benchmark that compares MySQL, SQLite, native
-DuckDB, DuckDB local file formats, and MinIO-backed S3-compatible Parquet:
+Run a real local WordPress HTTP benchmark that compares native MySQL/SQLite
+baselines, native DuckDB, DuckDB-attached MySQL/SQLite, DuckDB local file
+formats, and MinIO-backed S3-compatible Parquet:
 
 ```bash
 WORDPRESS_VERSION=7.0 \
-WP_DUCKDB_BENCHMARK_BACKENDS="mysql sqlite duckdb json csv parquet s3_parquet" \
+WP_DUCKDB_BENCHMARK_BACKENDS="mysql sqlite duckdb sqlite_attach mysql_attach json csv parquet s3_parquet" \
 WP_DUCKDB_BENCHMARK_CONCURRENCY="1 2 4 8" \
 WP_DUCKDB_BENCHMARK_SERVER_WORKERS=4 \
 composer run benchmark-databases
@@ -572,11 +573,14 @@ PHP built-in server with multiple workers, and measures:
 - REST write requests that insert into a WordPress-managed table and write
   options.
 
-The MySQL baseline starts an isolated local MariaDB datadir. The SQLite baseline
-uses this repository's `external/sqlite-database-integration` submodule. The
-`s3_parquet` backend downloads MinIO and `mc` into the benchmark cache, starts a
-local S3-compatible object store, and points DuckDB's `httpfs` extension at a
-fresh bucket.
+The `mysql` baseline starts an isolated local MariaDB datadir and uses
+WordPress' native MySQL driver path. The `sqlite` baseline uses this
+repository's `external/sqlite-database-integration` submodule. Neither native
+baseline loads DuckDB. The `mysql_attach` and `sqlite_attach` rows are DuckDB
+rows: WordPress talks to DuckDB, and DuckDB reads from and flushes to the
+attached database. The `s3_parquet` backend downloads MinIO and `mc` into the
+benchmark cache, starts a local S3-compatible object store, and points DuckDB's
+`httpfs` extension at a fresh bucket.
 
 Each run writes raw JSONL events under
 `artifacts/duckdb-benchmarks/runs/<run-id>/` and regenerates the GitHub Pages
@@ -591,7 +595,7 @@ WP_DUCKDB_BENCHMARK_READ_REQUESTS=80 \
 WP_DUCKDB_BENCHMARK_WRITE_REQUESTS=40 \
 WP_DUCKDB_BENCHMARK_CONCURRENCY="1 4 8 16" \
 WP_DUCKDB_BENCHMARK_SERVER_WORKERS=8 \
-./bin/duckdb-wordpress-benchmark.sh mysql sqlite duckdb s3_parquet
+./bin/duckdb-wordpress-benchmark.sh mysql sqlite duckdb sqlite_attach mysql_attach s3_parquet
 ```
 
 Run the DuckDB production-readiness evidence harness when you want structured

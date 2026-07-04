@@ -66,11 +66,46 @@ $failures      = array_values(
 	)
 );
 
+foreach ( $benchmarks as &$benchmark ) {
+	$info                         = backend_info( (string) ( $benchmark['backend'] ?? '' ) );
+	$benchmark['backend_display'] = $info['display'];
+	$benchmark['backend_family']  = $info['family'];
+	$benchmark['duckdb_involved'] = $info['duckdb_involved'];
+	$benchmark['storage_target']  = $info['storage_target'];
+}
+unset( $benchmark );
+
+$backend_names = array_values(
+	array_unique(
+		array_merge(
+			array_map(
+				static function ( array $benchmark ): string {
+					return (string) ( $benchmark['backend'] ?? '' );
+				},
+				$benchmarks
+			),
+			array_map(
+				static function ( array $verification ): string {
+					return (string) ( $verification['backend'] ?? '' );
+				},
+				$verifications
+			)
+		)
+	)
+);
+usort(
+	$backend_names,
+	static function ( string $a, string $b ): int {
+		return backend_sort_key( $a ) <=> backend_sort_key( $b );
+	}
+);
+$backend_details = array_map( 'backend_info', $backend_names );
+
 usort(
 	$benchmarks,
 	static function ( array $a, array $b ): int {
-		return array( $a['backend'] ?? '', $a['label'] ?? '', $a['concurrency'] ?? 0 )
-			<=> array( $b['backend'] ?? '', $b['label'] ?? '', $b['concurrency'] ?? 0 );
+		return array( backend_sort_key( (string) ( $a['backend'] ?? '' ) ), scenario_sort_key( (string) ( $a['label'] ?? '' ) ), (int) ( $a['concurrency'] ?? 0 ) )
+			<=> array( backend_sort_key( (string) ( $b['backend'] ?? '' ) ), scenario_sort_key( (string) ( $b['label'] ?? '' ) ), (int) ( $b['concurrency'] ?? 0 ) );
 	}
 );
 
@@ -78,6 +113,7 @@ $summary = array(
 	'run_id'         => $run_id,
 	'generated_at'   => gmdate( 'c' ),
 	'meta'           => $meta,
+	'backend_details' => $backend_details,
 	'benchmarks'     => $benchmarks,
 	'verifications'  => $verifications,
 	'failures'       => $failures,
@@ -142,8 +178,154 @@ function format_latency( array $benchmark, string $key ): string {
 	return is_array( $latency ) && array_key_exists( $key, $latency ) ? format_number( $latency[ $key ], 1 ) : '';
 }
 
+function backend_info( string $backend ): array {
+	$backend = strtolower( $backend );
+	$known   = array(
+		'mysql'         => array(
+			'backend'         => 'mysql',
+			'display'         => 'MySQL',
+			'family'          => 'Native WordPress database',
+			'duckdb_involved' => false,
+			'storage_target'  => 'MariaDB server',
+			'role'            => 'Baseline',
+			'notes'           => 'WordPress uses its normal MySQL driver path. DuckDB is not loaded.',
+			'sort'            => 10,
+		),
+		'sqlite'        => array(
+			'backend'         => 'sqlite',
+			'display'         => 'SQLite',
+			'family'          => 'Native WordPress database',
+			'duckdb_involved' => false,
+			'storage_target'  => 'SQLite file via SQLite Database Integration',
+			'role'            => 'Baseline',
+			'notes'           => 'WordPress uses the SQLite Database Integration plugin. DuckDB is not loaded.',
+			'sort'            => 20,
+		),
+		'duckdb'        => array(
+			'backend'         => 'duckdb',
+			'display'         => 'DuckDB',
+			'family'          => 'DuckDB native',
+			'duckdb_involved' => true,
+			'storage_target'  => 'DuckDB database file',
+			'role'            => 'DuckDB baseline',
+			'notes'           => 'WordPress uses the DuckDB backend directly with a DuckDB database file.',
+			'sort'            => 30,
+		),
+		'sqlite_attach' => array(
+			'backend'         => 'sqlite_attach',
+			'display'         => 'DuckDB -> SQLite attach',
+			'family'          => 'DuckDB attached database',
+			'duckdb_involved' => true,
+			'storage_target'  => 'SQLite file attached through DuckDB',
+			'role'            => 'DuckDB-mediated SQLite',
+			'notes'           => 'WordPress uses DuckDB; DuckDB reads from and flushes to an attached SQLite database.',
+			'sort'            => 40,
+		),
+		'mysql_attach'  => array(
+			'backend'         => 'mysql_attach',
+			'display'         => 'DuckDB -> MySQL attach',
+			'family'          => 'DuckDB attached database',
+			'duckdb_involved' => true,
+			'storage_target'  => 'MariaDB server attached through DuckDB',
+			'role'            => 'DuckDB-mediated MySQL',
+			'notes'           => 'WordPress uses DuckDB; DuckDB reads from and flushes to an attached MySQL-compatible database.',
+			'sort'            => 50,
+		),
+		'json'          => array(
+			'backend'         => 'json',
+			'display'         => 'DuckDB -> JSON',
+			'family'          => 'DuckDB external files',
+			'duckdb_involved' => true,
+			'storage_target'  => 'Local JSON table files',
+			'role'            => 'DuckDB file-format storage',
+			'notes'           => 'WordPress uses DuckDB; tables hydrate from and flush to JSON files.',
+			'sort'            => 60,
+		),
+		'csv'           => array(
+			'backend'         => 'csv',
+			'display'         => 'DuckDB -> CSV',
+			'family'          => 'DuckDB external files',
+			'duckdb_involved' => true,
+			'storage_target'  => 'Local CSV table files',
+			'role'            => 'DuckDB file-format storage',
+			'notes'           => 'WordPress uses DuckDB; tables hydrate from and flush to CSV files.',
+			'sort'            => 70,
+		),
+		'parquet'       => array(
+			'backend'         => 'parquet',
+			'display'         => 'DuckDB -> Parquet',
+			'family'          => 'DuckDB external files',
+			'duckdb_involved' => true,
+			'storage_target'  => 'Local Parquet table files',
+			'role'            => 'DuckDB file-format storage',
+			'notes'           => 'WordPress uses DuckDB; tables hydrate from and flush to Parquet files.',
+			'sort'            => 80,
+		),
+		's3_parquet'    => array(
+			'backend'         => 's3_parquet',
+			'display'         => 'DuckDB -> S3 Parquet',
+			'family'          => 'DuckDB object storage',
+			'duckdb_involved' => true,
+			'storage_target'  => 'MinIO S3-compatible Parquet table files',
+			'role'            => 'DuckDB object-store storage',
+			'notes'           => 'WordPress uses DuckDB; tables hydrate from and flush to Parquet files in a local S3-compatible object store.',
+			'sort'            => 90,
+		),
+	);
+
+	if ( isset( $known[ $backend ] ) ) {
+		return $known[ $backend ];
+	}
+
+	return array(
+		'backend'         => $backend,
+		'display'         => $backend,
+		'family'          => 'DuckDB custom backend',
+		'duckdb_involved' => true,
+		'storage_target'  => 'Custom DuckDB backend',
+		'role'            => 'Custom',
+		'notes'           => 'WordPress uses DuckDB with custom backend configuration.',
+		'sort'            => 1000,
+	);
+}
+
+function backend_sort_key( string $backend ): array {
+	$info = backend_info( $backend );
+	return array( (int) $info['sort'], $backend );
+}
+
+function scenario_sort_key( string $scenario ): int {
+	$order = array(
+		'front_page' => 10,
+		'rest_read'  => 20,
+		'rest_write' => 30,
+	);
+	return $order[ $scenario ] ?? 100;
+}
+
+function scenario_label( string $scenario ): string {
+	$labels = array(
+		'front_page' => 'Front page',
+		'rest_read'  => 'REST read',
+		'rest_write' => 'REST write',
+	);
+	return $labels[ $scenario ] ?? $scenario;
+}
+
+function benchmark_cell( ?array $benchmark ): string {
+	if ( null === $benchmark ) {
+		return '<span class="muted">-</span>';
+	}
+
+	$errors = (int) ( $benchmark['errors'] ?? 0 );
+	$class  = 0 === $errors ? '' : ' bad';
+
+	return '<span class="metric' . $class . '"><strong>' . h( format_number( $benchmark['requests_sec'] ?? null, 2 ) ) . '</strong> req/s<br><span class="muted">p95 ' . h( format_latency( $benchmark, 'p95' ) ) . ' ms</span></span>';
+}
+
 function render_html_report( array $summary ): string {
-	$meta          = is_array( $summary['meta'] ?? null ) ? $summary['meta'] : array();
+	$meta           = is_array( $summary['meta'] ?? null ) ? $summary['meta'] : array();
+	$backend_infos = is_array( $summary['backend_details'] ?? null ) ? $summary['backend_details'] : array();
 	$benchmarks    = is_array( $summary['benchmarks'] ?? null ) ? $summary['benchmarks'] : array();
 	$verifications = is_array( $summary['verifications'] ?? null ) ? $summary['verifications'] : array();
 	$failures      = is_array( $summary['failures'] ?? null ) ? $summary['failures'] : array();
@@ -151,6 +333,59 @@ function render_html_report( array $summary ): string {
 	$run_id        = (string) ( $summary['run_id'] ?? '' );
 	$generated_at  = (string) ( $summary['generated_at'] ?? '' );
 	$status_text   = 0 === $total_errors && array() === $failures ? 'All benchmarked HTTP requests completed without detected WordPress database errors.' : 'One or more benchmark checks reported errors.';
+
+	if ( array() === $backend_infos ) {
+		$backend_names = array_values(
+			array_unique(
+				array_map(
+					static function ( array $benchmark ): string {
+						return (string) ( $benchmark['backend'] ?? '' );
+					},
+					$benchmarks
+				)
+			)
+		);
+		usort(
+			$backend_names,
+			static function ( string $a, string $b ): int {
+				return backend_sort_key( $a ) <=> backend_sort_key( $b );
+			}
+		);
+		$backend_infos = array_map( 'backend_info', $backend_names );
+	}
+
+	$concurrency_levels = array_values(
+		array_unique(
+			array_map(
+				static function ( array $benchmark ): int {
+					return (int) ( $benchmark['concurrency'] ?? 0 );
+				},
+				$benchmarks
+			)
+		)
+	);
+	sort( $concurrency_levels, SORT_NUMERIC );
+	$low_concurrency  = $concurrency_levels[0] ?? 1;
+	$high_concurrency = $concurrency_levels[ count( $concurrency_levels ) - 1 ] ?? $low_concurrency;
+
+	$benchmark_index = array();
+	foreach ( $benchmarks as $benchmark ) {
+		$backend     = (string) ( $benchmark['backend'] ?? '' );
+		$label       = (string) ( $benchmark['label'] ?? '' );
+		$concurrency = (int) ( $benchmark['concurrency'] ?? 0 );
+
+		if ( '' !== $backend && '' !== $label && $concurrency > 0 ) {
+			$benchmark_index[ $backend ][ $label ][ $concurrency ] = $benchmark;
+		}
+	}
+
+	$verification_map = array();
+	foreach ( $verifications as $verification ) {
+		$backend = (string) ( $verification['backend'] ?? '' );
+		if ( '' !== $backend ) {
+			$verification_map[ $backend ] = $verification;
+		}
+	}
 
 	$best_by_label = array();
 	foreach ( $benchmarks as $benchmark ) {
@@ -163,11 +398,47 @@ function render_html_report( array $summary ): string {
 		}
 	}
 
+	$backend_rows = '';
+	foreach ( $backend_infos as $info ) {
+		$backend_rows .= '<tr>'
+			. '<td><strong>' . h( $info['display'] ?? $info['backend'] ?? '' ) . '</strong><br><code>' . h( $info['backend'] ?? '' ) . '</code></td>'
+			. '<td>' . h( $info['family'] ?? '' ) . '</td>'
+			. '<td><span class="pill ' . ( ! empty( $info['duckdb_involved'] ) ? 'yes' : 'no' ) . '">' . ( ! empty( $info['duckdb_involved'] ) ? 'Yes' : 'No' ) . '</span></td>'
+			. '<td>' . h( $info['storage_target'] ?? '' ) . '</td>'
+			. '<td><strong>' . h( $info['role'] ?? '' ) . '</strong><br><span class="muted">' . h( $info['notes'] ?? '' ) . '</span></td>'
+			. '</tr>';
+	}
+
+	$summary_rows = '';
+	$scenarios    = array( 'front_page', 'rest_read', 'rest_write' );
+	foreach ( $backend_infos as $info ) {
+		$backend      = (string) ( $info['backend'] ?? '' );
+		$verification = $verification_map[ $backend ] ?? null;
+		$status       = is_array( $verification )
+			? h( $verification['status'] ?? '' ) . '<br><span class="muted">' . h( $verification['stored_events'] ?? '' ) . '/' . h( $verification['expected_min_events'] ?? '' ) . ' rows</span>'
+			: '<span class="muted">not available</span>';
+
+		$summary_rows .= '<tr>'
+			. '<td><strong>' . h( $info['display'] ?? $backend ) . '</strong><br><span class="muted">' . h( $info['family'] ?? '' ) . '</span></td>'
+			. '<td>' . h( $info['storage_target'] ?? '' ) . '</td>';
+
+		foreach ( $scenarios as $scenario ) {
+			$summary_rows .= '<td class="num">' . benchmark_cell( $benchmark_index[ $backend ][ $scenario ][ $low_concurrency ] ?? null ) . '</td>';
+			$summary_rows .= '<td class="num">' . benchmark_cell( $benchmark_index[ $backend ][ $scenario ][ $high_concurrency ] ?? null ) . '</td>';
+		}
+
+		$summary_rows .= '<td>' . $status . '</td></tr>';
+	}
+
 	$rows = '';
 	foreach ( $benchmarks as $benchmark ) {
+		$info = backend_info( (string) ( $benchmark['backend'] ?? '' ) );
 		$rows .= '<tr>'
-			. '<td>' . h( $benchmark['backend'] ?? '' ) . '</td>'
-			. '<td>' . h( $benchmark['label'] ?? '' ) . '</td>'
+			. '<td><strong>' . h( $benchmark['backend_display'] ?? $info['display'] ?? $benchmark['backend'] ?? '' ) . '</strong><br><code>' . h( $benchmark['backend'] ?? '' ) . '</code></td>'
+			. '<td>' . h( $benchmark['backend_family'] ?? $info['family'] ?? '' ) . '</td>'
+			. '<td><span class="pill ' . ( ! empty( $benchmark['duckdb_involved'] ) ? 'yes' : 'no' ) . '">' . ( ! empty( $benchmark['duckdb_involved'] ) ? 'Yes' : 'No' ) . '</span></td>'
+			. '<td>' . h( $benchmark['storage_target'] ?? $info['storage_target'] ?? '' ) . '</td>'
+			. '<td>' . h( scenario_label( (string) ( $benchmark['label'] ?? '' ) ) ) . '</td>'
 			. '<td class="num">' . h( $benchmark['concurrency'] ?? '' ) . '</td>'
 			. '<td class="num">' . h( $benchmark['requests'] ?? '' ) . '</td>'
 			. '<td class="num">' . h( $benchmark['ok'] ?? '' ) . '</td>'
@@ -181,8 +452,10 @@ function render_html_report( array $summary ): string {
 
 	$verification_rows = '';
 	foreach ( $verifications as $verification ) {
+		$info = backend_info( (string) ( $verification['backend'] ?? '' ) );
 		$verification_rows .= '<tr>'
-			. '<td>' . h( $verification['backend'] ?? '' ) . '</td>'
+			. '<td><strong>' . h( $info['display'] ?? $verification['backend'] ?? '' ) . '</strong><br><code>' . h( $verification['backend'] ?? '' ) . '</code></td>'
+			. '<td>' . h( $info['family'] ?? '' ) . '</td>'
 			. '<td class="num">' . h( $verification['expected_min_events'] ?? '' ) . '</td>'
 			. '<td class="num">' . h( $verification['stored_events'] ?? '' ) . '</td>'
 			. '<td>' . h( $verification['status'] ?? '' ) . '</td>'
@@ -191,7 +464,7 @@ function render_html_report( array $summary ): string {
 
 	$best_items = '';
 	foreach ( $best_by_label as $label => $benchmark ) {
-		$best_items .= '<li><strong>' . h( $label ) . ':</strong> ' . h( $benchmark['backend'] ?? '' ) . ' at concurrency ' . h( $benchmark['concurrency'] ?? '' ) . ' reached ' . h( format_number( $benchmark['requests_sec'] ?? null, 2 ) ) . ' req/s with p95 ' . h( format_latency( $benchmark, 'p95' ) ) . ' ms.</li>';
+		$best_items .= '<li><strong>' . h( scenario_label( (string) $label ) ) . ':</strong> ' . h( $benchmark['backend_display'] ?? $benchmark['backend'] ?? '' ) . ' at concurrency ' . h( $benchmark['concurrency'] ?? '' ) . ' reached ' . h( format_number( $benchmark['requests_sec'] ?? null, 2 ) ) . ' req/s with p95 ' . h( format_latency( $benchmark, 'p95' ) ) . ' ms.</li>';
 	}
 	if ( '' === $best_items ) {
 		$best_items = '<li>No successful benchmark rows were available for comparison.</li>';
@@ -217,18 +490,20 @@ function render_html_report( array $summary ): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WordPress Database Backend Benchmarks</title>
 <style>
-:root { color-scheme: light; --border: #d7dee8; --text: #182230; --muted: #5d6b7c; --bg: #f7f9fc; --panel: #fff; --accent: #0f766e; --bad: #b42318; }
+:root { color-scheme: light; --border: #d7dee8; --text: #182230; --muted: #5d6b7c; --bg: #f7f9fc; --panel: #fff; --accent: #0f766e; --bad: #b42318; --good-bg: #dcfce7; --good: #166534; --neutral-bg: #e0f2fe; --neutral: #075985; }
 body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--text); background: var(--bg); line-height: 1.45; }
-main { max-width: 1180px; margin: 0 auto; padding: 36px 20px 56px; }
+main { max-width: 1320px; margin: 0 auto; padding: 36px 20px 56px; }
 h1 { font-size: clamp(2rem, 5vw, 3.6rem); margin: 0 0 8px; letter-spacing: 0; }
 h2 { font-size: 1.35rem; margin: 32px 0 12px; }
-p { max-width: 840px; }
+p { max-width: 960px; }
 .meta, .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
 .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 22px 0; }
 .meta div { min-width: 0; }
 .label { color: var(--muted); font-size: .82rem; text-transform: uppercase; }
 .value { font-weight: 650; overflow-wrap: anywhere; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.table-wrap table { border: 0; border-radius: 0; min-width: 980px; }
 th, td { border-bottom: 1px solid var(--border); padding: 9px 10px; text-align: left; vertical-align: top; }
 th { background: #edf2f7; color: #334155; font-size: .82rem; text-transform: uppercase; }
 tr:last-child td { border-bottom: 0; }
@@ -236,13 +511,19 @@ tr:last-child td { border-bottom: 0; }
 .bad { color: var(--bad); font-weight: 700; }
 .status { border-left: 4px solid var(--accent); }
 .links a { margin-right: 14px; }
+.muted { color: var(--muted); }
+.metric strong { font-size: 1.02rem; }
+.pill { display: inline-block; border-radius: 999px; padding: 2px 8px; font-size: .78rem; font-weight: 700; white-space: nowrap; }
+.pill.yes { background: var(--neutral-bg); color: var(--neutral); }
+.pill.no { background: var(--good-bg); color: var(--good); }
+code { font-size: .86em; background: #eef2f7; padding: 1px 5px; border-radius: 4px; }
 pre { overflow: auto; background: #111827; color: #f8fafc; padding: 14px; border-radius: 8px; }
 </style>
 </head>
 <body>
 <main>
 <h1>WordPress Database Backend Benchmarks</h1>
-<p>This page is generated from a real local WordPress HTTP benchmark run. It compares MySQL, SQLite, native DuckDB, local DuckDB file formats, and MinIO-backed S3-compatible Parquet storage using the same front-page reads, REST reads, REST writes, fixture data, and PHP server worker count.</p>
+<p>This page is generated from a real local WordPress HTTP benchmark run. It compares native WordPress database baselines, native DuckDB, DuckDB attached databases, local DuckDB file formats, and MinIO-backed S3-compatible Parquet storage using the same front-page reads, REST reads, REST writes, fixture data, and PHP server worker count.</p>
 <div class="meta">
 <div><div class="label">Run</div><div class="value">' . h( $run_id ) . '</div></div>
 <div><div class="label">Generated</div><div class="value">' . h( $generated_at ) . '</div></div>
@@ -253,19 +534,39 @@ pre { overflow: auto; background: #111827; color: #f8fafc; padding: 14px; border
 <div><div class="label">Host</div><div class="value">' . $host . '</div></div>
 </div>
 <section class="panel status"><strong>Status:</strong> ' . h( $status_text ) . '</section>
-<section class="panel"><strong>Concurrency interpretation:</strong> MySQL is the server-backed baseline. SQLite and DuckDB are file-backed paths where writes are constrained by backend locking. DuckDB external storage adds a hydrate/flush cycle, so higher HTTP concurrency primarily creates queueing instead of linear throughput scaling. In this run, all measured requests and writes completed correctly; compare p95 latency at concurrency 4 and 8 to see queueing pressure.</section>
+<section class="panel"><strong>How to read this:</strong> Rows labeled <code>mysql</code> and <code>sqlite</code> are native WordPress database baselines and do not use DuckDB. Rows labeled <code>mysql_attach</code> and <code>sqlite_attach</code> are DuckDB rows: WordPress talks to DuckDB, and DuckDB talks to the attached database. DuckDB external file/object-store rows hydrate tables into DuckDB and flush them back to the target storage.</section>
+<section class="panel"><strong>Concurrency interpretation:</strong> MySQL is the server-backed baseline. SQLite and DuckDB are file-backed paths where writes are constrained by backend locking. DuckDB external storage adds a hydrate/flush cycle, so higher HTTP concurrency primarily creates queueing instead of linear throughput scaling. Compare the low-concurrency and high-concurrency p95 values in the summary table to see queueing pressure.</section>
+<h2>Backend Paths</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Backend</th><th>Family</th><th>DuckDB?</th><th>Storage Target</th><th>Role / Notes</th></tr></thead>
+<tbody>' . $backend_rows . '</tbody>
+</table>
+</div>
+<h2>At A Glance</h2>
+<p>Each metric cell shows throughput and p95 latency. The first metric column for each scenario uses concurrency ' . h( $low_concurrency ) . '; the second uses concurrency ' . h( $high_concurrency ) . '.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Backend</th><th>Storage Target</th><th class="num">Front c' . h( $low_concurrency ) . '</th><th class="num">Front c' . h( $high_concurrency ) . '</th><th class="num">Read c' . h( $low_concurrency ) . '</th><th class="num">Read c' . h( $high_concurrency ) . '</th><th class="num">Write c' . h( $low_concurrency ) . '</th><th class="num">Write c' . h( $high_concurrency ) . '</th><th>Write Verification</th></tr></thead>
+<tbody>' . $summary_rows . '</tbody>
+</table>
+</div>
 <h2>Fastest Successful Rows</h2>
 <ul>' . $best_items . '</ul>
-<h2>Benchmark Results</h2>
+<h2>Detailed Results</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>Backend</th><th>Scenario</th><th class="num">Concurrency</th><th class="num">Requests</th><th class="num">OK</th><th class="num">Errors</th><th class="num">Req/s</th><th class="num">p50 ms</th><th class="num">p95 ms</th><th class="num">p99 ms</th></tr></thead>
+<thead><tr><th>Backend</th><th>Family</th><th>DuckDB?</th><th>Storage Target</th><th>Scenario</th><th class="num">Concurrency</th><th class="num">Requests</th><th class="num">OK</th><th class="num">Errors</th><th class="num">Req/s</th><th class="num">p50 ms</th><th class="num">p95 ms</th><th class="num">p99 ms</th></tr></thead>
 <tbody>' . $rows . '</tbody>
 </table>
+</div>
 <h2>Write Verification</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>Backend</th><th class="num">Expected Write Rows</th><th class="num">Stored Write Rows</th><th>Status</th></tr></thead>
+<thead><tr><th>Backend</th><th>Family</th><th class="num">Expected Write Rows</th><th class="num">Stored Write Rows</th><th>Status</th></tr></thead>
 <tbody>' . $verification_rows . '</tbody>
 </table>
+</div>
 <h2>Raw Data</h2>
 <p class="links"><a href="benchmarks/latest.json">Latest summary JSON</a><a href="benchmarks/runs/' . h( rawurlencode( $run_id ) ) . '/events.jsonl">Run events JSONL</a><a href="benchmarks/runs/' . h( rawurlencode( $run_id ) ) . '/meta.json">Run metadata JSON</a></p>
 ' . $failure_html . '
