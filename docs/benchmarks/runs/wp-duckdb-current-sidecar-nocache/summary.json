@@ -1,0 +1,129 @@
+{
+    "run_id": "wp-duckdb-current-sidecar-nocache",
+    "generated_at": "2026-07-04T04:31:29+00:00",
+    "meta": {
+        "run_id": "wp-duckdb-current-sidecar-nocache",
+        "created_at": "2026-07-04T04:31:29+00:00",
+        "output_dir": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-current-sidecar-nocache",
+        "work_root": "/home/claude/.wp-duckdb-bench/current-sidecar-nocache-work",
+        "backends": [
+            "duckdb_sidecar"
+        ],
+        "concurrency": [
+            1
+        ],
+        "read_requests_per_scenario": 5,
+        "write_requests_per_scenario": 50,
+        "server_workers": 1,
+        "wordpress_requested": "latest",
+        "wordpress_version": "7.0",
+        "php_version": "8.5.7",
+        "commit": "d10f814734bd",
+        "host": "Linux sandbox-49185 7.0.9-204.fc44.x86_64 #1 SMP PREEMPT_DYNAMIC Tue May 19 22:42:18 UTC 2026 x86_64 GNU/Linux",
+        "duckdb_lock_timeout_seconds": 30
+    },
+    "backend_details": [
+        {
+            "backend": "duckdb_sidecar",
+            "display": "duckdb_sidecar",
+            "family": "DuckDB custom backend",
+            "duckdb_involved": true,
+            "storage_target": "Custom DuckDB backend",
+            "role": "Custom",
+            "notes": "WordPress uses DuckDB with custom backend configuration.",
+            "sort": 1000
+        }
+    ],
+    "benchmarks": [
+        {
+            "type": "benchmark",
+            "backend": "duckdb_sidecar",
+            "label": "front_page",
+            "method": "GET",
+            "expect_json": false,
+            "url_path": "/",
+            "requests": 5,
+            "concurrency": 1,
+            "ok": 5,
+            "errors": 0,
+            "total_ms": 497.695,
+            "requests_sec": 10.046,
+            "latency_ms": {
+                "min": 76.725,
+                "p50": 83.017,
+                "p95": 162.605,
+                "p99": 162.605,
+                "max": 162.605
+            },
+            "error_samples": [],
+            "backend_display": "duckdb_sidecar",
+            "backend_family": "DuckDB custom backend",
+            "duckdb_involved": true,
+            "storage_target": "Custom DuckDB backend"
+        },
+        {
+            "type": "benchmark",
+            "backend": "duckdb_sidecar",
+            "label": "rest_read",
+            "method": "GET",
+            "expect_json": true,
+            "url_path": "/",
+            "requests": 5,
+            "concurrency": 1,
+            "ok": 5,
+            "errors": 0,
+            "total_ms": 207.624,
+            "requests_sec": 24.082,
+            "latency_ms": {
+                "min": 35.438,
+                "p50": 41.094,
+                "p95": 46.485,
+                "p99": 46.485,
+                "max": 46.485
+            },
+            "error_samples": [],
+            "backend_display": "duckdb_sidecar",
+            "backend_family": "DuckDB custom backend",
+            "duckdb_involved": true,
+            "storage_target": "Custom DuckDB backend"
+        },
+        {
+            "type": "benchmark",
+            "backend": "duckdb_sidecar",
+            "label": "rest_write",
+            "method": "POST",
+            "expect_json": true,
+            "url_path": "/",
+            "requests": 50,
+            "concurrency": 1,
+            "ok": 50,
+            "errors": 0,
+            "total_ms": 1889.817,
+            "requests_sec": 26.458,
+            "latency_ms": {
+                "min": 31.766,
+                "p50": 37.821,
+                "p95": 42.624,
+                "p99": 47.405,
+                "max": 47.405
+            },
+            "error_samples": [],
+            "backend_display": "duckdb_sidecar",
+            "backend_family": "DuckDB custom backend",
+            "duckdb_involved": true,
+            "storage_target": "Custom DuckDB backend"
+        }
+    ],
+    "verifications": [
+        {
+            "type": "verification",
+            "backend": "duckdb_sidecar",
+            "expected_min_events": 50,
+            "stored_events": 50,
+            "status": "pass"
+        }
+    ],
+    "failures": [],
+    "total_requests": 60,
+    "total_errors": 0
+}

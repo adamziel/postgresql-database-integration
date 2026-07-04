@@ -1,0 +1,345 @@
+{
+    "run_id": "wp-duckdb-transport-profile-current",
+    "created_at": "2026-07-04T18:25:38+00:00",
+    "source_database": "/home/claude/.wp-duckdb-bench/gap-profile-current-work/duckdb/wordpress/wp-content/database/.ht.duckdb-benchmark",
+    "database_copies": {
+        "direct": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-transport-profile-current/direct.duckdb",
+        "unix": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-transport-profile-current/unix.duckdb",
+        "tcp": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-transport-profile-current/tcp.duckdb",
+        "http": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-transport-profile-current/http.duckdb"
+    },
+    "iterations_per_query": 200,
+    "sidecar_cache": "off",
+    "ffi_disabled_remote_unix_client_ok": true,
+    "endpoints": {
+        "unix": "/tmp/wp-duckdb-transport-2817186.sock",
+        "tcp": "127.0.0.1:27975",
+        "http": "127.0.0.1:28952"
+    },
+    "notes": [
+        "direct_hot uses one already-open WP_DuckDB_Connection.",
+        "direct_fresh opens a new WP_DuckDB_Connection per query and represents PHP request cold direct mode.",
+        "unix_line and tcp_line use one persistent client connection and one long-lived sidecar DuckDB connection.",
+        "http_keepalive uses HTTP framing over one persistent TCP connection.",
+        "http_new_connection opens a new TCP/HTTP connection per query.",
+        "server_query_ms is DuckDB query + fetchAll inside the sidecar process; transport_plus_client_ms is client roundtrip minus server_query_ms."
+    ],
+    "queries": {
+        "select_1": {
+            "sql": "SELECT 1",
+            "direct_hot": {
+                "count": 200,
+                "row_count": 1,
+                "client_ms": {
+                    "min": 0.195,
+                    "p50": 0.232,
+                    "p95": 0.279,
+                    "avg": 0.262
+                },
+                "server_query_ms": {
+                    "p50": 0.232,
+                    "p95": 0.279,
+                    "avg": 0.262
+                },
+                "server_total_ms": {
+                    "p50": 0.232,
+                    "p95": 0.279,
+                    "avg": 0.262
+                },
+                "transport_plus_client_ms": {
+                    "p50": 0,
+                    "p95": 0,
+                    "avg": 0
+                }
+            },
+            "direct_fresh": {
+                "count": 50,
+                "row_count": 1,
+                "client_ms": {
+                    "min": 10.477,
+                    "p50": 11.808,
+                    "p95": 21.521,
+                    "avg": 13.18
+                },
+                "server_query_ms": {
+                    "p50": 0.48,
+                    "p95": 0.704,
+                    "avg": 0.508
+                },
+                "server_total_ms": {
+                    "p50": 0.48,
+                    "p95": 0.704,
+                    "avg": 0.508
+                },
+                "transport_plus_client_ms": {
+                    "p50": 11.364,
+                    "p95": 20.448,
+                    "avg": 12.672
+                },
+                "open_ms": {
+                    "p50": 11.364,
+                    "p95": 20.448,
+                    "avg": 12.672
+                }
+            },
+            "unix_line": {
+                "count": 200,
+                "row_count": 1,
+                "client_ms": {
+                    "min": 0.243,
+                    "p50": 0.287,
+                    "p95": 0.35,
+                    "avg": 0.302
+                },
+                "server_query_ms": {
+                    "p50": 0.239,
+                    "p95": 0.296,
+                    "avg": 0.244
+                },
+                "server_total_ms": {
+                    "p50": 0.246,
+                    "p95": 0.304,
+                    "avg": 0.251
+                },
+                "transport_plus_client_ms": {
+                    "p50": 0.047,
+                    "p95": 0.066,
+                    "avg": 0.058
+                }
+            },
+            "tcp_line": {
+                "count": 200,
+                "row_count": 1,
+                "client_ms": {
+                    "min": 0.264,
+                    "p50": 0.302,
+                    "p95": 0.359,
+                    "avg": 0.307
+                },
+                "server_query_ms": {
+                    "p50": 0.238,
+                    "p95": 0.288,
+                    "avg": 0.243
+                },
+                "server_total_ms": {
+                    "p50": 0.246,
+                    "p95": 0.296,
+                    "avg": 0.251
+                },
+                "transport_plus_client_ms": {
+                    "p50": 0.062,
+                    "p95": 0.079,
+                    "avg": 0.064
+                }
+            },
+            "http_keepalive": {
+                "count": 200,
+                "row_count": 1,
+                "client_ms": {
+                    "min": 0.273,
+                    "p50": 0.324,
+                    "p95": 0.427,
+                    "avg": 0.352
+                },
+                "server_query_ms": {
+                    "p50": 0.245,
+                    "p95": 0.341,
+                    "avg": 0.263
+                },
+                "server_total_ms": {
+                    "p50": 0.252,
+                    "p95": 0.349,
+                    "avg": 0.271
+                },
+                "transport_plus_client_ms": {
+                    "p50": 0.078,
+                    "p95": 0.097,
+                    "avg": 0.089
+                }
+            },
+            "http_new_connection": {
+                "count": 50,
+                "row_count": 1,
+                "client_ms": {
+                    "min": 0.291,
+                    "p50": 0.327,
+                    "p95": 0.368,
+                    "avg": 0.332
+                },
+                "server_query_ms": {
+                    "p50": 0.243,
+                    "p95": 0.275,
+                    "avg": 0.244
+                },
+                "server_total_ms": {
+                    "p50": 0.251,
+                    "p95": 0.283,
+                    "avg": 0.252
+                },
+                "transport_plus_client_ms": {
+                    "p50": 0.084,
+                    "p95": 0.104,
+                    "avg": 0.087
+                }
+            }
+        },
+        "alloptions": {
+            "sql": "SELECT \"option_name\", \"option_value\" FROM \"wp_options\" WHERE \"autoload\" IN ('yes', 'on', 'auto-on', 'auto')",
+            "direct_hot": {
+                "count": 200,
+                "row_count": 118,
+                "client_ms": {
+                    "min": 1.188,
+                    "p50": 1.357,
+                    "p95": 2.316,
+                    "avg": 1.504
+                },
+                "server_query_ms": {
+                    "p50": 1.357,
+                    "p95": 2.316,
+                    "avg": 1.504
+                },
+                "server_total_ms": {
+                    "p50": 1.357,
+                    "p95": 2.316,
+                    "avg": 1.504
+                },
+                "transport_plus_client_ms": {
+                    "p50": 0,
+                    "p95": 0,
+                    "avg": 0
+                }
+            },
+            "direct_fresh": {
+                "count": 50,
+                "row_count": 118,
+                "client_ms": {
+                    "min": 26.128,
+                    "p50": 27.853,
+                    "p95": 58.15,
+                    "avg": 38.93
+                },
+                "server_query_ms": {
+                    "p50": 16.116,
+                    "p95": 41.236,
+                    "avg": 26.138
+                },
+                "server_total_ms": {
+                    "p50": 16.116,
+                    "p95": 41.236,
+                    "avg": 26.138
+                },
+                "transport_plus_client_ms": {
+                    "p50": 11.695,
+                    "p95": 17.516,
+                    "avg": 12.792
+                },
+                "open_ms": {
+                    "p50": 11.695,
+                    "p95": 17.516,
+                    "avg": 12.792
+                }
+            },
+            "unix_line": {
+                "count": 200,
+                "row_count": 118,
+                "client_ms": {
+                    "min": 1.675,
+                    "p50": 1.788,
+                    "p95": 2.255,
+                    "avg": 1.861
+                },
+                "server_query_ms": {
+                    "p50": 1.284,
+                    "p95": 1.724,
+                    "avg": 1.352
+                },
+                "server_total_ms": {
+                    "p50": 1.483,
+                    "p95": 1.913,
+                    "avg": 1.546
+                },
+                "transport_plus_client_ms": {
+                    "p50": 0.493,
+                    "p95": 0.548,
+                    "avg": 0.51
+                }
+            },
+            "tcp_line": {
+                "count": 200,
+                "row_count": 118,
+                "client_ms": {
+                    "min": 1.725,
+                    "p50": 1.861,
+                    "p95": 2.643,
+                    "avg": 2.025
+                },
+                "server_query_ms": {
+                    "p50": 1.326,
+                    "p95": 1.962,
+                    "avg": 1.46
+                },
+                "server_total_ms": {
+                    "p50": 1.526,
+                    "p95": 2.154,
+                    "avg": 1.664
+                },
+                "transport_plus_client_ms": {
+                    "p50": 0.53,
+                    "p95": 0.657,
+                    "avg": 0.565
+                }
+            },
+            "http_keepalive": {
+                "count": 200,
+                "row_count": 118,
+                "client_ms": {
+                    "min": 1.771,
+                    "p50": 1.915,
+                    "p95": 2.913,
+                    "avg": 2.06
+                },
+                "server_query_ms": {
+                    "p50": 1.34,
+                    "p95": 1.974,
+                    "avg": 1.436
+                },
+                "server_total_ms": {
+                    "p50": 1.543,
+                    "p95": 2.244,
+                    "avg": 1.647
+                },
+                "transport_plus_client_ms": {
+                    "p50": 0.56,
+                    "p95": 0.698,
+                    "avg": 0.624
+                }
+            },
+            "http_new_connection": {
+                "count": 50,
+                "row_count": 118,
+                "client_ms": {
+                    "min": 1.78,
+                    "p50": 2.013,
+                    "p95": 3.241,
+                    "avg": 2.174
+                },
+                "server_query_ms": {
+                    "p50": 1.428,
+                    "p95": 2.397,
+                    "avg": 1.556
+                },
+                "server_total_ms": {
+                    "p50": 1.64,
+                    "p95": 2.612,
+                    "avg": 1.771
+                },
+                "transport_plus_client_ms": {
+                    "p50": 0.563,
+                    "p95": 1.104,
+                    "avg": 0.617
+                }
+            }
+        }
+    }
+}

@@ -740,12 +740,7 @@ class WP_DuckDB_Connection_Tests extends WP_DuckDB_TestCase {
 			$this->assertSame( array( $column => 0 ), $stmt->fetch( PDO::FETCH_ASSOC ), $sql );
 		}
 
-		$this->assertSame(
-			array(
-				'CREATE OR REPLACE MACRO date_format(d, f) AS strftime(TRY_CAST(d AS TIMESTAMP), f)',
-			),
-			$duckdb->queries
-		);
+		$this->assertSame( array(), $duckdb->queries );
 	}
 
 	public function test_successful_statement_error_info_remains_clear_after_failure_characterization(): void {
@@ -1109,11 +1104,229 @@ class WP_DuckDB_Connection_Tests extends WP_DuckDB_TestCase {
 				$files = array();
 			}
 			foreach ( $files as $file ) {
-				if ( is_file( $file ) ) {
+				if ( ! is_dir( $file ) ) {
 					unlink( $file );
 				}
 			}
 		}
+	}
+
+	#[PHPUnit\Framework\Attributes\DataProvider( 'remote_sidecar_transport_provider' )]
+	public function test_remote_sidecar_connection_executes_queries( string $transport ): void {
+		$this->requireDuckDBRuntime();
+		if ( ! function_exists( 'proc_open' ) ) {
+			$this->markTestSkipped( 'proc_open is required for the DuckDB sidecar integration test.' );
+		}
+
+		$temp_dir           = sys_get_temp_dir() . '/wp-duckdb-sidecar-test-' . getmypid() . '-' . uniqid( '', true );
+		$path               = $temp_dir . '/sidecar.duckdb';
+		$repo_dir           = dirname( __DIR__, 2 );
+		$process            = null;
+		$pipes              = array();
+		$connection_options = array();
+
+		mkdir( $temp_dir, 0777, true );
+
+		try {
+			if ( 'sidecar' === $transport ) {
+				$connection_options = array(
+					'transport' => 'sidecar',
+					'command'   => PHP_BINARY . ' -d ffi.enable=1 ' . escapeshellarg( $repo_dir . '/bin/duckdb-sidecar.php' )
+						. ' --stdio --path=' . escapeshellarg( $path ),
+				);
+			} else {
+				$sidecar            = $this->startDuckDBSidecarProcess( $transport, $repo_dir, $temp_dir, $path );
+				$process            = $sidecar['process'];
+				$pipes              = $sidecar['pipes'];
+				$connection_options = $sidecar['connection_options'];
+			}
+
+			$connection = new WP_DuckDB_Remote_Connection( $connection_options );
+			$connection->query( 'CREATE TABLE sidecar_test (id INTEGER, label VARCHAR)' );
+			$insert = $connection->query( "INSERT INTO sidecar_test VALUES (1, 'first'), (2, 'second')" );
+
+			$this->assertSame( 2, $insert->rowCount() );
+			$this->assertSame(
+				array(
+					array( 1, 'first' ),
+					array( 2, 'second' ),
+				),
+				$connection->query( 'SELECT id, label FROM sidecar_test ORDER BY id' )->fetchAll( PDO::FETCH_NUM )
+			);
+			$this->assertSame( 2, $connection->query( 'SELECT COUNT(*) FROM sidecar_test' )->fetchColumn() );
+			$this->assertSame( 2, $connection->query( 'SELECT COUNT(*) FROM sidecar_test' )->fetchColumn() );
+			$connection->query( "INSERT INTO sidecar_test VALUES (3, 'third')" );
+			$this->assertSame( 3, $connection->query( 'SELECT COUNT(*) FROM sidecar_test' )->fetchColumn() );
+
+			$driver = new WP_DuckDB_Driver(
+				array(
+					'connection'                   => $connection,
+					'database'                     => 'wordpress',
+					'known_auto_increment_columns' => array(
+						'remote_sidecar_ai' . $transport => 'id',
+					),
+				)
+			);
+			$driver->query(
+				'CREATE TABLE remote_sidecar_ai' . $transport . ' (
+					id BIGINT NOT NULL AUTO_INCREMENT,
+					label VARCHAR(20) NOT NULL,
+					PRIMARY KEY (id)
+				)'
+			);
+			$driver_insert = $driver->query( 'INSERT INTO remote_sidecar_ai' . $transport . " (label) VALUES ('from-driver')" );
+			$driver_queries = $driver->get_last_duckdb_queries();
+
+			$this->assertSame( 1, $driver_insert->rowCount() );
+			$this->assertSame( 1, $driver->get_insert_id() );
+			$this->assertStringContainsString( ' RETURNING "id"', end( $driver_queries ) );
+			$connection->close();
+
+			$remote_driver = new WP_DuckDB_Driver(
+				array(
+					'remote'                       => $connection_options,
+					'database'                     => 'wordpress',
+					'known_auto_increment_columns' => array(
+						'remote_config_ai' . $transport => 'id',
+					),
+				)
+			);
+			$remote_driver->query(
+				'CREATE TABLE remote_config_ai' . $transport . ' (
+					id BIGINT NOT NULL AUTO_INCREMENT,
+					label VARCHAR(20) NOT NULL,
+					PRIMARY KEY (id)
+				)'
+			);
+			$remote_driver_insert = $remote_driver->query( 'INSERT INTO remote_config_ai' . $transport . " (label) VALUES ('from-remote-options')" );
+
+			$this->assertSame( 1, $remote_driver_insert->rowCount() );
+			$this->assertSame( 1, $remote_driver->get_insert_id() );
+			$this->assertSame( 'from-remote-options', $remote_driver->query( 'SELECT label FROM remote_config_ai' . $transport . ' WHERE id = 1' )->fetchColumn() );
+			$remote_driver->close();
+		} finally {
+			if ( isset( $remote_driver ) ) {
+				$remote_driver->close();
+			}
+			if ( isset( $connection ) ) {
+				$connection->close();
+			}
+			foreach ( $pipes as $pipe ) {
+				if ( is_resource( $pipe ) ) {
+					fclose( $pipe );
+				}
+			}
+			if ( is_resource( $process ) ) {
+				proc_terminate( $process );
+				proc_close( $process );
+			}
+
+			$files = scandir( $temp_dir );
+			if ( false === $files ) {
+				$files = array();
+			}
+			foreach ( $files as $entry ) {
+				if ( '.' === $entry || '..' === $entry ) {
+					continue;
+				}
+				$file = $temp_dir . '/' . $entry;
+				if ( ! is_dir( $file ) ) {
+					unlink( $file );
+				}
+			}
+			if ( is_dir( $temp_dir ) ) {
+				rmdir( $temp_dir );
+			}
+		}
+	}
+
+	public static function remote_sidecar_transport_provider(): array {
+		return array(
+			'unix socket'     => array( 'unix' ),
+			'tcp socket'      => array( 'tcp' ),
+			'http'            => array( 'http' ),
+			'managed sidecar' => array( 'sidecar' ),
+		);
+	}
+
+	private function startDuckDBSidecarProcess( string $transport, string $repo_dir, string $temp_dir, string $path ): array {
+		$command            = PHP_BINARY . ' -d ffi.enable=1 ' . escapeshellarg( $repo_dir . '/bin/duckdb-sidecar.php' );
+		$connection_options = array( 'transport' => $transport );
+		$endpoint           = null;
+
+		if ( 'unix' === $transport ) {
+			$endpoint             = $temp_dir . '/duckdb.sock';
+			$command             .= ' --socket=' . escapeshellarg( $endpoint );
+			$connection_options['socket'] = $endpoint;
+		} elseif ( 'tcp' === $transport || 'http' === $transport ) {
+			$port                 = $this->freeTcpPort();
+			$endpoint             = '127.0.0.1:' . $port;
+			$command             .= ' --' . $transport . '=' . escapeshellarg( $endpoint );
+			$connection_options['host'] = '127.0.0.1';
+			$connection_options['port'] = $port;
+			if ( 'http' === $transport ) {
+				$connection_options['url'] = 'http://' . $endpoint . '/query';
+			}
+		} else {
+			throw new InvalidArgumentException( 'Unsupported DuckDB sidecar test transport.' );
+		}
+
+		$command .= ' --path=' . escapeshellarg( $path );
+		$process = proc_open(
+			$command,
+			array(
+				0 => array( 'pipe', 'r' ),
+				1 => array( 'pipe', 'w' ),
+				2 => array( 'pipe', 'w' ),
+			),
+			$pipes,
+			$repo_dir
+		);
+
+		if ( ! is_resource( $process ) ) {
+			$this->markTestSkipped( 'Could not start the DuckDB sidecar process.' );
+		}
+		stream_set_blocking( $pipes[2], false );
+
+		$this->waitForDuckDBSidecar( $transport, $endpoint, $pipes );
+
+		return array(
+			'process'            => $process,
+			'pipes'              => $pipes,
+			'connection_options' => $connection_options,
+		);
+	}
+
+	private function waitForDuckDBSidecar( string $transport, string $endpoint, array $pipes ): void {
+		$target = 'unix' === $transport ? 'unix://' . $endpoint : 'tcp://' . $endpoint;
+		for ( $i = 0; $i < 40; ++$i ) {
+			$errno  = 0;
+			$errstr = '';
+			$handle = @stream_socket_client( $target, $errno, $errstr, 0.25 );
+			if ( false !== $handle ) {
+				fclose( $handle );
+				return;
+			}
+			usleep( 250000 );
+		}
+
+		$stderr = isset( $pipes[2] ) && is_resource( $pipes[2] ) ? stream_get_contents( $pipes[2] ) : '';
+		$this->fail( 'Timed out waiting for DuckDB sidecar ' . $transport . ' endpoint: ' . $stderr );
+	}
+
+	private function freeTcpPort(): int {
+		$server = stream_socket_server( 'tcp://127.0.0.1:0', $errno, $errstr );
+		if ( false === $server ) {
+			$this->markTestSkipped( 'Could not allocate a local TCP port for the DuckDB sidecar test: ' . $errstr );
+		}
+
+		$name = stream_socket_get_name( $server, false );
+		fclose( $server );
+		if ( ! is_string( $name ) || ! preg_match( '/:(\d+)$/', $name, $matches ) ) {
+			$this->markTestSkipped( 'Could not determine the allocated local TCP port for the DuckDB sidecar test.' );
+		}
+
+		return (int) $matches[1];
 	}
 
 	public function test_quote_identifier_uses_duckdb_double_quotes(): void {

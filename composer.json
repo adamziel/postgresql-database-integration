@@ -20,10 +20,10 @@
 			"@test-postgresql"
 		],
 		"test-duckdb": [
-			"phpunit --configuration phpunit-duckdb.xml.dist"
+			"WP_DUCKDB_TESTS=1 WP_DUCKDB_AUTOLOAD=\"$PWD/vendor/autoload.php\" DUCKDB_PHP_AUTOLOAD=\"$PWD/vendor/autoload.php\" php -d ffi.enable=1 vendor/bin/phpunit --configuration phpunit-duckdb.xml.dist"
 		],
 		"test-duckdb-parity": [
-			"phpunit --configuration phpunit-duckdb-parity.xml.dist"
+			"WP_DUCKDB_TESTS=1 WP_DUCKDB_AUTOLOAD=\"$PWD/vendor/autoload.php\" DUCKDB_PHP_AUTOLOAD=\"$PWD/vendor/autoload.php\" php -d ffi.enable=1 vendor/bin/phpunit --configuration phpunit-duckdb-parity.xml.dist"
 		],
 		"readiness-duckdb": [
 			"@php -d ffi.enable=1 bin/duckdb-production-readiness.php"

@@ -104,6 +104,10 @@ class WP_DuckDB_DB_Adapter_Tests extends PHPUnit\Framework\TestCase {
 		$this->assertSame( 2, $result['insert_rows_affected'] );
 		$this->assertTrue( $result['create_return'] );
 		$this->assertSame( 3, $result['num_queries'] );
+		$this->assertSame(
+			'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_IN_DATE',
+			$result['sql_mode_after_connect']
+		);
 		$user_client_queries = array_values(
 			array_filter(
 				$result['client_queries'],
@@ -116,13 +120,101 @@ class WP_DuckDB_DB_Adapter_Tests extends PHPUnit\Framework\TestCase {
 		);
 		$this->assertSame(
 			array(
-				'CREATE OR REPLACE MACRO date_format(d, f) AS strftime(TRY_CAST(d AS TIMESTAMP), f)',
 				'SELECT 42 AS answer',
 				'INSERT INTO t VALUES (1), (2)',
 				'CREATE TABLE "t" ("id" INTEGER)',
 			),
-			array_slice( $user_client_queries, 0, 4 )
+			array_slice( $user_client_queries, 0, 3 )
 		);
+	}
+
+	public function test_duckdb_wpdb_alloptions_file_cache_serves_repeated_reads_and_invalidates_on_write(): void {
+		$result = $this->run_alloptions_file_cache_state_script();
+
+		$this->assertTrue( $result['connected'] );
+		$this->assertSame( 2, $result['first_return'] );
+		$this->assertSame( 2, $result['second_return'] );
+		$this->assertSame( 1, $result['native_alloptions_selects_after_first'] );
+		$this->assertSame( 1, $result['native_alloptions_selects_after_second'] );
+		$this->assertTrue( $result['cache_exists_after_first'] );
+		$this->assertSame(
+			array(
+				array(
+					'option_name'  => 'siteurl',
+					'option_value' => 'https://example.test',
+				),
+				array(
+					'option_name'  => 'blogname',
+					'option_value' => 'DuckDB Test',
+				),
+			),
+			$result['second_rows']
+		);
+		$this->assertSame( 1, $result['single_autoload_return'] );
+		$this->assertSame( 'https://example.test', $result['single_autoload_rows'][0]['option_value'] );
+		$this->assertSame( 0, $result['native_single_autoload_selects'] );
+		$this->assertSame( 2, $result['multi_autoload_return'] );
+		$this->assertSame(
+			array(
+				array(
+					'option_name'  => 'siteurl',
+					'option_value' => 'https://example.test',
+				),
+				array(
+					'option_name'  => 'blogname',
+					'option_value' => 'DuckDB Test',
+				),
+			),
+			$result['multi_autoload_rows']
+		);
+		$this->assertSame( 0, $result['native_multi_autoload_selects'] );
+		$this->assertSame( 0, $result['multi_unknown_first_return'] );
+		$this->assertSame( 0, $result['multi_unknown_second_return'] );
+		$this->assertSame( 1, $result['native_multi_unknown_selects_after_first'] );
+		$this->assertSame( 1, $result['native_multi_unknown_selects_after_second'] );
+		$this->assertTrue( $result['nonautoload_insert_preserves_alloptions'] );
+		$this->assertSame( 1, $result['nonautoload_update_return'] );
+		$this->assertTrue( $result['cache_exists_after_nonautoload_update'] );
+		$this->assertSame( 2, $result['after_nonautoload_update_return'] );
+		$this->assertSame( 1, $result['native_alloptions_selects_after_nonautoload_update'] );
+		$this->assertSame( 1, $result['single_updated_return'] );
+		$this->assertSame( 'payload', $result['single_updated_rows'][0]['option_value'] );
+		$this->assertSame( 0, $result['native_single_updated_selects'] );
+		$this->assertSame( 1, $result['update_return'] );
+		$this->assertFalse( $result['cache_exists_after_update'] );
+		$this->assertSame( 2, $result['third_return'] );
+		$this->assertSame( 2, $result['native_alloptions_selects_after_third'] );
+		$this->assertSame( 'Changed Site', $result['third_rows'][0]['option_value'] );
+		$this->assertSame( 0, $result['single_missing_first_return'] );
+		$this->assertSame( 0, $result['single_missing_second_return'] );
+		$this->assertSame( 1, $result['native_single_selects_after_first_missing'] );
+		$this->assertSame( 1, $result['native_single_selects_after_second_missing'] );
+	}
+
+	public function test_duckdb_wpdb_persists_custom_auto_increment_metadata_for_fresh_requests(): void {
+		if ( null !== WP_DuckDB_Runtime::get_unavailable_reason() ) {
+			$this->markTestSkipped( WP_DuckDB_Runtime::get_unavailable_reason() );
+		}
+
+		$result = $this->run_auto_increment_file_cache_state_script();
+
+		$this->assertTrue( $result['first_connected'], $result['first_last_error'] ?? '' );
+		$this->assertTrue( $result['second_connected'], $result['second_last_error'] ?? '' );
+		$this->assertTrue( $result['create_return'] );
+		$this->assertSame( 1, $result['first_insert_return'] );
+		$this->assertSame( 1, $result['first_insert_id'] );
+		$this->assertTrue( $result['cache_exists_after_create'] );
+		$this->assertSame( 'event_id', $result['cached_event_id_column'] );
+		$this->assertTrue( $result['schema_cache_exists_after_create'] );
+		$this->assertSame( 3, $result['schema_cached_column_count'] );
+		$this->assertSame( 1, $result['second_insert_return'] );
+		$this->assertSame( 2, $result['second_insert_id'] );
+		$this->assertStringContainsString( 'RETURNING "event_id"', end( $result['second_insert_duckdb_queries'] ) );
+		$this->assertStringNotContainsString( 'currval(', implode( "\n", $result['second_insert_duckdb_queries'] ) );
+		$this->assertStringNotContainsString( 'MAX("event_id")', implode( "\n", $result['second_insert_duckdb_queries'] ) );
+		$this->assertStringNotContainsString( 'table_schema = current_schema()', implode( "\n", $result['second_insert_duckdb_queries'] ) );
+		$this->assertStringNotContainsString( '__wp_duckdb_column_metadata', implode( "\n", $result['second_insert_duckdb_queries'] ) );
+		$this->assertStringNotContainsString( 'pragma_table_info', implode( "\n", $result['second_insert_duckdb_queries'] ) );
 	}
 
 	public function test_duckdb_wpdb_insert_id_tracks_driver_insert_id(): void {
@@ -708,6 +800,7 @@ PHP;
 		$plugin_dir  = $this->get_plugin_dir();
 		$driver_load = dirname( __DIR__, 2 ) . '/wp-includes/database/load.php';
 		$code        = $this->get_wordpress_stub_code();
+		$code       .= "\nif ( defined( 'DUCKDB_PHP_AUTOLOAD' ) ) { require_once DUCKDB_PHP_AUTOLOAD; }\n";
 		$code       .= "\nrequire_once " . var_export( $driver_load, true ) . ";\n";
 		$code       .= 'require_once ' . var_export( $plugin_dir . '/wp-includes/duckdb/class-wp-duckdb-db.php', true ) . ";\n";
 		$code       .= '$fail_read = ' . ( $fail_read ? 'true' : 'false' ) . ";\n";
@@ -1298,6 +1391,7 @@ $client             = new WP_DuckDB_Plugin_Test_Client();
 $GLOBALS['@duckdb'] = new WP_DuckDB_Connection( array( 'duckdb' => $client ) );
 $db                 = new WP_DuckDB_DB( 'wordpress_test' );
 $connected          = $db->db_connect( false );
+$sql_mode_row       = $GLOBALS['@duckdb_driver']->query( 'SELECT @@SESSION.sql_mode' )->fetch( PDO::FETCH_ASSOC );
 $select_return      = $db->query( 'SELECT 42 AS answer' );
 $select_state       = array(
 	'last_query' => $db->last_query,
@@ -1322,6 +1416,357 @@ echo json_encode(
 		'create_return'        => $create_return,
 		'num_queries'          => $db->num_queries,
 		'client_queries'       => $client->queries,
+		'sql_mode_after_connect' => $sql_mode_row['@@SESSION.sql_mode'],
+	)
+);
+PHP;
+
+		return $this->run_isolated_php( $code );
+	}
+
+	private function run_alloptions_file_cache_state_script(): array {
+		$plugin_dir  = $this->get_plugin_dir();
+		$driver_load = dirname( __DIR__, 2 ) . '/wp-includes/database/load.php';
+		$code        = $this->get_wordpress_stub_code();
+		$code       .= "\ndefine( 'WP_DUCKDB_ALLOPTIONS_FILE_CACHE', true );\n";
+		$code       .= "\nrequire_once " . var_export( $driver_load, true ) . ";\n";
+		$code       .= 'require_once ' . var_export( $plugin_dir . '/wp-includes/duckdb/class-wp-duckdb-db.php', true ) . ";\n";
+		$code       .= <<<'PHP'
+
+	class WP_DuckDB_Alloptions_Cache_Test_Result {
+		private $columns;
+		private $rows;
+
+		public function __construct( array $columns, array $rows ) {
+			$this->columns = $columns;
+			$this->rows    = $rows;
+		}
+
+		public function columnNames() {
+			return new ArrayIterator( $this->columns );
+		}
+
+		public function rows( $assoc = false ) {
+			return new ArrayIterator( $this->rows );
+		}
+	}
+
+	class WP_DuckDB_Alloptions_Cache_Test_Client {
+		public $queries = array();
+		private $siteurl = 'https://example.test';
+
+		public function query( $sql ) {
+			$this->queries[] = $sql;
+			$normalized     = strtolower( trim( $sql ) );
+
+			if ( 0 === strpos( $normalized, 'create or replace macro' ) ) {
+				return new WP_DuckDB_Alloptions_Cache_Test_Result( array( 'Success' ), array( array( 'Success' => true ) ) );
+			}
+
+			if ( 0 === strpos( $normalized, 'select "option_name", "option_value" from "wp_options" where "autoload" in' ) ) {
+				return new WP_DuckDB_Alloptions_Cache_Test_Result(
+					array( 'option_name', 'option_value' ),
+					array(
+						array(
+							'option_name'  => 'siteurl',
+							'option_value' => $this->siteurl,
+						),
+						array(
+							'option_name'  => 'blogname',
+							'option_value' => 'DuckDB Test',
+						),
+					)
+				);
+			}
+
+			if ( 0 === strpos( $normalized, 'select "option_value" from "wp_options" where "option_name" collate nocase' ) ) {
+				if ( false !== strpos( $sql, "'WPLANG'" ) ) {
+					return new WP_DuckDB_Alloptions_Cache_Test_Result( array( 'option_value' ), array() );
+				}
+				if ( false !== strpos( $sql, "'siteurl'" ) ) {
+					return new WP_DuckDB_Alloptions_Cache_Test_Result(
+						array( 'option_value' ),
+						array(
+							array(
+								'option_value' => $this->siteurl,
+							),
+						)
+					);
+				}
+			}
+
+			if ( 0 === strpos( $normalized, 'select "option_name", "option_value" from "wp_options" where "option_name" collate nocase in' ) ) {
+				return new WP_DuckDB_Alloptions_Cache_Test_Result( array( 'option_name', 'option_value' ), array() );
+			}
+
+			if ( 0 === strpos( $normalized, 'update "wp_options" set "option_value"' ) && false !== strpos( $sql, "'duckdb_benchmark_last_payload'" ) ) {
+				return new WP_DuckDB_Alloptions_Cache_Test_Result( array( 'Count' ), array( array( 'Count' => 1 ) ) );
+			}
+
+			if ( 0 === strpos( $normalized, 'update "wp_options" set "option_value"' ) ) {
+				$this->siteurl = 'Changed Site';
+				return new WP_DuckDB_Alloptions_Cache_Test_Result( array( 'Count' ), array( array( 'Count' => 1 ) ) );
+			}
+
+			throw new RuntimeException( 'Unexpected query: ' . $sql );
+		}
+	}
+
+	function wp_duckdb_alloptions_cache_exists_for_test() {
+		$files = glob( FQDBDIR . '.ht.duckdb-alloptions-*.json' );
+		return is_array( $files ) && count( $files ) > 0;
+	}
+
+	function wp_duckdb_alloptions_native_select_count_for_test( array $queries ) {
+		$count = 0;
+		foreach ( $queries as $query ) {
+			if ( false !== strpos( $query, 'SELECT "option_name", "option_value" FROM "wp_options" WHERE "autoload" IN' ) ) {
+				++$count;
+			}
+		}
+		return $count;
+	}
+
+	function wp_duckdb_single_option_native_select_count_for_test( array $queries ) {
+		$count = 0;
+		foreach ( $queries as $query ) {
+			if ( false !== strpos( $query, 'SELECT "option_value" FROM "wp_options" WHERE "option_name" COLLATE NOCASE' ) ) {
+				++$count;
+			}
+		}
+		return $count;
+	}
+
+	function wp_duckdb_single_option_native_select_count_for_option_for_test( array $queries, $option_name ) {
+		$count = 0;
+		foreach ( $queries as $query ) {
+			if (
+				false !== strpos( $query, 'SELECT "option_value" FROM "wp_options" WHERE "option_name" COLLATE NOCASE' )
+				&& false !== strpos( $query, "'" . $option_name . "'" )
+			) {
+				++$count;
+			}
+		}
+		return $count;
+	}
+
+	function wp_duckdb_multi_option_native_select_count_for_test( array $queries ) {
+		$count = 0;
+		foreach ( $queries as $query ) {
+			if ( false !== strpos( $query, 'SELECT "option_name", "option_value" FROM "wp_options" WHERE "option_name" COLLATE NOCASE IN' ) ) {
+				++$count;
+			}
+		}
+		return $count;
+	}
+
+	function wp_duckdb_alloptions_rows_for_test( array $rows ) {
+		return array_map(
+			function ( $row ) {
+				return array(
+					'option_name'  => $row->option_name,
+					'option_value' => $row->option_value,
+				);
+			},
+			$rows
+		);
+	}
+
+	function wp_duckdb_single_option_rows_for_test( array $rows ) {
+		return array_map(
+			function ( $row ) {
+				return array(
+					'option_value' => $row->option_value,
+				);
+			},
+			$rows
+		);
+	}
+
+	$client             = new WP_DuckDB_Alloptions_Cache_Test_Client();
+	$GLOBALS['@duckdb'] = new WP_DuckDB_Connection( array( 'duckdb' => $client ) );
+	$db                 = new WP_DuckDB_DB( 'wordpress_test' );
+	$connected          = $db->db_connect( false );
+	$db->set_prefix( 'wp_' );
+
+	$select_sql     = "SELECT option_name, option_value FROM wp_options WHERE autoload IN ('yes', 'on', 'auto-on', 'auto')";
+	$first_return   = $db->query( $select_sql );
+	$first_rows     = wp_duckdb_alloptions_rows_for_test( $db->last_result );
+	$after_first    = wp_duckdb_alloptions_native_select_count_for_test( $client->queries );
+	$cache_exists_1 = wp_duckdb_alloptions_cache_exists_for_test();
+
+	$second_return  = $db->query( $select_sql );
+	$second_rows    = wp_duckdb_alloptions_rows_for_test( $db->last_result );
+	$after_second   = wp_duckdb_alloptions_native_select_count_for_test( $client->queries );
+	$before_single_autoload_queries = $client->queries;
+	$single_autoload_return = $db->query( "SELECT option_value FROM wp_options WHERE option_name = 'siteurl' LIMIT 1" );
+	$single_autoload_rows = wp_duckdb_single_option_rows_for_test( $db->last_result );
+	$single_autoload_query_delta = array_slice( $client->queries, count( $before_single_autoload_queries ) );
+	$native_single_autoload_selects = wp_duckdb_single_option_native_select_count_for_option_for_test( $single_autoload_query_delta, 'siteurl' );
+	$before_multi_autoload_queries = $client->queries;
+	$multi_autoload_return = $db->query( "SELECT option_name, option_value FROM wp_options WHERE option_name IN ('siteurl','blogname')" );
+	$multi_autoload_rows = wp_duckdb_alloptions_rows_for_test( $db->last_result );
+	$multi_autoload_query_delta = array_slice( $client->queries, count( $before_multi_autoload_queries ) );
+	$native_multi_autoload_selects = wp_duckdb_multi_option_native_select_count_for_test( $multi_autoload_query_delta );
+	$multi_unknown_sql = "SELECT option_name, option_value FROM wp_options WHERE option_name IN ('missing_one','missing_two')";
+	$multi_unknown_first_return = $db->query( $multi_unknown_sql );
+	$native_multi_unknown_selects_after_first = wp_duckdb_multi_option_native_select_count_for_test( $client->queries );
+	$multi_unknown_second_return = $db->query( $multi_unknown_sql );
+	$native_multi_unknown_selects_after_second = wp_duckdb_multi_option_native_select_count_for_test( $client->queries );
+	$nonautoload_insert_sql = "INSERT INTO `wp_options` (`option_name`, `option_value`, `autoload`) VALUES ('duckdb_benchmark_write_test', 'payload, with comma', 'off') ON DUPLICATE KEY UPDATE `option_name` = VALUES(`option_name`), `option_value` = VALUES(`option_value`), `autoload` = VALUES(`autoload`)";
+	$preserves_alloptions = new ReflectionMethod( WP_DuckDB_DB::class, 'duckdb_options_write_preserves_alloptions_file_cache' );
+	if ( method_exists( $preserves_alloptions, 'setAccessible' ) ) {
+		$preserves_alloptions->setAccessible( true );
+	}
+	$nonautoload_insert_preserves_alloptions = $preserves_alloptions->invoke( $db, $nonautoload_insert_sql, 'insert' );
+	$nonautoload_update_return = $db->query( "UPDATE wp_options SET option_value = 'payload', autoload = 'off' WHERE option_name = 'duckdb_benchmark_last_payload'" );
+	$cache_exists_nonautoload_update = wp_duckdb_alloptions_cache_exists_for_test();
+	$after_nonautoload_update_return = $db->query( $select_sql );
+	$after_nonautoload_update = wp_duckdb_alloptions_native_select_count_for_test( $client->queries );
+	$before_single_updated_queries = $client->queries;
+	$single_updated_return = $db->query( "SELECT option_value FROM wp_options WHERE option_name = 'duckdb_benchmark_last_payload' LIMIT 1" );
+	$single_updated_rows = wp_duckdb_single_option_rows_for_test( $db->last_result );
+	$single_updated_query_delta = array_slice( $client->queries, count( $before_single_updated_queries ) );
+	$native_single_updated_selects = wp_duckdb_single_option_native_select_count_for_option_for_test( $single_updated_query_delta, 'duckdb_benchmark_last_payload' );
+	$update_return  = $db->query( "UPDATE wp_options SET option_value = 'Changed Site' WHERE option_name = 'siteurl'" );
+	$cache_exists_2 = wp_duckdb_alloptions_cache_exists_for_test();
+
+	$third_return = $db->query( $select_sql );
+	$third_rows   = wp_duckdb_alloptions_rows_for_test( $db->last_result );
+	$after_third  = wp_duckdb_alloptions_native_select_count_for_test( $client->queries );
+
+	$single_missing_sql            = "SELECT option_value FROM wp_options WHERE option_name = 'WPLANG' LIMIT 1";
+	$single_missing_first_return   = $db->query( $single_missing_sql );
+	$after_first_missing           = wp_duckdb_single_option_native_select_count_for_test( $client->queries );
+	$single_missing_second_return  = $db->query( $single_missing_sql );
+	$after_second_missing          = wp_duckdb_single_option_native_select_count_for_test( $client->queries );
+
+	echo json_encode(
+		array(
+			'connected'                              => $connected,
+			'first_return'                           => $first_return,
+			'first_rows'                             => $first_rows,
+			'native_alloptions_selects_after_first'  => $after_first,
+			'cache_exists_after_first'               => $cache_exists_1,
+			'second_return'                          => $second_return,
+			'second_rows'                            => $second_rows,
+			'native_alloptions_selects_after_second' => $after_second,
+			'single_autoload_return'                 => $single_autoload_return,
+			'single_autoload_rows'                   => $single_autoload_rows,
+			'native_single_autoload_selects'         => $native_single_autoload_selects,
+			'multi_autoload_return'                  => $multi_autoload_return,
+			'multi_autoload_rows'                    => $multi_autoload_rows,
+			'native_multi_autoload_selects'          => $native_multi_autoload_selects,
+			'multi_unknown_first_return'             => $multi_unknown_first_return,
+			'multi_unknown_second_return'            => $multi_unknown_second_return,
+			'native_multi_unknown_selects_after_first' => $native_multi_unknown_selects_after_first,
+			'native_multi_unknown_selects_after_second' => $native_multi_unknown_selects_after_second,
+			'nonautoload_insert_preserves_alloptions' => $nonautoload_insert_preserves_alloptions,
+			'nonautoload_update_return'              => $nonautoload_update_return,
+			'cache_exists_after_nonautoload_update'  => $cache_exists_nonautoload_update,
+			'after_nonautoload_update_return'        => $after_nonautoload_update_return,
+			'native_alloptions_selects_after_nonautoload_update' => $after_nonautoload_update,
+			'single_updated_return'                  => $single_updated_return,
+			'single_updated_rows'                    => $single_updated_rows,
+			'native_single_updated_selects'          => $native_single_updated_selects,
+			'update_return'                          => $update_return,
+			'cache_exists_after_update'              => $cache_exists_2,
+			'third_return'                           => $third_return,
+			'third_rows'                             => $third_rows,
+			'native_alloptions_selects_after_third'  => $after_third,
+			'single_missing_first_return'            => $single_missing_first_return,
+			'single_missing_second_return'           => $single_missing_second_return,
+			'native_single_selects_after_first_missing' => $after_first_missing,
+			'native_single_selects_after_second_missing' => $after_second_missing,
+		)
+	);
+	PHP;
+
+		return $this->run_isolated_php( $code );
+	}
+
+	private function run_auto_increment_file_cache_state_script(): array {
+		$plugin_dir  = $this->get_plugin_dir();
+		$driver_load = dirname( __DIR__, 2 ) . '/wp-includes/database/load.php';
+		$code        = $this->get_wordpress_stub_code();
+		$code       .= "\nif ( defined( 'DUCKDB_PHP_AUTOLOAD' ) ) { require_once DUCKDB_PHP_AUTOLOAD; }\n";
+		$code       .= "\nrequire_once " . var_export( $driver_load, true ) . ";\n";
+		$code       .= 'require_once ' . var_export( $plugin_dir . '/wp-includes/duckdb/class-wp-duckdb-db.php', true ) . ";\n";
+		$code       .= <<<'PHP'
+
+if ( ! is_dir( FQDBDIR ) ) {
+	mkdir( FQDBDIR, 0700, true );
+}
+
+function wp_duckdb_auto_increment_cache_file_for_test() {
+	$files = glob( FQDBDIR . '.ht.duckdb-auto-increment-*.json' );
+	if ( ! is_array( $files ) || 0 === count( $files ) ) {
+		return false;
+	}
+	sort( $files );
+	return $files[0];
+}
+
+function wp_duckdb_schema_cache_file_for_test() {
+	$files = glob( FQDBDIR . '.ht.duckdb-schema-*.json' );
+	if ( ! is_array( $files ) || 0 === count( $files ) ) {
+		return false;
+	}
+	sort( $files );
+	return $files[0];
+}
+
+$first = new WP_DuckDB_DB( 'wordpress_test' );
+$first_connected = $first->db_connect( false );
+$first->set_prefix( 'wp_' );
+$create_return = $first->query(
+	'CREATE TABLE wp_plugin_events (
+		event_id BIGINT NOT NULL AUTO_INCREMENT,
+		payload LONGTEXT NOT NULL,
+		created_at DATETIME NOT NULL,
+		PRIMARY KEY (event_id)
+	)'
+);
+$cache_file = wp_duckdb_auto_increment_cache_file_for_test();
+$cache_payload = is_string( $cache_file ) ? json_decode( file_get_contents( $cache_file ), true ) : array();
+$schema_cache_file = wp_duckdb_schema_cache_file_for_test();
+$schema_cache_payload = is_string( $schema_cache_file ) ? json_decode( file_get_contents( $schema_cache_file ), true ) : array();
+$first_insert_return = $first->query(
+	"INSERT INTO `wp_plugin_events` (`payload`, `created_at`) VALUES ('first', '2026-07-04 00:00:00')"
+);
+$first_insert_id = $first->insert_id;
+$first->close();
+
+$second = new WP_DuckDB_DB( 'wordpress_test' );
+$second_connected = $second->db_connect( false );
+$second->set_prefix( 'wp_' );
+$second_insert_return = $second->query(
+	"INSERT INTO `wp_plugin_events` (`payload`, `created_at`) VALUES ('second', '2026-07-04 00:00:01')"
+);
+$second_insert_id = $second->insert_id;
+$second_queries = isset( $GLOBALS['@duckdb_driver'] ) && method_exists( $GLOBALS['@duckdb_driver'], 'get_last_duckdb_queries' )
+	? $GLOBALS['@duckdb_driver']->get_last_duckdb_queries()
+	: array();
+$second->close();
+
+echo json_encode(
+	array(
+		'first_connected'              => $first_connected,
+		'first_last_error'             => $first->last_error,
+		'second_connected'             => $second_connected,
+		'second_last_error'            => $second->last_error,
+		'create_return'                => $create_return,
+		'first_insert_return'          => $first_insert_return,
+		'first_insert_id'              => $first_insert_id,
+		'cache_exists_after_create'    => is_string( $cache_file ) && is_file( $cache_file ),
+		'cached_event_id_column'       => isset( $cache_payload['columns']['wp_plugin_events'] ) ? $cache_payload['columns']['wp_plugin_events'] : null,
+		'schema_cache_exists_after_create' => is_string( $schema_cache_file ) && is_file( $schema_cache_file ),
+		'schema_cached_column_count'   => isset( $schema_cache_payload['schema']['columns']['wp_plugin_events'] ) && is_array( $schema_cache_payload['schema']['columns']['wp_plugin_events'] )
+			? count( $schema_cache_payload['schema']['columns']['wp_plugin_events'] )
+			: 0,
+		'second_insert_return'         => $second_insert_return,
+		'second_insert_id'             => $second_insert_id,
+		'second_insert_duckdb_queries' => $second_queries,
 	)
 );
 PHP;

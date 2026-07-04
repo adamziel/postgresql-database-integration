@@ -4,6 +4,44 @@ require_once __DIR__ . '/../duckdb/WP_DuckDB_TestCase.php';
 
 #[PHPUnit\Framework\Attributes\Group( 'duckdb' )]
 class WP_DuckDB_Driver_Tests extends WP_DuckDB_TestCase {
+	public function create_native_duckdb_result( array $columns, array $rows ) {
+		return new class( $columns, $rows ) {
+			private $columns;
+			private $rows;
+
+			public function __construct( array $columns, array $rows ) {
+				$this->columns = $columns;
+				$this->rows    = $rows;
+			}
+
+			public function columnNames(): ArrayIterator { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid
+				return new ArrayIterator( $this->columns );
+			}
+
+			public function rows( bool $assoc ): array {
+				if ( ! $assoc ) {
+					return $this->rows;
+				}
+
+				return array_map(
+					function ( array $row ): array {
+						return array_combine( $this->columns, $row );
+					},
+					$this->rows
+				);
+			}
+		};
+	}
+
+	private function tokenize_driver_query( WP_DuckDB_Driver $driver, string $sql ): array {
+		$tokenize = new ReflectionMethod( WP_DuckDB_Driver::class, 'tokenize_and_validate' );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$tokenize->setAccessible( true );
+		}
+
+		return $tokenize->invoke( $driver, $sql );
+	}
+
 	public function test_invalid_byte_string_literals_translate_without_token_value_type_error(): void {
 		$connection = new class() extends WP_DuckDB_Connection {
 			public function __construct() {}
@@ -313,6 +351,172 @@ class WP_DuckDB_Driver_Tests extends WP_DuckDB_TestCase {
 		) {
 			$this->assertSame( array(), $rewrite->invoke( $driver, $tokenize->invoke( $driver, $sql ) ), $sql );
 		}
+	}
+
+	public function test_wordpress_posts_hot_read_fast_paths_preserve_results_and_metadata(): void {
+		$connection = new class() extends WP_DuckDB_Connection {
+			public $queries = array();
+
+			public function __construct() {}
+
+			public function query( string $sql, array $params = array() ): WP_DuckDB_Result_Statement {
+				$this->queries[] = $sql;
+
+				if ( 'SELECT "ID", COUNT(*) OVER() AS "__wp_duckdb_found_rows" FROM "wp_posts" WHERE "post_type" = \'post\' AND "post_status" = \'publish\' ORDER BY "post_date" DESC, "ID" DESC LIMIT 10 OFFSET 0' === $sql ) {
+					return new WP_DuckDB_Result_Statement(
+						array( 'ID', '__wp_duckdb_found_rows' ),
+						array(
+							array( 3, 25 ),
+							array( 2, 25 ),
+						)
+					);
+				}
+
+				if ( 'SELECT * FROM "wp_posts" WHERE "post_type" = \'page\' AND "post_status" = \'publish\' ORDER BY "menu_order" ASC, "post_title" ASC' === $sql ) {
+					return new WP_DuckDB_Result_Statement(
+						array( 'ID', 'post_title' ),
+						array(
+							array( 10, 'About' ),
+							array( 11, 'Contact' ),
+						)
+					);
+				}
+
+				if ( 'SELECT * FROM "wp_posts" WHERE "ID" IN (3, 2)' === $sql ) {
+					return new WP_DuckDB_Result_Statement(
+						array( 'ID', 'post_title' ),
+						array(
+							array( 3, 'Third post' ),
+							array( 2, 'Second post' ),
+						)
+					);
+				}
+
+				throw new RuntimeException( 'Unexpected DuckDB query: ' . $sql );
+			}
+		};
+		$driver     = ( new ReflectionClass( WP_DuckDB_Driver::class ) )->newInstanceWithoutConstructor();
+
+		foreach (
+			array(
+				'mysql_version'    => WP_DuckDB_Driver::DEFAULT_MYSQL_VERSION,
+				'connection'       => $connection,
+				'database'         => 'wp',
+				'current_database' => 'wp',
+			) as $property => $value
+		) {
+			$reflection_property = new ReflectionProperty( WP_DuckDB_Driver::class, $property );
+			if ( PHP_VERSION_ID < 80100 ) {
+				$reflection_property->setAccessible( true );
+			}
+			$reflection_property->setValue( $driver, $value );
+		}
+
+		$grammar = new ReflectionProperty( WP_DuckDB_Driver::class, 'mysql_grammar' );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$grammar->setAccessible( true );
+		}
+		$grammar->setValue( null, new WP_Parser_Grammar( require WP_DuckDB_Driver::MYSQL_GRAMMAR_PATH ) );
+
+		$empty_result = $driver->query(
+			"SELECT   wp_posts.ID
+			 FROM wp_posts
+			 WHERE 1=1
+			 AND wp_posts.post_name IN ('front-page', 'home')
+			 AND ( 0 = 1 )
+			 AND wp_posts.post_type = 'wp_template'
+			 AND ((wp_posts.post_status = 'publish'))
+			 GROUP BY wp_posts.ID
+			 ORDER BY wp_posts.post_date DESC
+			 LIMIT 0, 1"
+		);
+		$this->assertSame( array(), $empty_result->fetchAll( PDO::FETCH_ASSOC ) );
+		$this->assertSame( array(), $connection->queries );
+		$this->assertSame( 'wp_posts', $empty_result->getColumnMeta( 0 )['table'] );
+		$this->assertSame( 'ID', $empty_result->getColumnMeta( 0 )['name'] );
+
+		$empty_result = $driver->query(
+			"SELECT wp_posts.ID
+			 FROM wp_posts
+			 WHERE 1=1
+			 AND ( 0 = 1 )
+			 AND wp_posts.post_type = 'wp_template'
+			 AND ((wp_posts.post_status = 'publish'))
+			 GROUP BY wp_posts.ID
+			 ORDER BY wp_posts.post_date DESC
+			 LIMIT 0, 1"
+		);
+		$this->assertSame( array(), $empty_result->fetchAll( PDO::FETCH_ASSOC ) );
+		$this->assertSame( array(), $connection->queries );
+		$this->assertSame( 'wp_posts', $empty_result->getColumnMeta( 0 )['table'] );
+		$this->assertSame( 'ID', $empty_result->getColumnMeta( 0 )['name'] );
+
+		$id_result = $driver->query(
+			"SELECT SQL_CALC_FOUND_ROWS  wp_posts.ID
+			 FROM wp_posts
+			 WHERE 1=1
+			 AND ((wp_posts.post_type = 'post'
+			 AND (wp_posts.post_status = 'publish')))
+			 ORDER BY wp_posts.post_date DESC
+			 LIMIT 0, 10"
+		);
+		$this->assertSame(
+			array(
+				array( 'ID' => 3 ),
+				array( 'ID' => 2 ),
+			),
+			$id_result->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame( '25', (string) $driver->query( 'SELECT FOUND_ROWS()' )->fetchColumn() );
+
+		$page_result = $driver->query(
+			"SELECT wp_posts.*
+			 FROM wp_posts
+			 WHERE 1=1
+			 AND wp_posts.post_type = 'page'
+			 AND ((wp_posts.post_status = 'publish'))
+			 ORDER BY wp_posts.menu_order ASC, wp_posts.post_title ASC"
+		);
+		$this->assertSame(
+			array(
+				array(
+					'ID'         => 10,
+					'post_title' => 'About',
+				),
+				array(
+					'ID'         => 11,
+					'post_title' => 'Contact',
+				),
+			),
+			$page_result->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame( 'wp_posts', $page_result->getColumnMeta( 1 )['table'] );
+		$this->assertSame( 'post_title', $page_result->getColumnMeta( 1 )['name'] );
+
+		$post_result = $driver->query( 'SELECT wp_posts.* FROM wp_posts WHERE ID IN (3, 2)' );
+		$this->assertSame(
+			array(
+				array(
+					'ID'         => 3,
+					'post_title' => 'Third post',
+				),
+				array(
+					'ID'         => 2,
+					'post_title' => 'Second post',
+				),
+			),
+			$post_result->fetchAll( PDO::FETCH_ASSOC )
+		);
+		$this->assertSame( 'wp_posts', $post_result->getColumnMeta( 1 )['table'] );
+		$this->assertSame( 'post_title', $post_result->getColumnMeta( 1 )['name'] );
+		$this->assertSame(
+			array(
+				'SELECT "ID", COUNT(*) OVER() AS "__wp_duckdb_found_rows" FROM "wp_posts" WHERE "post_type" = \'post\' AND "post_status" = \'publish\' ORDER BY "post_date" DESC, "ID" DESC LIMIT 10 OFFSET 0',
+				'SELECT * FROM "wp_posts" WHERE "post_type" = \'page\' AND "post_status" = \'publish\' ORDER BY "menu_order" ASC, "post_title" ASC',
+				'SELECT * FROM "wp_posts" WHERE "ID" IN (3, 2)',
+			),
+			$connection->queries
+		);
 	}
 
 	public function test_runtime_counters_emit_native_context_and_shape_when_enabled(): void {
@@ -732,15 +936,14 @@ class WP_DuckDB_Driver_Tests extends WP_DuckDB_TestCase {
 			}
 		}
 
-		$this->assertSame( 1, $insert->rowCount() );
-		$this->assertSame( 18, $driver->get_insert_id() );
-		$this->assertSame( 1, $connection->max_reads );
-		$this->assertSame( 1, $connection->currval_reads );
-		$this->assertIsInt( $currval_index );
-		$this->assertIsInt( $insert_index );
-		$this->assertGreaterThan( $insert_index, $currval_index );
-		$this->assertTrue( $connection->inTransaction() );
-	}
+			$this->assertSame( 1, $insert->rowCount() );
+			$this->assertSame( 18, $driver->get_insert_id() );
+			$this->assertSame( 2, $connection->max_reads );
+			$this->assertSame( 0, $connection->currval_reads );
+			$this->assertNull( $currval_index );
+			$this->assertIsInt( $insert_index );
+			$this->assertTrue( $connection->inTransaction() );
+		}
 
 	public function test_auto_increment_insert_id_falls_back_to_max_when_currval_is_stale(): void {
 		$connection = new class() extends WP_DuckDB_Connection {
@@ -845,6 +1048,135 @@ class WP_DuckDB_Driver_Tests extends WP_DuckDB_TestCase {
 			2,
 			substr_count( $query_log, 'SELECT MAX("umeta_id") AS max_value FROM "wp_usermeta"' )
 		);
+	}
+
+	public function test_known_auto_increment_columns_use_returning_without_metadata_lookup(): void {
+		$test    = $this;
+		$native  = new class( $test ) {
+			public $queries = array();
+
+			private $test;
+
+			public function __construct( WP_DuckDB_Driver_Tests $test ) {
+				$this->test = $test;
+			}
+
+			public function query( string $sql ) {
+				$this->queries[] = $sql;
+
+				if ( false !== strpos( $sql, "table_type = 'LOCAL TEMPORARY'" ) ) {
+					return $this->test->create_native_duckdb_result( array( 'table_name' ), array() );
+				}
+
+				if ( 'INSERT INTO "wp_posts" ("post_title") VALUES (\'hello\') RETURNING "ID"' === $sql ) {
+					return $this->test->create_native_duckdb_result( array( 'ID' ), array( array( 42 ) ) );
+				}
+
+				throw new RuntimeException( 'Unexpected query: ' . $sql );
+			}
+		};
+		$driver  = new WP_DuckDB_Driver(
+			array(
+				'connection'                   => new WP_DuckDB_Connection( array( 'duckdb' => $native ) ),
+				'known_auto_increment_columns' => array( 'wp_posts' => 'ID' ),
+			)
+		);
+		$tokens  = $this->tokenize_driver_query( $driver, "INSERT INTO `wp_posts` (`post_title`) VALUES ('hello')" );
+		$execute = new ReflectionMethod( WP_DuckDB_Driver::class, 'execute_auto_increment_write' );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$execute->setAccessible( true );
+		}
+
+		$result = $execute->invoke(
+			$driver,
+			'wp_posts',
+			'INSERT INTO "wp_posts" ("post_title") VALUES (\'hello\')',
+			'Failed to execute DuckDB INSERT',
+			$tokens,
+			2
+		);
+
+		$query_log = implode( "\n", $native->queries );
+		$this->assertSame( 1, $result->rowCount() );
+		$this->assertSame( 42, $driver->get_insert_id() );
+		$this->assertStringContainsString( 'RETURNING "ID"', $query_log );
+		$this->assertStringNotContainsString( '__wp_duckdb_column_metadata', $query_log );
+		$this->assertStringNotContainsString( 'pragma_table_info', $query_log );
+	}
+
+	public function test_created_auto_increment_tables_are_exported_as_known_columns(): void {
+		$this->requireDuckDBRuntime();
+
+		$path = tempnam( sys_get_temp_dir(), 'duckdb-known-auto-increment-' );
+		$this->assertIsString( $path );
+		@unlink( $path );
+
+		$driver = null;
+		$second = null;
+		try {
+			$driver = new WP_DuckDB_Driver( array( 'path' => $path ) );
+			$driver->query(
+				'CREATE TABLE wp_plugin_events (
+					event_id BIGINT NOT NULL AUTO_INCREMENT,
+					payload TEXT NOT NULL,
+					PRIMARY KEY (event_id)
+				)'
+			);
+
+			$known = $driver->get_known_auto_increment_columns();
+			$this->assertSame( 'event_id', $known['wp_plugin_events'] ?? null );
+			$driver->close();
+			$driver = null;
+
+			$second = new WP_DuckDB_Driver(
+				array(
+					'path'                         => $path,
+					'known_auto_increment_columns' => $known,
+				)
+			);
+			$result = $second->query( "INSERT INTO `wp_plugin_events` (`payload`) VALUES ('one')" );
+
+			$this->assertSame( 1, $result->rowCount() );
+			$this->assertSame( 1, $second->get_insert_id() );
+			$duckdb_queries = $second->get_last_duckdb_queries();
+			$this->assertSame( 'INSERT INTO "wp_plugin_events"("payload") VALUES (\'one\') RETURNING "event_id"', end( $duckdb_queries ) );
+			$this->assertStringNotContainsString( 'currval(', implode( "\n", $duckdb_queries ) );
+			$this->assertStringNotContainsString( 'MAX("event_id")', implode( "\n", $duckdb_queries ) );
+		} finally {
+			if ( $driver instanceof WP_DuckDB_Driver ) {
+				$driver->close();
+			}
+			if ( $second instanceof WP_DuckDB_Driver ) {
+				$second->close();
+			}
+			@unlink( $path );
+			@unlink( $path . '.wal' );
+		}
+	}
+
+	public function test_known_auto_increment_columns_do_not_use_returning_for_explicit_id_writes(): void {
+		$native = new class {
+			public $queries = array();
+
+			public function query( string $sql ) {
+				$this->queries[] = $sql;
+				throw new RuntimeException( 'Unexpected query: ' . $sql );
+			}
+		};
+		$driver = new WP_DuckDB_Driver(
+			array(
+				'connection'                   => new WP_DuckDB_Connection( array( 'duckdb' => $native ) ),
+				'known_auto_increment_columns' => array( 'wp_posts' => 'ID' ),
+			)
+		);
+		$tokens = $this->tokenize_driver_query( $driver, "INSERT INTO `wp_posts` (`ID`, `post_title`) VALUES (42, 'hello')" );
+		$method = new ReflectionMethod( WP_DuckDB_Driver::class, 'known_auto_increment_column_for_omitted_write' );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$method->setAccessible( true );
+		}
+
+		$this->assertNull( $method->invoke( $driver, 'wp_posts', $tokens, 2, false ) );
+		$this->assertSame( array(), $native->queries );
 	}
 
 	public function test_auto_increment_insert_id_recovers_when_row_count_is_zero(): void {
@@ -12036,6 +12368,159 @@ class WP_DuckDB_Driver_Tests extends WP_DuckDB_TestCase {
 		}
 	}
 
+	public function test_static_temporal_literal_insert_uses_fast_write_coercion(): void {
+		$this->requireDuckDBRuntime();
+
+		$queries = array();
+		$driver  = $this->query_logged_duckdb_driver( $queries );
+		$driver->query(
+			'CREATE TABLE wptests_temporal_fast_insert (
+				created_at DATETIME NOT NULL,
+				updated_at TIMESTAMP NULL,
+				created_on DATE NOT NULL
+			)'
+		);
+
+		$queries = array();
+		$insert  = $driver->query(
+			"INSERT INTO wptests_temporal_fast_insert (created_at, updated_at, created_on)
+			VALUES ('2026-07-04 01:02:03', '2026-07-04T04:05:06Z', '2026-07-04')"
+		);
+
+		$this->assertSame( 1, $insert->rowCount() );
+		$this->assertStringContainsString( 'INSERT INTO "wptests_temporal_fast_insert"', end( $queries ) );
+		$this->assertStringNotContainsString( 'regexp_full_match', implode( "\n", $queries ) );
+		$this->assertStringNotContainsString( 'strftime(TRY_CAST', implode( "\n", $queries ) );
+		$this->assertStringNotContainsString( "error('Incorrect", implode( "\n", $queries ) );
+		$this->assertSame(
+			array(
+				array(
+					'created_at' => '2026-07-04 01:02:03',
+					'updated_at' => '2026-07-04 04:05:06',
+					'created_on' => '2026-07-04',
+				),
+			),
+			$driver->query( 'SELECT created_at, updated_at, created_on FROM wptests_temporal_fast_insert' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
+	public function test_request_transaction_batches_dml_until_close(): void {
+		$this->requireDuckDBRuntime();
+
+		$path = tempnam( sys_get_temp_dir(), 'duckdb-request-transaction-' );
+		$this->assertIsString( $path );
+		@unlink( $path );
+
+		$queries = array();
+		$driver  = null;
+		$second  = null;
+		try {
+			$driver = $this->query_logged_duckdb_driver(
+				$queries,
+				$path,
+				array( 'request_transaction' => true )
+			);
+			$driver->query( 'CREATE TABLE wptests_request_transaction (id int NOT NULL, label varchar(50), PRIMARY KEY (id))' );
+
+			$queries = array();
+			$driver->query( "INSERT INTO wptests_request_transaction (id, label) VALUES (1, 'one')" );
+			$driver->query( "UPDATE wptests_request_transaction SET label = 'two' WHERE id = 1" );
+
+			$this->assertTrue( $driver->get_connection()->inTransaction() );
+			$this->assertSame( 1, substr_count( implode( "\n", $queries ), 'BEGIN TRANSACTION' ) );
+			$this->assertStringContainsString( 'INSERT INTO wptests_request_transaction', implode( "\n", $queries ) );
+			$this->assertStringContainsString( 'UPDATE "wptests_request_transaction"', implode( "\n", $queries ) );
+			$this->assertSame(
+				array( array( 'label' => 'two' ) ),
+				$driver->query( 'SELECT label FROM wptests_request_transaction WHERE id = 1' )->fetchAll( PDO::FETCH_ASSOC )
+			);
+
+			$driver->close();
+			$driver = null;
+			$this->assertStringContainsString( 'COMMIT', implode( "\n", $queries ) );
+
+			$second = new WP_DuckDB_Driver(
+				array(
+					'path'     => $path,
+					'database' => 'wp',
+				)
+			);
+			$this->assertSame(
+				array( array( 'label' => 'two' ) ),
+				$second->query( 'SELECT label FROM wptests_request_transaction WHERE id = 1' )->fetchAll( PDO::FETCH_ASSOC )
+			);
+		} finally {
+			if ( $driver instanceof WP_DuckDB_Driver ) {
+				$driver->close();
+			}
+			if ( $second instanceof WP_DuckDB_Driver ) {
+				$second->close();
+			}
+			@unlink( $path );
+			@unlink( $path . '.wal' );
+		}
+	}
+
+	public function test_request_transaction_covers_wordpress_options_write_fast_path(): void {
+		$this->requireDuckDBRuntime();
+
+		$queries = array();
+		$driver  = $this->query_logged_duckdb_driver(
+			$queries,
+			':memory:',
+			array( 'request_transaction' => true )
+		);
+		$this->create_wordpress_options_autoload_fixture( $driver );
+		$driver->commit_request_transaction();
+
+		$queries = array();
+		$result  = $driver->query(
+			"INSERT INTO wptests_options (option_name, option_value, autoload)
+			VALUES ('duckdb_request_tx', 'first', 'yes')
+			ON DUPLICATE KEY UPDATE option_name = VALUES(option_name), option_value = VALUES(option_value), autoload = VALUES(autoload)"
+		);
+
+		$this->assertSame( 1, $result->rowCount() );
+		$this->assertTrue( $driver->get_connection()->inTransaction() );
+		$this->assertSame( 'BEGIN TRANSACTION', $queries[0] ?? '' );
+		$this->assertStringContainsString( 'ON CONFLICT ("option_name") DO NOTHING', implode( "\n", $queries ) );
+
+		$driver->commit_request_transaction();
+		$this->assertFalse( $driver->get_connection()->inTransaction() );
+		$this->assertSame( 'COMMIT', end( $queries ) );
+	}
+
+	public function test_request_transaction_explicit_auto_increment_insert_does_not_probe_currval(): void {
+		$this->requireDuckDBRuntime();
+
+		$queries = array();
+		$driver  = $this->query_logged_duckdb_driver(
+			$queries,
+			':memory:',
+			array( 'request_transaction' => true )
+		);
+		$driver->query(
+			'CREATE TABLE wptests_request_transaction_terms (
+				term_id BIGINT NOT NULL AUTO_INCREMENT,
+				name VARCHAR(200) NOT NULL,
+				PRIMARY KEY (term_id)
+			)'
+		);
+
+		$queries = array();
+		$result  = $driver->query( "INSERT INTO wptests_request_transaction_terms (term_id, name) VALUES (1, 'Uncategorized')" );
+
+		$this->assertSame( 1, $result->rowCount() );
+		$this->assertTrue( $driver->get_connection()->inTransaction() );
+		$query_log = implode( "\n", $queries );
+		$this->assertStringContainsString( 'BEGIN TRANSACTION', $query_log );
+		$this->assertStringNotContainsString( 'currval(', substr( $query_log, strpos( $query_log, 'BEGIN TRANSACTION' ) ) );
+		$this->assertSame(
+			array( array( 'term_id' => 1, 'name' => 'Uncategorized' ) ),
+			$driver->query( 'SELECT term_id, name FROM wptests_request_transaction_terms' )->fetchAll( PDO::FETCH_ASSOC )
+		);
+	}
+
 	public function test_wordpress_posts_omitted_auto_increment_insert_respects_temporary_shadow_table(): void {
 		$this->requireDuckDBRuntime();
 
@@ -12496,8 +12981,9 @@ class WP_DuckDB_Driver_Tests extends WP_DuckDB_TestCase {
 		$this->assertSame( 1, $driver->get_insert_id() );
 		$insert_queries = $driver->get_last_duckdb_queries();
 		$insert_log     = implode( "\n", $insert_queries );
-		$this->assertStringContainsString( 'SELECT 1 FROM "wptests_options"', $insert_log );
+		$this->assertStringNotContainsString( 'SELECT 1 FROM "wptests_options"', $insert_log );
 		$this->assertStringContainsString( 'INSERT INTO "wptests_options"', $insert_log );
+		$this->assertStringContainsString( 'ON CONFLICT ("option_name") DO NOTHING', $insert_log );
 		$this->assertStringContainsString( ' RETURNING "option_id"', end( $insert_queries ) );
 		foreach ( $insert_queries as $duckdb_sql ) {
 			$this->assertStringNotContainsString( 'SELECT MAX("option_id")', $duckdb_sql );
@@ -12515,9 +13001,9 @@ class WP_DuckDB_Driver_Tests extends WP_DuckDB_TestCase {
 		$this->assertSame( 0, $driver->get_insert_id() );
 		$update_queries = $driver->get_last_duckdb_queries();
 		$update_log     = implode( "\n", $update_queries );
-		$this->assertStringContainsString( 'SELECT 1 FROM "wptests_options"', $update_log );
+		$this->assertStringNotContainsString( 'SELECT 1 FROM "wptests_options"', $update_log );
+		$this->assertStringContainsString( 'ON CONFLICT ("option_name") DO NOTHING', $update_log );
 		$this->assertStringContainsString( 'UPDATE "wptests_options" SET', $update_log );
-		$this->assertStringNotContainsString( ' RETURNING "option_id"', $update_log );
 		foreach ( $update_queries as $duckdb_sql ) {
 			$this->assertStringNotContainsString( 'SELECT MAX("option_id")', $duckdb_sql );
 			$this->assertStringNotContainsString( 'SELECT currval(', $duckdb_sql );
@@ -12536,7 +13022,7 @@ class WP_DuckDB_Driver_Tests extends WP_DuckDB_TestCase {
 		);
 	}
 
-	public function test_wordpress_options_on_duplicate_key_update_fast_path_uses_two_native_queries(): void {
+	public function test_wordpress_options_on_duplicate_key_update_fast_path_uses_one_native_query_for_insert_branch(): void {
 		$this->requireDuckDBRuntime();
 
 		$queries = array();
@@ -12554,11 +13040,10 @@ class WP_DuckDB_Driver_Tests extends WP_DuckDB_TestCase {
 
 		$this->assertSame( 1, $inserted->rowCount() );
 		$this->assertSame( 5, $driver->get_insert_id() );
-		$this->assertCount( 2, $queries, implode( "\n", $queries ) );
-		$this->assertStringContainsString( 'SELECT 1 FROM "wptests_options"', $queries[0] );
-		$this->assertStringContainsString( 'lower("option_name")', $queries[0] );
-		$this->assertStringContainsString( 'INSERT INTO "wptests_options"', $queries[1] );
-		$this->assertStringContainsString( ' RETURNING "option_id"', $queries[1] );
+		$this->assertCount( 1, $queries, implode( "\n", $queries ) );
+		$this->assertStringContainsString( 'INSERT INTO "wptests_options"', $queries[0] );
+		$this->assertStringContainsString( 'ON CONFLICT ("option_name") DO NOTHING', $queries[0] );
+		$this->assertStringContainsString( ' RETURNING "option_id"', $queries[0] );
 		$this->assertStringNotContainsString( '__wp_duckdb_table_metadata', implode( "\n", $queries ) );
 		$this->assertStringNotContainsString( '__wp_duckdb_index_metadata', implode( "\n", $queries ) );
 
@@ -12573,9 +13058,10 @@ class WP_DuckDB_Driver_Tests extends WP_DuckDB_TestCase {
 		$this->assertSame( 1, $updated->rowCount() );
 		$this->assertSame( 0, $driver->get_insert_id() );
 		$this->assertCount( 2, $queries, implode( "\n", $queries ) );
-		$this->assertStringContainsString( 'SELECT 1 FROM "wptests_options"', $queries[0] );
+		$this->assertStringContainsString( 'INSERT INTO "wptests_options"', $queries[0] );
+		$this->assertStringContainsString( 'ON CONFLICT ("option_name") DO NOTHING', $queries[0] );
+		$this->assertStringContainsString( ' RETURNING "option_id"', $queries[0] );
 		$this->assertStringContainsString( 'UPDATE "wptests_options" SET', $queries[1] );
-		$this->assertStringNotContainsString( ' RETURNING "option_id"', implode( "\n", $queries ) );
 		$this->assertStringNotContainsString( '__wp_duckdb_table_metadata', implode( "\n", $queries ) );
 		$this->assertStringNotContainsString( '__wp_duckdb_index_metadata', implode( "\n", $queries ) );
 		$this->assertSame(
@@ -12625,8 +13111,9 @@ class WP_DuckDB_Driver_Tests extends WP_DuckDB_TestCase {
 		$this->assertSame( 1, $driver->get_insert_id() );
 		$insert_queries = $driver->get_last_duckdb_queries();
 		$insert_log     = implode( "\n", $insert_queries );
-		$this->assertStringContainsString( 'SELECT 1 FROM "wptests_options"', $insert_log );
+		$this->assertStringNotContainsString( 'SELECT 1 FROM "wptests_options"', $insert_log );
 		$this->assertStringContainsString( 'INSERT INTO "wptests_options"', $insert_log );
+		$this->assertStringContainsString( 'ON CONFLICT ("option_name") DO NOTHING', $insert_log );
 		$this->assertStringContainsString( ' RETURNING "option_id"', end( $insert_queries ) );
 		foreach ( $insert_queries as $duckdb_sql ) {
 			$this->assertStringNotContainsString( 'SELECT MAX("option_id")', $duckdb_sql );
@@ -16924,10 +17411,10 @@ class WP_DuckDB_Driver_Tests extends WP_DuckDB_TestCase {
 		);
 
 		$count_sql = implode( "\n", $this->duckdb_table_row_count_queries( $queries ) );
-		$this->assertStringContainsString( '"infotableswildplain"', $count_sql );
-		$this->assertStringContainsString( '"infotableswildnoise"', $count_sql );
-		$this->assertStringContainsString( '"infotableswildother"', $count_sql );
-		$this->assertGreaterThanOrEqual( 1, $this->count_duckdb_currval_queries( $queries ) );
+			$this->assertStringContainsString( '"infotableswildplain"', $count_sql );
+			$this->assertStringContainsString( '"infotableswildnoise"', $count_sql );
+			$this->assertStringContainsString( '"infotableswildother"', $count_sql );
+			$this->assertSame( 0, $this->count_duckdb_currval_queries( $queries ) );
 
 		$queries = array();
 		$rows    = $driver->query(
@@ -17112,11 +17599,11 @@ class WP_DuckDB_Driver_Tests extends WP_DuckDB_TestCase {
 			array_column( $rows, 'Name' )
 		);
 		$count_sql = implode( "\n", $this->duckdb_table_row_count_queries( $queries ) );
-		$this->assertStringContainsString( '"statusexactplain"', $count_sql );
-		$this->assertStringContainsString( '"statusexactnoise"', $count_sql );
-		$this->assertStringContainsString( '"statusexactother"', $count_sql );
-		$this->assertGreaterThanOrEqual( 1, $this->count_duckdb_currval_queries( $queries ) );
-	}
+			$this->assertStringContainsString( '"statusexactplain"', $count_sql );
+			$this->assertStringContainsString( '"statusexactnoise"', $count_sql );
+			$this->assertStringContainsString( '"statusexactother"', $count_sql );
+			$this->assertSame( 0, $this->count_duckdb_currval_queries( $queries ) );
+		}
 
 	public function test_check_table_returns_mysql_shaped_status_rows(): void {
 		$this->requireDuckDBRuntime();
@@ -18132,7 +18619,7 @@ SQL
 		$result  = $driver->query( "SELECT option_value FROM wptests_options WHERE option_name = 'SITEURL' LIMIT 1" );
 		$this->assertSame( array( array( 'option_value' => 'https://example.test' ) ), $result->fetchAll( PDO::FETCH_ASSOC ) );
 		$this->assert_wordpress_options_single_option_select_used_one_native_query( $queries );
-		$this->assertStringContainsString( 'lower("option_name")', $queries[0] );
+		$this->assertStringContainsString( '"option_name" COLLATE NOCASE', $queries[0] );
 	}
 
 	public function test_wordpress_options_single_option_fast_path_decodes_mysql_escaped_literal(): void {
@@ -18522,6 +19009,25 @@ SQL
 				array( array( 'option_value' => 'case updated' ) ),
 				$driver->query( "SELECT option_value FROM wptests_options WHERE option_name = 'siteurl'" )->fetchAll( PDO::FETCH_ASSOC )
 			);
+
+			$queries = array();
+			$result  = $driver->query( "UPDATE wptests_options SET option_value = 'value and autoload updated', autoload = 'off' WHERE option_name = 'siteurl'" );
+			$this->assertSame( 1, $result->rowCount() );
+			$this->assert_wordpress_options_update_used_one_native_query( $queries );
+			$this->assertSame(
+				array(
+					array(
+						'option_value' => 'value and autoload updated',
+						'autoload'     => 'off',
+					),
+				),
+				$driver->query( "SELECT option_value, autoload FROM wptests_options WHERE option_name = 'siteurl'" )->fetchAll( PDO::FETCH_ASSOC )
+			);
+
+			$queries = array();
+			$result  = $driver->query( "UPDATE wptests_options SET option_value = 'value and autoload updated', autoload = 'off' WHERE option_name = 'siteurl'" );
+			$this->assertSame( 0, $result->rowCount() );
+			$this->assert_wordpress_options_update_used_one_native_query( $queries );
 		} finally {
 			unset( $driver );
 			@unlink( $path );
@@ -18577,13 +19083,6 @@ SQL
 		);
 		$this->assertSame( 1, $result->rowCount() );
 		$this->assertStringContainsString( "autoload = 'yes'", implode( "\n", $queries ) );
-
-		$queries = array();
-		$result  = $driver->query(
-			"UPDATE wptests_options SET option_value = 'changed again', autoload = 'no' WHERE option_name = 'siteurl'"
-		);
-		$this->assertSame( 1, $result->rowCount() );
-		$this->assertStringContainsString( 'autoload', implode( "\n", $queries ) );
 
 		$queries = array();
 		$result  = $driver->query(
@@ -19169,6 +19668,41 @@ SQL
 			),
 			$driver->query( 'SELECT FOUND_ROWS() AS found_rows' )->fetchAll( PDO::FETCH_ASSOC )
 		);
+
+		$queries = array();
+		$result  = $driver->query(
+			"SELECT DISTINCT t.term_id, tr.object_id
+			FROM wptests_terms AS t
+				INNER JOIN wptests_term_taxonomy AS tt ON t.term_id = tt.term_id
+				INNER JOIN wptests_term_relationships AS tr ON tr.term_taxonomy_id = tt.term_taxonomy_id
+			WHERE tt.taxonomy IN ('wptests_tax')
+				AND tr.object_id IN (201, 202)
+			ORDER BY t.name ASC"
+		);
+		$this->assertSame(
+			array(
+				array(
+					'term_id'   => 1,
+					'object_id' => 201,
+				),
+				array(
+					'term_id'   => 2,
+					'object_id' => 202,
+				),
+			),
+			array_map(
+				function ( array $row ): array {
+					return array(
+						'term_id'   => (int) $row['term_id'],
+						'object_id' => (int) $row['object_id'],
+					);
+				},
+				$result->fetchAll( PDO::FETCH_ASSOC )
+			)
+		);
+		$this->assertSame( 'term_id', $result->getColumnMeta( 0 )['name'] );
+		$this->assertSame( 'object_id', $result->getColumnMeta( 1 )['name'] );
+		$this->assert_wordpress_term_relationships_distinct_terms_select_used_one_native_query( $queries, true );
 
 		$driver->query( "UPDATE wptests_term_taxonomy SET taxonomy = 'WPTESTS_TAX' WHERE term_taxonomy_id IN (101, 102)" );
 		$queries = array();
@@ -25037,7 +25571,7 @@ SQL
 		) . "'";
 	}
 
-	private function query_logged_duckdb_driver( array &$queries, string $path = ':memory:' ): WP_DuckDB_Driver {
+	private function query_logged_duckdb_driver( array &$queries, string $path = ':memory:', array $options = array() ): WP_DuckDB_Driver {
 		$connection = new WP_DuckDB_Connection( array( 'path' => $path ) );
 		$connection->set_query_logger(
 			function ( string $sql, array $params ) use ( &$queries ): void {
@@ -25047,9 +25581,12 @@ SQL
 		);
 
 		return new WP_DuckDB_Driver(
-			array(
-				'connection' => $connection,
-				'database'   => 'wp',
+			array_merge(
+				array(
+					'connection' => $connection,
+					'database'   => 'wp',
+				),
+				$options
 			)
 		);
 	}
@@ -25557,7 +26094,7 @@ SQL
 		$this->assertSame( 0, $this->count_duckdb_table_resolution_queries( $queries ) );
 		$this->assertSame( 0, $this->count_duckdb_column_metadata_queries( $queries, 'wptests_options' ) );
 		$this->assertStringContainsString( 'wptests_options', $queries[0] );
-		$this->assertStringContainsString( 'lower("option_name")', $queries[0] );
+		$this->assertStringContainsString( '"option_name" COLLATE NOCASE', $queries[0] );
 	}
 
 	private function assert_wordpress_options_update_used_one_native_query( array $queries ): void {
@@ -25566,7 +26103,7 @@ SQL
 		$this->assertSame( 0, $this->count_duckdb_column_metadata_queries( $queries, 'wptests_options' ) );
 		$this->assertStringNotContainsString( '__wp_duckdb_table_metadata', $queries[0] );
 		$this->assertStringContainsString( 'UPDATE "wptests_options" SET "option_value" = ', $queries[0] );
-		$this->assertStringContainsString( 'lower("option_name")', $queries[0] );
+		$this->assertStringContainsString( '"option_name" COLLATE NOCASE', $queries[0] );
 		$this->assertStringContainsString( 'IS DISTINCT FROM', $queries[0] );
 	}
 
@@ -25648,13 +26185,19 @@ SQL
 		$this->assertStringContainsString( 'ORDER BY "wptests_posts"."post_date" DESC, "wptests_posts"."ID" ASC', $queries[0] );
 	}
 
-	private function assert_wordpress_term_relationships_distinct_terms_select_used_one_native_query( array $queries ): void {
+	private function assert_wordpress_term_relationships_distinct_terms_select_used_one_native_query( array $queries, bool $selects_object_id = false ): void {
 		$this->assertCount( 1, $queries, implode( "\n", $queries ) );
 		$this->assertSame( 0, $this->count_duckdb_table_resolution_queries( $queries ) );
 		$this->assertSame( 0, $this->count_duckdb_column_metadata_queries( $queries, 'wptests_terms' ) );
-		$this->assertStringContainsString( 'SELECT DISTINCT "t"."term_id" FROM "wptests_terms" AS "t"', $queries[0] );
+		$this->assertStringContainsString( 'SELECT DISTINCT "t"."term_id"', $queries[0] );
+		if ( $selects_object_id ) {
+			$this->assertStringContainsString( ', "tr"."object_id"', $queries[0] );
+		} else {
+			$this->assertStringNotContainsString( ', "tr"."object_id"', $queries[0] );
+		}
+		$this->assertStringContainsString( 'FROM "wptests_term_relationships" AS "tr"', $queries[0] );
 		$this->assertStringContainsString( 'INNER JOIN "wptests_term_taxonomy" AS "tt"', $queries[0] );
-		$this->assertStringContainsString( 'INNER JOIN "wptests_term_relationships" AS "tr"', $queries[0] );
+		$this->assertStringContainsString( 'INNER JOIN "wptests_terms" AS "t"', $queries[0] );
 		$this->assertStringContainsString( '"tt"."taxonomy" IN (\'wptests_tax\')', $queries[0] );
 		$this->assertStringContainsString( '"tr"."object_id" IN (201, 202)', $queries[0] );
 		$this->assertStringContainsString( 'ORDER BY "t"."name" ASC', $queries[0] );

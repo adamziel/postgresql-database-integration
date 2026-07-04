@@ -1,12 +1,13 @@
 {
-    "run_id": "wp-duckdb-gap-profile-current",
-    "generated_at": "2026-07-04T16:54:17+00:00",
+    "run_id": "wp-duckdb-current-parity-check",
+    "generated_at": "2026-07-04T04:32:49+00:00",
     "meta": {
-        "run_id": "wp-duckdb-gap-profile-current",
-        "created_at": "2026-07-04T16:54:17+00:00",
-        "output_dir": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-gap-profile-current",
-        "work_root": "/home/claude/.wp-duckdb-bench/gap-profile-current-work",
+        "run_id": "wp-duckdb-current-parity-check",
+        "created_at": "2026-07-04T04:29:42+00:00",
+        "output_dir": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-current-parity-check",
+        "work_root": "/home/claude/.wp-duckdb-bench/current-parity-check-work",
         "backends": [
+            "sqlite",
             "duckdb",
             "duckdb_sidecar"
         ],
@@ -16,7 +17,7 @@
         "read_requests_per_scenario": 5,
         "write_requests_per_scenario": 50,
         "server_workers": 1,
-        "wordpress_requested": "7.0",
+        "wordpress_requested": "latest",
         "wordpress_version": "7.0",
         "php_version": "8.5.7",
         "commit": "d10f814734bd",
@@ -24,6 +25,16 @@
         "duckdb_lock_timeout_seconds": 30
     },
     "backend_details": [
+        {
+            "backend": "sqlite",
+            "display": "SQLite",
+            "family": "Native WordPress database",
+            "duckdb_involved": false,
+            "storage_target": "SQLite file via SQLite Database Integration",
+            "role": "Baseline",
+            "notes": "WordPress uses the SQLite Database Integration plugin. DuckDB is not loaded.",
+            "sort": 20
+        },
         {
             "backend": "duckdb",
             "display": "DuckDB",
@@ -48,6 +59,84 @@
     "benchmarks": [
         {
             "type": "benchmark",
+            "backend": "sqlite",
+            "label": "front_page",
+            "method": "GET",
+            "expect_json": false,
+            "url_path": "/",
+            "requests": 5,
+            "concurrency": 1,
+            "ok": 5,
+            "errors": 0,
+            "total_ms": 390.726,
+            "requests_sec": 12.797,
+            "latency_ms": {
+                "min": 62.183,
+                "p50": 64.091,
+                "p95": 128.043,
+                "p99": 128.043,
+                "max": 128.043
+            },
+            "error_samples": [],
+            "backend_display": "SQLite",
+            "backend_family": "Native WordPress database",
+            "duckdb_involved": false,
+            "storage_target": "SQLite file via SQLite Database Integration"
+        },
+        {
+            "type": "benchmark",
+            "backend": "sqlite",
+            "label": "rest_read",
+            "method": "GET",
+            "expect_json": true,
+            "url_path": "/",
+            "requests": 5,
+            "concurrency": 1,
+            "ok": 5,
+            "errors": 0,
+            "total_ms": 149.589,
+            "requests_sec": 33.425,
+            "latency_ms": {
+                "min": 23.138,
+                "p50": 23.426,
+                "p95": 51.249,
+                "p99": 51.249,
+                "max": 51.249
+            },
+            "error_samples": [],
+            "backend_display": "SQLite",
+            "backend_family": "Native WordPress database",
+            "duckdb_involved": false,
+            "storage_target": "SQLite file via SQLite Database Integration"
+        },
+        {
+            "type": "benchmark",
+            "backend": "sqlite",
+            "label": "rest_write",
+            "method": "POST",
+            "expect_json": true,
+            "url_path": "/",
+            "requests": 50,
+            "concurrency": 1,
+            "ok": 50,
+            "errors": 0,
+            "total_ms": 1826.312,
+            "requests_sec": 27.378,
+            "latency_ms": {
+                "min": 30.972,
+                "p50": 33.499,
+                "p95": 55.367,
+                "p99": 70.155,
+                "max": 70.155
+            },
+            "error_samples": [],
+            "backend_display": "SQLite",
+            "backend_family": "Native WordPress database",
+            "duckdb_involved": false,
+            "storage_target": "SQLite file via SQLite Database Integration"
+        },
+        {
+            "type": "benchmark",
             "backend": "duckdb",
             "label": "front_page",
             "method": "GET",
@@ -57,14 +146,14 @@
             "concurrency": 1,
             "ok": 5,
             "errors": 0,
-            "total_ms": 596.917,
-            "requests_sec": 8.376,
+            "total_ms": 535.329,
+            "requests_sec": 9.34,
             "latency_ms": {
-                "min": 94.264,
-                "p50": 97.566,
-                "p95": 203.392,
-                "p99": 203.392,
-                "max": 203.392
+                "min": 83.929,
+                "p50": 85.702,
+                "p95": 188.01,
+                "p99": 188.01,
+                "max": 188.01
             },
             "error_samples": [],
             "backend_display": "DuckDB",
@@ -83,14 +172,14 @@
             "concurrency": 1,
             "ok": 5,
             "errors": 0,
-            "total_ms": 291.167,
-            "requests_sec": 17.172,
+            "total_ms": 257.635,
+            "requests_sec": 19.407,
             "latency_ms": {
-                "min": 53.984,
-                "p50": 55.555,
-                "p95": 66.668,
-                "p99": 66.668,
-                "max": 66.668
+                "min": 48.38,
+                "p50": 51.543,
+                "p95": 54.289,
+                "p99": 54.289,
+                "max": 54.289
             },
             "error_samples": [],
             "backend_display": "DuckDB",
@@ -109,14 +198,14 @@
             "concurrency": 1,
             "ok": 50,
             "errors": 0,
-            "total_ms": 4521.264,
-            "requests_sec": 11.059,
+            "total_ms": 5437.595,
+            "requests_sec": 9.195,
             "latency_ms": {
-                "min": 69.593,
-                "p50": 91.192,
-                "p95": 107.022,
-                "p99": 109.05,
-                "max": 109.05
+                "min": 79.354,
+                "p50": 107.084,
+                "p95": 157.303,
+                "p99": 176.387,
+                "max": 176.387
             },
             "error_samples": [],
             "backend_display": "DuckDB",
@@ -135,14 +224,14 @@
             "concurrency": 1,
             "ok": 5,
             "errors": 0,
-            "total_ms": 391.641,
-            "requests_sec": 12.767,
+            "total_ms": 389.426,
+            "requests_sec": 12.839,
             "latency_ms": {
-                "min": 47.974,
-                "p50": 49.516,
-                "p95": 150.5,
-                "p99": 150.5,
-                "max": 150.5
+                "min": 50.797,
+                "p50": 51.986,
+                "p95": 143.973,
+                "p99": 143.973,
+                "max": 143.973
             },
             "error_samples": [],
             "backend_display": "DuckDB sidecar",
@@ -161,14 +250,14 @@
             "concurrency": 1,
             "ok": 5,
             "errors": 0,
-            "total_ms": 144.145,
-            "requests_sec": 34.687,
+            "total_ms": 122.574,
+            "requests_sec": 40.792,
             "latency_ms": {
-                "min": 17.48,
-                "p50": 32.163,
-                "p95": 38.478,
-                "p99": 38.478,
-                "max": 38.478
+                "min": 19.209,
+                "p50": 20.625,
+                "p95": 40.072,
+                "p99": 40.072,
+                "max": 40.072
             },
             "error_samples": [],
             "backend_display": "DuckDB sidecar",
@@ -187,14 +276,14 @@
             "concurrency": 1,
             "ok": 50,
             "errors": 0,
-            "total_ms": 1516.049,
-            "requests_sec": 32.98,
+            "total_ms": 1826.295,
+            "requests_sec": 27.378,
             "latency_ms": {
-                "min": 27.546,
-                "p50": 29.328,
-                "p95": 35.878,
-                "p99": 37.185,
-                "max": 37.185
+                "min": 31.795,
+                "p50": 35.722,
+                "p95": 41.525,
+                "p99": 50.042,
+                "max": 50.042
             },
             "error_samples": [],
             "backend_display": "DuckDB sidecar",
@@ -204,6 +293,13 @@
         }
     ],
     "verifications": [
+        {
+            "type": "verification",
+            "backend": "sqlite",
+            "expected_min_events": 50,
+            "stored_events": 50,
+            "status": "pass"
+        },
         {
             "type": "verification",
             "backend": "duckdb",
@@ -220,6 +316,6 @@
         }
     ],
     "failures": [],
-    "total_requests": 120,
+    "total_requests": 180,
     "total_errors": 0
 }
