@@ -1,0 +1,21 @@
+{
+    "run_id": "wp-duckdb-current-native-trace",
+    "created_at": "2026-07-04T04:30:14+00:00",
+    "output_dir": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-current-native-trace",
+    "work_root": "/home/claude/.wp-duckdb-bench/current-native-trace-work",
+    "backends": [
+        "duckdb"
+    ],
+    "concurrency": [
+        1
+    ],
+    "read_requests_per_scenario": 2,
+    "write_requests_per_scenario": 8,
+    "server_workers": 1,
+    "wordpress_requested": "latest",
+    "wordpress_version": "7.0",
+    "php_version": "8.5.7",
+    "commit": "d10f814734bd",
+    "host": "Linux sandbox-49185 7.0.9-204.fc44.x86_64 #1 SMP PREEMPT_DYNAMIC Tue May 19 22:42:18 UTC 2026 x86_64 GNU/Linux",
+    "duckdb_lock_timeout_seconds": 30
+}

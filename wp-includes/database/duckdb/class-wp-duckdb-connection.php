@@ -61,9 +61,14 @@ class WP_DuckDB_Connection {
 
 		try {
 			$client_class = WP_DuckDB_Runtime::CLIENT_CLASS;
+			$trace_start  = $this->native_trace_start_time();
 			$this->trace_native_connection( 'open_start', $path );
 			$this->duckdb = $client_class::create( $path );
-			$this->trace_native_connection( 'open_end', $path );
+			$this->trace_native_connection(
+				'open_end',
+				$path,
+				null === $trace_start ? null : microtime( true ) - $trace_start
+			);
 		} catch ( Throwable $e ) {
 			throw new WP_DuckDB_Driver_Exception( 'Failed to open DuckDB database: ' . $e->getMessage(), 0, $e );
 		}
@@ -91,7 +96,12 @@ class WP_DuckDB_Connection {
 
 		try {
 			$this->trace_native_query( 'query', $sql );
-			return $this->create_statement_from_result( $this->duckdb->query( $sql ), $sql );
+			$trace_start = $this->native_trace_start_time();
+			$result      = $this->duckdb->query( $sql );
+			$this->trace_native_query_timing( 'query_native', $sql, $trace_start );
+			$statement = $this->create_statement_from_result( $result, $sql );
+			$this->trace_native_query_timing( 'query_total', $sql, $trace_start );
+			return $statement;
 		} catch ( Throwable $e ) {
 			throw new WP_DuckDB_Driver_Exception( 'DuckDB query failed: ' . $e->getMessage(), 0, $e );
 		}
@@ -114,7 +124,10 @@ class WP_DuckDB_Connection {
 
 		try {
 			$this->trace_native_query( 'prepare', $sql );
-			return new WP_DuckDB_Prepared_Statement( $this, $this->duckdb->preparedStatement( $sql ), $sql );
+			$trace_start = $this->native_trace_start_time();
+			$statement   = $this->duckdb->preparedStatement( $sql );
+			$this->trace_native_query_timing( 'prepare_native', $sql, $trace_start );
+			return new WP_DuckDB_Prepared_Statement( $this, $statement, $sql );
 		} catch ( Throwable $e ) {
 			throw new WP_DuckDB_Driver_Exception( 'Failed to prepare DuckDB query: ' . $e->getMessage(), 0, $e );
 		}
@@ -132,21 +145,65 @@ class WP_DuckDB_Connection {
 			return;
 		}
 
-		$sql = preg_replace( '/\s+/', ' ', str_replace( array( "\r", "\n" ), ' ', $sql ) );
-		$sql = trim( (string) $sql );
-		if ( strlen( $sql ) > 2000 ) {
-			$sql = substr( $sql, 0, 1997 ) . '...';
-		}
-
 		error_log(
 			sprintf(
 				'WP_DUCKDB_NATIVE_QUERY pid=%d phase=%s params=%d sql=%s',
 				getmypid(),
 				$phase,
 				count( $params ),
-				'' === $sql ? '<empty>' : $sql
+				$this->format_trace_sql( $sql )
 			)
 		);
+	}
+
+	/**
+	 * Emit a bounded native DuckDB query timing line when requested.
+	 *
+	 * @param string     $phase         Query execution phase.
+	 * @param string     $sql           Native DuckDB SQL.
+	 * @param float|null $started_at    Start time from microtime(true), or null when tracing is off.
+	 * @param array      $params        Optional parameter values.
+	 */
+	public function trace_native_query_timing( string $phase, string $sql, ?float $started_at, array $params = array() ): void {
+		if ( null === $started_at || ! self::trace_native_queries_enabled() ) {
+			return;
+		}
+
+		error_log(
+			sprintf(
+				'WP_DUCKDB_NATIVE_QUERY_TIMING pid=%d phase=%s params=%d elapsed_ms=%.3f sql=%s',
+				getmypid(),
+				$phase,
+				count( $params ),
+				1000 * ( microtime( true ) - $started_at ),
+				$this->format_trace_sql( $sql )
+			)
+		);
+	}
+
+	/**
+	 * Return a native trace start time when native tracing is enabled.
+	 *
+	 * @return float|null Start time from microtime(true), or null when tracing is off.
+	 */
+	public function native_trace_start_time(): ?float {
+		return self::trace_native_queries_enabled() ? microtime( true ) : null;
+	}
+
+	/**
+	 * Format SQL for one bounded trace line.
+	 *
+	 * @param string $sql SQL.
+	 * @return string Formatted SQL.
+	 */
+	private function format_trace_sql( string $sql ): string {
+		$sql = preg_replace( '/\s+/', ' ', str_replace( array( "\r", "\n" ), ' ', $sql ) );
+		$sql = trim( (string) $sql );
+		if ( strlen( $sql ) > 2000 ) {
+			$sql = substr( $sql, 0, 1997 ) . '...';
+		}
+
+		return '' === $sql ? '<empty>' : $sql;
 	}
 
 	/**
@@ -155,16 +212,17 @@ class WP_DuckDB_Connection {
 	 * @param string      $phase Connection phase.
 	 * @param string|null $path  DuckDB database path.
 	 */
-	private function trace_native_connection( string $phase, ?string $path ): void {
+	private function trace_native_connection( string $phase, ?string $path, ?float $elapsed_seconds = null ): void {
 		if ( ! self::trace_native_queries_enabled() ) {
 			return;
 		}
 
 		error_log(
 			sprintf(
-				'WP_DUCKDB_NATIVE_CONNECT pid=%d phase=%s path=%s',
+				'WP_DUCKDB_NATIVE_CONNECT pid=%d phase=%s elapsed_ms=%s path=%s',
 				getmypid(),
 				$phase,
+				null === $elapsed_seconds ? 'n/a' : sprintf( '%.3f', 1000 * $elapsed_seconds ),
 				null === $path ? ':memory:' : $path
 			)
 		);

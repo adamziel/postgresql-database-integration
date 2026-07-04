@@ -1,0 +1,129 @@
+{
+    "run_id": "wp-duckdb-current-native-trace",
+    "generated_at": "2026-07-04T04:30:14+00:00",
+    "meta": {
+        "run_id": "wp-duckdb-current-native-trace",
+        "created_at": "2026-07-04T04:30:14+00:00",
+        "output_dir": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-current-native-trace",
+        "work_root": "/home/claude/.wp-duckdb-bench/current-native-trace-work",
+        "backends": [
+            "duckdb"
+        ],
+        "concurrency": [
+            1
+        ],
+        "read_requests_per_scenario": 2,
+        "write_requests_per_scenario": 8,
+        "server_workers": 1,
+        "wordpress_requested": "latest",
+        "wordpress_version": "7.0",
+        "php_version": "8.5.7",
+        "commit": "d10f814734bd",
+        "host": "Linux sandbox-49185 7.0.9-204.fc44.x86_64 #1 SMP PREEMPT_DYNAMIC Tue May 19 22:42:18 UTC 2026 x86_64 GNU/Linux",
+        "duckdb_lock_timeout_seconds": 30
+    },
+    "backend_details": [
+        {
+            "backend": "duckdb",
+            "display": "DuckDB",
+            "family": "DuckDB native",
+            "duckdb_involved": true,
+            "storage_target": "DuckDB database file",
+            "role": "DuckDB baseline",
+            "notes": "WordPress uses the DuckDB backend directly with a DuckDB database file.",
+            "sort": 30
+        }
+    ],
+    "benchmarks": [
+        {
+            "type": "benchmark",
+            "backend": "duckdb",
+            "label": "front_page",
+            "method": "GET",
+            "expect_json": false,
+            "url_path": "/",
+            "requests": 2,
+            "concurrency": 1,
+            "ok": 2,
+            "errors": 0,
+            "total_ms": 316.337,
+            "requests_sec": 6.322,
+            "latency_ms": {
+                "min": 104.649,
+                "p50": 104.649,
+                "p95": 208.877,
+                "p99": 208.877,
+                "max": 208.877
+            },
+            "error_samples": [],
+            "backend_display": "DuckDB",
+            "backend_family": "DuckDB native",
+            "duckdb_involved": true,
+            "storage_target": "DuckDB database file"
+        },
+        {
+            "type": "benchmark",
+            "backend": "duckdb",
+            "label": "rest_read",
+            "method": "GET",
+            "expect_json": true,
+            "url_path": "/",
+            "requests": 2,
+            "concurrency": 1,
+            "ok": 2,
+            "errors": 0,
+            "total_ms": 136.629,
+            "requests_sec": 14.638,
+            "latency_ms": {
+                "min": 65.32,
+                "p50": 65.32,
+                "p95": 71.1,
+                "p99": 71.1,
+                "max": 71.1
+            },
+            "error_samples": [],
+            "backend_display": "DuckDB",
+            "backend_family": "DuckDB native",
+            "duckdb_involved": true,
+            "storage_target": "DuckDB database file"
+        },
+        {
+            "type": "benchmark",
+            "backend": "duckdb",
+            "label": "rest_write",
+            "method": "POST",
+            "expect_json": true,
+            "url_path": "/",
+            "requests": 8,
+            "concurrency": 1,
+            "ok": 8,
+            "errors": 0,
+            "total_ms": 871.052,
+            "requests_sec": 9.184,
+            "latency_ms": {
+                "min": 86.731,
+                "p50": 93.335,
+                "p95": 160.981,
+                "p99": 160.981,
+                "max": 160.981
+            },
+            "error_samples": [],
+            "backend_display": "DuckDB",
+            "backend_family": "DuckDB native",
+            "duckdb_involved": true,
+            "storage_target": "DuckDB database file"
+        }
+    ],
+    "verifications": [
+        {
+            "type": "verification",
+            "backend": "duckdb",
+            "expected_min_events": 8,
+            "stored_events": 8,
+            "status": "pass"
+        }
+    ],
+    "failures": [],
+    "total_requests": 12,
+    "total_errors": 0
+}

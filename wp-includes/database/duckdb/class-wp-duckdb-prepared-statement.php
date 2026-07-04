@@ -45,7 +45,12 @@ class WP_DuckDB_Prepared_Statement {
 				$this->statement->bindParam( $parameter, $value );
 			}
 			$this->connection->trace_native_query( 'execute_prepared', $this->sql, (array) $params );
-			return $this->connection->create_statement_from_result( $this->statement->execute(), $this->sql );
+			$trace_start = $this->connection->native_trace_start_time();
+			$result      = $this->statement->execute();
+			$this->connection->trace_native_query_timing( 'execute_prepared_native', $this->sql, $trace_start, (array) $params );
+			$statement = $this->connection->create_statement_from_result( $result, $this->sql );
+			$this->connection->trace_native_query_timing( 'execute_prepared_total', $this->sql, $trace_start, (array) $params );
+			return $statement;
 		} catch ( Throwable $e ) {
 			throw new WP_DuckDB_Driver_Exception( 'DuckDB prepared statement failed: ' . $e->getMessage(), 0, $e );
 		}

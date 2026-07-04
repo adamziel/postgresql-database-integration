@@ -1,0 +1,22 @@
+{
+    "run_id": "wp-duckdb-gap-profile-current",
+    "created_at": "2026-07-04T16:54:17+00:00",
+    "output_dir": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-gap-profile-current",
+    "work_root": "/home/claude/.wp-duckdb-bench/gap-profile-current-work",
+    "backends": [
+        "duckdb",
+        "duckdb_sidecar"
+    ],
+    "concurrency": [
+        1
+    ],
+    "read_requests_per_scenario": 5,
+    "write_requests_per_scenario": 50,
+    "server_workers": 1,
+    "wordpress_requested": "7.0",
+    "wordpress_version": "7.0",
+    "php_version": "8.5.7",
+    "commit": "d10f814734bd",
+    "host": "Linux sandbox-49185 7.0.9-204.fc44.x86_64 #1 SMP PREEMPT_DYNAMIC Tue May 19 22:42:18 UTC 2026 x86_64 GNU/Linux",
+    "duckdb_lock_timeout_seconds": 30
+}

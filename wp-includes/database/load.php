@@ -25,5 +25,6 @@ require_once __DIR__ . '/duckdb/class-wp-duckdb-runtime.php';
 require_once __DIR__ . '/duckdb/class-wp-duckdb-result-statement.php';
 require_once __DIR__ . '/duckdb/class-wp-duckdb-prepared-statement.php';
 require_once __DIR__ . '/duckdb/class-wp-duckdb-connection.php';
+require_once __DIR__ . '/duckdb/class-wp-duckdb-remote-connection.php';
 require_once __DIR__ . '/duckdb/class-wp-duckdb-driver.php';
 require_once __DIR__ . '/duckdb/class-wp-duckdb-storage-backend.php';

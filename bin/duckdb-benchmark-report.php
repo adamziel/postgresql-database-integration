@@ -211,6 +211,16 @@ function backend_info( string $backend ): array {
 			'notes'           => 'WordPress uses the DuckDB backend directly with a DuckDB database file.',
 			'sort'            => 30,
 		),
+		'duckdb_sidecar' => array(
+			'backend'         => 'duckdb_sidecar',
+			'display'         => 'DuckDB sidecar',
+			'family'          => 'DuckDB sidecar',
+			'duckdb_involved' => true,
+			'storage_target'  => 'DuckDB database file through a long-lived sidecar process',
+			'role'            => 'DuckDB performance path',
+			'notes'           => 'WordPress uses the DuckDB driver over a local Unix socket. The sidecar owns the native DuckDB handle across PHP requests.',
+			'sort'            => 35,
+		),
 		'sqlite_attach' => array(
 			'backend'         => 'sqlite_attach',
 			'display'         => 'DuckDB -> SQLite attach',

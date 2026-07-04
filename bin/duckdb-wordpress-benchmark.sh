@@ -253,6 +253,55 @@ stop_minio_server() {
 	fi
 }
 
+start_duckdb_sidecar_server() {
+	local backend_slug=$1
+	local wp_root=$2
+	local socket=$3
+	local database="$wp_root/wp-content/database/.ht.duckdb-benchmark"
+	local plugin_dir="$wp_root/wp-content/plugins/wordpress-databases-support"
+	local log="$output_dir/$backend_slug-duckdb-sidecar.log"
+
+	mkdir -p "$(dirname "$socket")" "$(dirname "$database")"
+	rm -f "$socket"
+
+	php -d ffi.enable=1 "$plugin_dir/bin/duckdb-sidecar.php" --socket="$socket" --path="$database" >"$log" 2>&1 &
+	DUCKDB_SIDECAR_PID=$!
+
+	for _ in $(seq 1 80); do
+		if [ -S "$socket" ] && DUCKDB_SIDECAR_PLUGIN_DIR="$plugin_dir" WP_DUCKDB_REMOTE_SOCKET="$socket" php -d ffi.enable=1 <<'PHP' >/dev/null 2>&1
+<?php
+$plugin_dir = getenv( 'DUCKDB_SIDECAR_PLUGIN_DIR' );
+if ( false === $plugin_dir || '' === $plugin_dir ) {
+	exit( 1 );
+}
+if ( is_file( $plugin_dir . '/vendor/autoload.php' ) ) {
+	require_once $plugin_dir . '/vendor/autoload.php';
+}
+require_once $plugin_dir . '/wp-includes/database/load.php';
+$connection = new WP_DuckDB_Remote_Connection( array( 'socket' => getenv( 'WP_DUCKDB_REMOTE_SOCKET' ) ) );
+$connection->query( 'SELECT 1' )->fetchAll();
+$connection->close();
+PHP
+		then
+			return
+		fi
+		sleep 0.25
+	done
+
+	echo "Timed out waiting for DuckDB sidecar. Log: $log" >&2
+	tail -100 "$log" >&2 || true
+	return 1
+}
+
+stop_duckdb_sidecar_server() {
+	local sidecar_pid=${1:-}
+
+	if [ -n "$sidecar_pid" ]; then
+		kill "$sidecar_pid" >/dev/null 2>&1 || true
+		wait "$sidecar_pid" 2>/dev/null || true
+	fi
+}
+
 clear_duckdb_backend_env() {
 	unset WP_DUCKDB_EXTERNAL_STORAGE_DIR
 	unset WP_DUCKDB_BACKEND_FILE_EXTENSION
@@ -260,19 +309,23 @@ clear_duckdb_backend_env() {
 	unset WP_DUCKDB_BACKEND_READ_SQL
 	unset WP_DUCKDB_BACKEND_WRITE_SQL
 	unset WP_DUCKDB_BACKEND_ATOMIC_FLUSH
+	unset WP_DUCKDB_REMOTE_SOCKET
+	unset DUCKDB_REMOTE_SOCKET
 }
 
 cleanup_backend() {
 	local server_pid=${1:-}
 	local mysql_pid=${2:-}
 	local minio_pid=${3:-}
-	local backend=${4:-}
+	local sidecar_pid=${4:-}
+	local backend=${5:-}
 
 	stop_server "$server_pid"
 	stop_mysql_server "$mysql_pid"
 	stop_minio_server "$minio_pid"
+	stop_duckdb_sidecar_server "$sidecar_pid"
 
-	if [ -n "$backend" ] && uses_duckdb_external_config "$backend"; then
+	if [ -n "$backend" ] && { uses_duckdb_external_config "$backend" || uses_duckdb_sidecar_config "$backend"; }; then
 		clear_duckdb_backend_env
 	fi
 }
@@ -602,8 +655,12 @@ $config .= 'define( \'DUCKDB_PHP_AUTOLOAD\', ' . var_export( $root . '/wp-conten
 $config .= 'define( \'DUCKDB_BENCHMARK_TOKEN\', ' . var_export( $token, true ) . " );\n";
 $config .= 'define( \'DUCKDB_LOCK_TIMEOUT_SECONDS\', ' . $lock_timeout . " );\n";
 $config .= 'define( \'WP_DUCKDB_LOCK_TIMEOUT_SECONDS\', ' . $lock_timeout . " );\n";
+$remote_socket = duckdb_benchmark_env_first( array( 'WP_DUCKDB_REMOTE_SOCKET', 'DUCKDB_REMOTE_SOCKET' ) );
+if ( null !== $remote_socket ) {
+	$config .= 'define( \'DUCKDB_REMOTE_SOCKET\', ' . var_export( $remote_socket, true ) . " );\n";
+}
 
-if ( ! in_array( $backend, array( 'duckdb', 'duck', 'native', 'file' ), true ) ) {
+if ( ! in_array( $backend, array( 'duckdb', 'duck', 'native', 'file', 'duckdb_sidecar' ), true ) ) {
 	$backend_slug    = preg_replace( '/[^a-z0-9_-]+/', '-', $backend );
 	$placeholders    = array(
 		'{root}'         => $root,
@@ -910,11 +967,15 @@ PHP
 
 is_native_duckdb_backend() {
 	case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-		duckdb|duck|native|file)
+		duckdb|duck|native|file|duckdb_sidecar)
 			return 0
 			;;
 	esac
 	return 1
+}
+
+is_duckdb_sidecar_backend() {
+	[ "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" = "duckdb_sidecar" ]
 }
 
 is_mysql_backend() {
@@ -944,6 +1005,10 @@ is_s3_parquet_backend() {
 
 uses_duckdb_external_config() {
 	is_s3_parquet_backend "$1" || is_sqlite_attach_backend "$1" || is_mysql_attach_backend "$1"
+}
+
+uses_duckdb_sidecar_config() {
+	is_duckdb_sidecar_backend "$1"
 }
 
 remove_working_database() {
@@ -1071,16 +1136,17 @@ check_logs() {
 	local server_log=$3
 	local debug_log="$wp_root/wp-content/debug.log"
 	local pattern='WordPress database error|DuckDB query failed|Failed to execute DuckDB|Fatal error|Parse error'
+	local diagnostics_pattern='WP_DUCKDB_(QUERY_PROFILE|RUNTIME_)'
 
-	if [ -f "$server_log" ] && grep -Eiq "$pattern" "$server_log"; then
+	if [ -f "$server_log" ] && grep -Ei "$pattern" "$server_log" | grep -Eiv "$diagnostics_pattern" >/dev/null; then
 		emit_failure backend_failure "$backend" "Server log contains WordPress/DuckDB/PHP errors. See $server_log"
-		grep -Ei "$pattern" "$server_log" >&2 || true
+		grep -Ei "$pattern" "$server_log" | grep -Eiv "$diagnostics_pattern" >&2 || true
 		benchmark_failed=1
 	fi
 
-	if [ -f "$debug_log" ] && grep -Eiq "$pattern" "$debug_log"; then
+	if [ -f "$debug_log" ] && grep -Ei "$pattern" "$debug_log" | grep -Eiv "$diagnostics_pattern" >/dev/null; then
 		emit_failure backend_failure "$backend" "WordPress debug log contains WordPress/DuckDB/PHP errors. See $debug_log"
-		grep -Ei "$pattern" "$debug_log" >&2 || true
+		grep -Ei "$pattern" "$debug_log" | grep -Eiv "$diagnostics_pattern" >&2 || true
 		benchmark_failed=1
 	fi
 }
@@ -1145,6 +1211,7 @@ run_backend() {
 	local server_pid=''
 	local mysql_pid=''
 	local minio_pid=''
+	local sidecar_pid=''
 	local mysql_port=''
 	local expected_write_events=0
 	local verification_output
@@ -1161,7 +1228,7 @@ run_backend() {
 
 	echo "==> WordPress database benchmark: backend=$backend"
 	mkdir -p "$output_dir"
-	trap 'cleanup_backend "${server_pid:-}" "${mysql_pid:-}" "${minio_pid:-}" "$backend"' EXIT
+	trap 'cleanup_backend "${server_pid:-}" "${mysql_pid:-}" "${minio_pid:-}" "${sidecar_pid:-}" "$backend"' EXIT
 
 	if is_mysql_backend "$backend" || is_mysql_attach_backend "$backend"; then
 		start_mysql_server "$backend_slug"
@@ -1188,6 +1255,8 @@ run_backend() {
 		export WP_DUCKDB_BACKEND_READ_SQL='SELECT * FROM wp_store.{table}'
 		export WP_DUCKDB_BACKEND_WRITE_SQL='CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}'
 		export WP_DUCKDB_BACKEND_ATOMIC_FLUSH=0
+	elif is_duckdb_sidecar_backend "$backend"; then
+		export WP_DUCKDB_REMOTE_SOCKET="$work_root/$backend_slug/duckdb-sidecar.sock"
 	fi
 
 	prepare_wordpress "$wp_root"
@@ -1204,6 +1273,10 @@ run_backend() {
 		prepare_databases_support_plugin "$wp_root"
 	fi
 	write_wp_config "$wp_root" "$backend" "$site_url" "$benchmark_token"
+	if is_duckdb_sidecar_backend "$backend"; then
+		start_duckdb_sidecar_server "$backend_slug" "$wp_root" "$WP_DUCKDB_REMOTE_SOCKET"
+		sidecar_pid=$DUCKDB_SIDECAR_PID
+	fi
 	php_install_site "$wp_root" "$tables_file"
 	write_wp_config "$wp_root" "$backend" "$site_url" "$benchmark_token" "$tables_file"
 	remove_working_database "$wp_root" "$backend" "$backend_slug"
@@ -1235,10 +1308,11 @@ run_backend() {
 	fi
 
 	check_logs "$backend" "$wp_root" "$server_log"
-	cleanup_backend "$server_pid" "$mysql_pid" "$minio_pid" "$backend"
+	cleanup_backend "$server_pid" "$mysql_pid" "$minio_pid" "$sidecar_pid" "$backend"
 	server_pid=''
 	mysql_pid=''
 	minio_pid=''
+	sidecar_pid=''
 	trap - EXIT
 	echo "PASS benchmark backend=$backend root=$wp_root"
 }

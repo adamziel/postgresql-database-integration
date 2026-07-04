@@ -39,7 +39,11 @@ for port, admin-account, and reset options.
 - PHP 7.2 or newer for the plugin shell and PostgreSQL/SQLite drivers.
 - PHP `pdo`.
 - PostgreSQL: PHP `pdo_pgsql` and a PostgreSQL server.
-- DuckDB: PHP 8.3 or newer, PHP `ffi`, and the `satur.io/duckdb` PHP client.
+- DuckDB embedded mode: PHP 8.3 or newer, PHP `ffi`, and the
+  `satur.io/duckdb` PHP client in the WordPress PHP process.
+- DuckDB remote modes: the WordPress PHP process can run without DuckDB FFI, but
+  the sidecar process still needs PHP 8.3 or newer, PHP `ffi`, and
+  `satur.io/duckdb`.
 - SQLite: PHP `pdo_sqlite`.
 
 ## Installation
@@ -114,6 +118,28 @@ This plugin supports two DuckDB backend modes:
   let WordPress write through the normal `wpdb` path, then flush tables back
   through DuckDB SQL on close and shutdown.
 
+DuckDB backend mode is separate from DuckDB connection mode. Backend mode says
+where tables are stored; connection mode says how WordPress talks to DuckDB.
+Native DuckDB file storage supports these five connection modes:
+
+| Connection mode | WordPress config | DuckDB runtime lives in |
+| --- | --- | --- |
+| Embedded FFI | Default, or `DUCKDB_CONNECTION=ffi` | The WordPress PHP request process. |
+| Unix socket | `DUCKDB_CONNECTION=unix` and `DUCKDB_REMOTE_SOCKET=/path/to/duckdb.sock` | A separately started sidecar process. |
+| TCP socket | `DUCKDB_CONNECTION=tcp`, `DUCKDB_REMOTE_HOST=127.0.0.1`, and `DUCKDB_REMOTE_PORT=9901` | A separately started sidecar process. |
+| HTTP | `DUCKDB_CONNECTION=http` and `DUCKDB_REMOTE_URL=http://127.0.0.1:9902/query` | A separately started sidecar process. |
+| Managed sidecar | `DUCKDB_CONNECTION=sidecar` and `DUCKDB_SIDECAR_COMMAND='php -d ffi.enable=1 .../bin/duckdb-sidecar.php --stdio --path=...'` | A child process started by each WordPress PHP process. |
+
+Unix sockets are the preferred local sidecar transport. TCP and HTTP are useful
+for process-manager or container boundaries; bind them to loopback or a private
+network because the test sidecar does not implement authentication. Managed
+sidecar mode is a simple fallback for local development and shared-host
+experiments, not the preferred high-throughput deployment shape.
+
+External table backends such as JSON, CSV, Parquet, S3 Parquet, and custom SQL
+templates still use the embedded working DuckDB handle for hydrate and flush.
+The remote connection modes above apply to native DuckDB file storage.
+
 External storage is only a usable WordPress backend when DuckDB can both read
 the source and write a complete table back to it. Plain HTTP(S) files are useful
 for reads, but DuckDB documents them as read-only through `httpfs`; S3-compatible
@@ -133,6 +159,12 @@ Common constants:
 | `DUCKDB_BACKEND_SETUP_SQL` | SQL statements to run after connecting, such as `INSTALL`, `LOAD`, `CREATE SECRET`, or `ATTACH`. |
 | `DUCKDB_BACKEND_TABLES` | Explicit table list. Use this for remote/object/attached backends that PHP cannot discover by scanning a local directory. |
 | `DUCKDB_BACKEND_ATOMIC_FLUSH` | Whether to write local path-based output to a temporary file first. Defaults to on for local paths and off for URIs. |
+| `DUCKDB_CONNECTION` | Native DuckDB file connection mode: `ffi`, `embedded`, `unix`, `tcp`, `http`, or `sidecar`. |
+| `DUCKDB_REMOTE_SOCKET` | Unix socket path for `DUCKDB_CONNECTION=unix`. |
+| `DUCKDB_REMOTE_HOST` / `DUCKDB_REMOTE_PORT` | Host and port for `DUCKDB_CONNECTION=tcp`. |
+| `DUCKDB_REMOTE_URL` | HTTP endpoint for `DUCKDB_CONNECTION=http`. |
+| `DUCKDB_SIDECAR_COMMAND` | Stdio sidecar command for `DUCKDB_CONNECTION=sidecar`. |
+| `WP_DUCKDB_REQUEST_TRANSACTION` | Optional performance flag. Set to `1` to batch request writes into one DuckDB transaction. |
 
 SQL templates support these placeholders:
 
@@ -160,6 +192,103 @@ define( 'DB_DIR', __DIR__ . '/wp-content/database/' );
 define( 'DUCKDB_FILE', '.ht.duckdb' );
 define( 'DUCKDB_PHP_AUTOLOAD', __DIR__ . '/wp-content/plugins/wordpress-databases-support/vendor/autoload.php' );
 ```
+
+To keep the DuckDB handle hot outside the WordPress PHP request, start the
+sidecar and point WordPress at it.
+
+Unix socket:
+
+```bash
+php -d ffi.enable=1 wp-content/plugins/wordpress-databases-support/bin/duckdb-sidecar.php \
+	--socket=/run/wp-duckdb/wordpress.sock \
+	--path=/var/www/html/wp-content/database/.ht.duckdb
+```
+
+```php
+define( 'DB_ENGINE', 'duckdb' );
+define( 'DB_DIR', __DIR__ . '/wp-content/database/' );
+define( 'DUCKDB_FILE', '.ht.duckdb' );
+define( 'DUCKDB_CONNECTION', 'unix' );
+define( 'DUCKDB_REMOTE_SOCKET', '/run/wp-duckdb/wordpress.sock' );
+```
+
+TCP:
+
+```bash
+php -d ffi.enable=1 wp-content/plugins/wordpress-databases-support/bin/duckdb-sidecar.php \
+	--tcp=127.0.0.1:9901 \
+	--path=/var/www/html/wp-content/database/.ht.duckdb
+```
+
+```php
+define( 'DUCKDB_CONNECTION', 'tcp' );
+define( 'DUCKDB_REMOTE_HOST', '127.0.0.1' );
+define( 'DUCKDB_REMOTE_PORT', 9901 );
+```
+
+HTTP:
+
+```bash
+php -d ffi.enable=1 wp-content/plugins/wordpress-databases-support/bin/duckdb-sidecar.php \
+	--http=127.0.0.1:9902 \
+	--path=/var/www/html/wp-content/database/.ht.duckdb
+```
+
+```php
+define( 'DUCKDB_CONNECTION', 'http' );
+define( 'DUCKDB_REMOTE_URL', 'http://127.0.0.1:9902/query' );
+```
+
+Managed sidecar:
+
+```php
+define( 'DUCKDB_CONNECTION', 'sidecar' );
+define(
+	'DUCKDB_SIDECAR_COMMAND',
+	'php -d ffi.enable=1 ' . __DIR__ . '/wp-content/plugins/wordpress-databases-support/bin/duckdb-sidecar.php --stdio --path=' . __DIR__ . '/wp-content/database/.ht.duckdb'
+);
+```
+
+#### Connection Mode Performance Trade-Offs
+
+Use embedded FFI for the simplest development setup. In local profiles, an
+already-open embedded DuckDB connection is fast (`SELECT 1` p50 0.232 ms), but
+WordPress request handling normally opens a fresh PHP DuckDB client. That cold
+open dominated simple query latency in the profile (`SELECT 1` p50 11.808 ms,
+with 11.364 ms from opening the connection).
+
+Use a long-running Unix, TCP, or HTTP sidecar when request latency matters. The
+sidecar keeps the native DuckDB handle open outside PHP requests. Local transport
+overhead was small in the current profile with the sidecar cache disabled:
+
+| Transport | `SELECT 1` p50 | Added client/transport p50 |
+| --- | ---: | ---: |
+| Embedded, already open | 0.232 ms | 0 ms |
+| Unix sidecar | 0.287 ms | 0.047 ms |
+| TCP sidecar | 0.302 ms | 0.062 ms |
+| HTTP sidecar, new connection | 0.327 ms | 0.084 ms |
+
+For a write-heavy WordPress HTTP workload, the fast DuckDB shape was sidecar
+plus request-scoped transactions:
+
+| Backend | Mode | REST write p50 | REST write p95 | REST write rps |
+| --- | --- | ---: | ---: | ---: |
+| SQLite | native | 33.499 ms | 55.367 ms | 27.378 |
+| DuckDB | sidecar, `WP_DUCKDB_REQUEST_TRANSACTION=1` | 35.722 ms | 41.525 ms | 27.378 |
+| DuckDB | embedded FFI, `WP_DUCKDB_REQUEST_TRANSACTION=1` | 107.084 ms | 157.303 ms | 9.195 |
+
+Managed sidecar mode avoids FFI in the WordPress PHP process, but it starts a
+child process for that PHP process. Prefer an already-running Unix socket
+sidecar for production-like local deployments.
+
+Request-scoped transactions improve write-heavy latency by batching several
+small durable writes. They also change cross-connection visibility: writes are
+visible inside the current request and commit at close, shutdown, or external
+storage flush. Keep the flag opt-in and test plugins that depend on immediate
+cross-connection visibility.
+
+The raw benchmark evidence is kept under `docs/benchmarks/runs/`; see
+`docs/benchmarks/duckdb-performance-findings.md` for the current summary.
 
 #### Local Parquet, CSV, Or JSON Files
 

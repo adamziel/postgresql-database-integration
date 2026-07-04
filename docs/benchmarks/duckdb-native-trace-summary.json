@@ -1,0 +1,122 @@
+{
+  "generated_from": [
+    "wp-duckdb-current-native-trace",
+    "wp-duckdb-current-parity-check",
+    "wp-duckdb-current-sidecar-nocache",
+    "local CLI micro-profiles"
+  ],
+  "notes": [
+    "Trace values were extracted from WP_DUCKDB_TRACE_NATIVE_QUERIES debug logs produced by local benchmark work directories.",
+    "wordpress_http_native_trace filters to the PHP built-in server process that handled the HTTP benchmark requests.",
+    "open_end is the WP_DuckDB_Connection constructor timing around Saturio\\DuckDB\\DuckDB::create(path).",
+    "The CLI micro-profiles isolate driver load, native open, native query, sidecar socket open, and sidecar query costs outside WordPress."
+  ],
+  "wordpress_http_native_trace": {
+    "run": "wp-duckdb-current-native-trace",
+    "selected_pid_reason": "PID with the most open_end events; this matches the HTTP request benchmark process.",
+    "request_count": 13,
+    "phases": {
+      "open_end": {
+        "count": 13,
+        "p50_ms": 15.073,
+        "p95_ms": 21.203,
+        "avg_ms": 19.964,
+        "sum_ms": 259.534
+      },
+      "query_native": {
+        "count": 185,
+        "p50_ms": 1.005,
+        "p95_ms": 6.618,
+        "avg_ms": 1.812,
+        "sum_ms": 335.184
+      },
+      "query_total": {
+        "count": 185,
+        "p50_ms": 1.125,
+        "p95_ms": 6.717,
+        "avg_ms": 1.973,
+        "sum_ms": 365.036
+      }
+    },
+    "query_classes": {
+      "begin": {
+        "count": 9,
+        "p50_ms": 0.221,
+        "p95_ms": 0.3,
+        "avg_ms": 0.339,
+        "sum_ms": 3.048
+      },
+      "commit": {
+        "count": 9,
+        "p50_ms": 7.901,
+        "p95_ms": 11.98,
+        "avg_ms": 8.731,
+        "sum_ms": 78.579
+      },
+      "write_dml": {
+        "count": 29,
+        "p50_ms": 2.068,
+        "p95_ms": 4.436,
+        "avg_ms": 2.426,
+        "sum_ms": 70.344
+      },
+      "read_select": {
+        "count": 138,
+        "p50_ms": 0.838,
+        "p95_ms": 4.474,
+        "avg_ms": 1.544,
+        "sum_ms": 213.065
+      }
+    }
+  },
+  "cli_micro_profile": {
+    "native": {
+      "autoload_ms": 6.619,
+      "load_database_stack_ms": 202.834,
+      "new_connection_open_ms": {
+        "count": 20,
+        "first_ms": 72.587,
+        "p50_ms": 8.126,
+        "p95_ms": 15.69,
+        "avg_ms": 11.746
+      },
+      "new_connection_select_1_ms": {
+        "count": 20,
+        "first_ms": 5.077,
+        "p50_ms": 0.474,
+        "p95_ms": 2.575,
+        "avg_ms": 0.908
+      },
+      "reused_connection_select_1_ms": {
+        "count": 50,
+        "first_ms": 0.451,
+        "p50_ms": 0.245,
+        "p95_ms": 0.368,
+        "avg_ms": 0.31
+      }
+    },
+    "sidecar_no_cache": {
+      "remote_open_ms": {
+        "count": 20,
+        "first_ms": 0.089,
+        "p50_ms": 0.025,
+        "p95_ms": 0.057,
+        "avg_ms": 0.03
+      },
+      "new_remote_connection_select_1_ms": {
+        "count": 20,
+        "first_ms": 10.938,
+        "p50_ms": 0.389,
+        "p95_ms": 3.395,
+        "avg_ms": 1.328
+      },
+      "reused_remote_connection_select_1_ms": {
+        "count": 50,
+        "first_ms": 0.345,
+        "p50_ms": 0.32,
+        "p95_ms": 0.415,
+        "avg_ms": 0.369
+      }
+    }
+  }
+}

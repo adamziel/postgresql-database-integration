@@ -296,6 +296,17 @@ class WP_DuckDB_Driver {
 	private $last_insert_id = 0;
 
 	/**
+	 * Sequence current values observed by this driver session.
+	 *
+	 * DuckDB currval() errors until nextval() has been called in the session.
+	 * Inside a transaction that error aborts the transaction, so transaction
+	 * paths use this cache instead of probing unknown sequence state.
+	 *
+	 * @var array<string,int>
+	 */
+	private $sequence_current_values = array();
+
+	/**
 	 * Data for emulating MySQL FOUND_ROWS().
 	 *
 	 * SQL_CALC_FOUND_ROWS stores an eager integer count without the SELECT LIMIT.
@@ -408,6 +419,16 @@ class WP_DuckDB_Driver {
 	private $auto_increment_metadata_cache = array();
 
 	/**
+	 * Installation-known AUTO_INCREMENT columns keyed by exact table name.
+	 *
+	 * WordPress core table names are prefix-dependent, so this must be supplied
+	 * by the wpdb adapter rather than guessed from suffixes in the driver.
+	 *
+	 * @var array<string,string>
+	 */
+	private $known_auto_increment_columns = array();
+
+	/**
 	 * Cached SHOW INDEX-compatible primary-key rows by table.
 	 *
 	 * @var array<string,array<int,array<int,mixed>>>
@@ -504,6 +525,35 @@ class WP_DuckDB_Driver {
 	private $table_lock_active = false;
 
 	/**
+	 * Whether to batch DML in a request-scoped DuckDB transaction.
+	 *
+	 * @var bool
+	 */
+	private $request_transaction_enabled = false;
+
+	/**
+	 * Whether this driver opened the active request-scoped transaction.
+	 *
+	 * @var bool
+	 */
+	private $request_transaction_active = false;
+
+	/**
+	 * Whether the current top-level statement should open a request transaction
+	 * when its translated user-table DML is executed.
+	 *
+	 * @var bool
+	 */
+	private $request_transaction_pending_write = false;
+
+	/**
+	 * Whether the PHP shutdown hook for the request-scoped transaction is registered.
+	 *
+	 * @var bool
+	 */
+	private $request_transaction_shutdown_registered = false;
+
+	/**
 	 * Driver-emulated savepoints for DuckDB, which has no native SAVEPOINT SQL.
 	 *
 	 * @var array<string,array{name:string,sequence:int,snapshots:array<int,array{table_name:string,temporary:bool,snapshot_table:string}>}>
@@ -540,12 +590,41 @@ class WP_DuckDB_Driver {
 		$this->current_database = $this->database;
 		$this->session_system_variables = $this->default_session_system_variables();
 		$this->global_system_variables  = $this->default_global_system_variables();
+		if ( array_key_exists( 'active_sql_modes', $options ) ) {
+			$active_sql_modes = $options['active_sql_modes'];
+			if ( is_array( $active_sql_modes ) ) {
+				$active_sql_modes = implode( ',', $active_sql_modes );
+			}
+			if ( ! is_string( $active_sql_modes ) ) {
+				throw new InvalidArgumentException( 'DuckDB driver option "active_sql_modes" must be a string or array.' );
+			}
+			$this->active_sql_modes = $this->normalize_sql_modes( $active_sql_modes );
+		}
+		if ( array_key_exists( 'known_auto_increment_columns', $options ) ) {
+			if ( ! is_array( $options['known_auto_increment_columns'] ) ) {
+				throw new InvalidArgumentException( 'DuckDB driver option "known_auto_increment_columns" must be an array.' );
+			}
+			$this->set_known_auto_increment_columns( $options['known_auto_increment_columns'] );
+		}
+		if ( array_key_exists( 'schema_metadata_cache', $options ) ) {
+			if ( ! is_array( $options['schema_metadata_cache'] ) ) {
+				throw new InvalidArgumentException( 'DuckDB driver option "schema_metadata_cache" must be an array.' );
+			}
+			$this->set_schema_metadata_cache( $options['schema_metadata_cache'] );
+		}
+		$this->request_transaction_enabled = $this->request_transaction_enabled_from_options( $options );
+		if ( $this->request_transaction_enabled ) {
+			$this->register_request_transaction_shutdown_commit();
+		}
 
+		$remote_options = $this->remote_connection_options_from_options( $options );
 		if ( isset( $options['connection'] ) ) {
 			if ( ! $options['connection'] instanceof WP_DuckDB_Connection ) {
 				throw new InvalidArgumentException( 'DuckDB driver option "connection" must be a WP_DuckDB_Connection.' );
 			}
 			$this->connection = $options['connection'];
+		} elseif ( null !== $remote_options ) {
+			$this->connection = new WP_DuckDB_Remote_Connection( $remote_options );
 		} else {
 			$this->connection = new WP_DuckDB_Connection( $options );
 		}
@@ -554,9 +633,500 @@ class WP_DuckDB_Driver {
 			self::$mysql_grammar = new WP_Parser_Grammar( require self::MYSQL_GRAMMAR_PATH );
 		}
 
-		$this->initialize_session_macros();
-
 		$this->client_info = $this->format_mysql_version();
+	}
+
+	/**
+	 * Read the optional DuckDB remote connection options.
+	 *
+	 * @param array $options Driver options.
+	 * @return array<string,mixed>|null Remote options, or null when embedded mode is enabled.
+	 */
+	private function remote_connection_options_from_options( array $options ): ?array {
+		if ( isset( $options['remote'] ) ) {
+			if ( ! is_array( $options['remote'] ) ) {
+				throw new InvalidArgumentException( 'DuckDB driver option "remote" must be an array.' );
+			}
+			return $this->normalize_remote_connection_options( $options['remote'], $options );
+		}
+
+		$transport = $this->configured_value(
+			$options,
+			array( 'connection_mode', 'remote_transport', 'transport' ),
+			array( 'WP_DUCKDB_CONNECTION', 'DUCKDB_CONNECTION', 'WP_DUCKDB_REMOTE_TRANSPORT', 'DUCKDB_REMOTE_TRANSPORT' ),
+			array( 'WP_DUCKDB_CONNECTION', 'DUCKDB_CONNECTION', 'WP_DUCKDB_REMOTE_TRANSPORT', 'DUCKDB_REMOTE_TRANSPORT' )
+		);
+		$transport = null === $transport ? null : $this->normalize_remote_transport( $transport );
+		if ( null !== $transport && in_array( $transport, array( 'embedded', 'ffi' ), true ) ) {
+			return null;
+		}
+
+		$socket = $this->configured_value(
+			$options,
+			array( 'remote_socket' ),
+			array( 'WP_DUCKDB_REMOTE_SOCKET', 'DUCKDB_REMOTE_SOCKET' ),
+			array( 'WP_DUCKDB_REMOTE_SOCKET', 'DUCKDB_REMOTE_SOCKET' )
+		);
+		$url = $this->configured_value(
+			$options,
+			array( 'remote_url' ),
+			array( 'WP_DUCKDB_REMOTE_URL', 'DUCKDB_REMOTE_URL' ),
+			array( 'WP_DUCKDB_REMOTE_URL', 'DUCKDB_REMOTE_URL' )
+		);
+		$host = $this->configured_value(
+			$options,
+			array( 'remote_host' ),
+			array( 'WP_DUCKDB_REMOTE_HOST', 'DUCKDB_REMOTE_HOST' ),
+			array( 'WP_DUCKDB_REMOTE_HOST', 'DUCKDB_REMOTE_HOST' )
+		);
+		$port = $this->configured_value(
+			$options,
+			array( 'remote_port' ),
+			array( 'WP_DUCKDB_REMOTE_PORT', 'DUCKDB_REMOTE_PORT' ),
+			array( 'WP_DUCKDB_REMOTE_PORT', 'DUCKDB_REMOTE_PORT' )
+		);
+		$command = $this->configured_value(
+			$options,
+			array( 'sidecar_command', 'remote_command' ),
+			array( 'WP_DUCKDB_SIDECAR_COMMAND', 'DUCKDB_SIDECAR_COMMAND' ),
+			array( 'WP_DUCKDB_SIDECAR_COMMAND', 'DUCKDB_SIDECAR_COMMAND' )
+		);
+
+		if ( null === $transport ) {
+			if ( null !== $socket ) {
+				$transport = 'unix';
+			} elseif ( null !== $url ) {
+				$transport = 'http';
+			} elseif ( null !== $command ) {
+				$transport = 'sidecar';
+			} elseif ( null !== $host || null !== $port ) {
+				$transport = 'tcp';
+			} else {
+				return null;
+			}
+		}
+
+		$remote = array( 'transport' => $transport );
+		if ( 'unix' === $transport ) {
+			$remote['socket'] = $socket;
+		} elseif ( 'http' === $transport ) {
+			$remote['url']  = $url;
+			$remote['host'] = $host;
+			$remote['port'] = $port;
+		} elseif ( 'tcp' === $transport ) {
+			$remote['host'] = null === $host ? '127.0.0.1' : $host;
+			$remote['port'] = $port;
+		} elseif ( 'sidecar' === $transport ) {
+			$remote['command']       = $command;
+			$remote['database_path'] = $options['path'] ?? null;
+		}
+
+		return $this->normalize_remote_connection_options( $remote, $options );
+	}
+
+	/**
+	 * Normalize remote connection options.
+	 *
+	 * @param array $remote_options Remote options.
+	 * @param array $driver_options Driver options.
+	 * @return array<string,mixed>|null
+	 */
+	private function normalize_remote_connection_options( array $remote_options, array $driver_options ): ?array {
+		$transport = $remote_options['transport'] ?? $this->infer_remote_transport( $remote_options );
+		$transport = $this->normalize_remote_transport( $transport );
+		if ( in_array( $transport, array( 'embedded', 'ffi' ), true ) ) {
+			return null;
+		}
+
+		$remote_options['transport'] = $transport;
+		if ( 'sidecar' === $transport && ! isset( $remote_options['database_path'] ) && isset( $driver_options['path'] ) ) {
+			$remote_options['database_path'] = $driver_options['path'];
+		}
+
+		return $remote_options;
+	}
+
+	/**
+	 * Infer a remote transport from nested remote options.
+	 *
+	 * @param array $remote_options Remote options.
+	 * @return string Transport.
+	 */
+	private function infer_remote_transport( array $remote_options ): string {
+		if ( isset( $remote_options['socket'] ) ) {
+			return 'unix';
+		}
+		if ( isset( $remote_options['url'] ) ) {
+			return 'http';
+		}
+		if ( isset( $remote_options['command'] ) ) {
+			return 'sidecar';
+		}
+		if ( isset( $remote_options['host'] ) || isset( $remote_options['port'] ) ) {
+			return 'tcp';
+		}
+
+		return 'unix';
+	}
+
+	/**
+	 * Normalize the configured remote transport.
+	 *
+	 * @param mixed $transport Transport value.
+	 * @return string Transport.
+	 */
+	private function normalize_remote_transport( $transport ): string {
+		if ( ! is_string( $transport ) || '' === trim( $transport ) ) {
+			throw new InvalidArgumentException( 'DuckDB connection transport must be a non-empty string.' );
+		}
+
+		$transport = strtolower( str_replace( '_', '-', trim( $transport ) ) );
+		$aliases   = array(
+			'direct'          => 'embedded',
+			'native'          => 'embedded',
+			'embedded-ffi'    => 'embedded',
+			'unix-socket'     => 'unix',
+			'socket'          => 'unix',
+			'tcp-socket'      => 'tcp',
+			'stdio'           => 'sidecar',
+			'managed-sidecar' => 'sidecar',
+		);
+		if ( isset( $aliases[ $transport ] ) ) {
+			$transport = $aliases[ $transport ];
+		}
+
+		if ( ! in_array( $transport, array( 'embedded', 'ffi', 'unix', 'tcp', 'http', 'sidecar' ), true ) ) {
+			throw new InvalidArgumentException( 'DuckDB connection transport must be embedded, ffi, unix, tcp, http, or sidecar.' );
+		}
+
+		return $transport;
+	}
+
+	/**
+	 * Read an option from driver options, constants, or environment variables.
+	 *
+	 * @param array $options   Driver options.
+	 * @param array $keys      Option keys.
+	 * @param array $constants Constant names.
+	 * @param array $env_names Environment variable names.
+	 * @return mixed|null Configured value.
+	 */
+	private function configured_value( array $options, array $keys, array $constants, array $env_names ) {
+		foreach ( $keys as $key ) {
+			if ( array_key_exists( $key, $options ) && ! $this->is_empty_config_value( $options[ $key ] ) ) {
+				return $options[ $key ];
+			}
+		}
+		foreach ( $constants as $constant ) {
+			if ( defined( $constant ) && ! $this->is_empty_config_value( constant( $constant ) ) ) {
+				return constant( $constant );
+			}
+		}
+		foreach ( $env_names as $env_name ) {
+			$value = getenv( $env_name );
+			if ( ! $this->is_empty_config_value( $value ) ) {
+				return $value;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Check whether a configured value is empty.
+	 *
+	 * @param mixed $value Configured value.
+	 * @return bool Whether the value is empty.
+	 */
+	private function is_empty_config_value( $value ): bool {
+		return false === $value || null === $value || ( is_string( $value ) && '' === trim( $value ) );
+	}
+
+	/**
+	 * Read the optional request-scoped transaction setting.
+	 *
+	 * @param array $options Driver options.
+	 * @return bool Whether DML should be batched until shutdown/close.
+	 */
+	private function request_transaction_enabled_from_options( array $options ): bool {
+		if ( array_key_exists( 'request_transaction', $options ) ) {
+			return $this->truthy_driver_option( $options['request_transaction'] );
+		}
+		if ( defined( 'WP_DUCKDB_REQUEST_TRANSACTION' ) ) {
+			return $this->truthy_driver_option( WP_DUCKDB_REQUEST_TRANSACTION );
+		}
+
+		$value = getenv( 'WP_DUCKDB_REQUEST_TRANSACTION' );
+		return is_string( $value ) && '' !== $value && $this->truthy_driver_option( $value );
+	}
+
+	/**
+	 * Interpret a boolean-like driver option.
+	 *
+	 * @param mixed $value Raw value.
+	 * @return bool Whether the value is truthy.
+	 */
+	private function truthy_driver_option( $value ): bool {
+		if ( is_bool( $value ) ) {
+			return $value;
+		}
+		if ( is_int( $value ) ) {
+			return 0 !== $value;
+		}
+		if ( is_string( $value ) ) {
+			return in_array( strtolower( trim( $value ) ), array( '1', 'true', 'yes', 'on' ), true );
+		}
+
+		return ! empty( $value );
+	}
+
+	/**
+	 * Set exact table-to-AUTO_INCREMENT-column mappings known by the caller.
+	 *
+	 * @param array<string,string> $columns AUTO_INCREMENT columns keyed by table name.
+	 * @return void
+	 *
+	 * @throws InvalidArgumentException When a map entry is invalid.
+	 */
+	public function set_known_auto_increment_columns( array $columns ): void {
+		$normalized = array();
+		foreach ( $columns as $table_name => $column_name ) {
+			if ( ! is_string( $table_name ) || '' === trim( $table_name ) ) {
+				throw new InvalidArgumentException( 'DuckDB known AUTO_INCREMENT table names must be non-empty strings.' );
+			}
+			if ( ! is_string( $column_name ) || '' === trim( $column_name ) ) {
+				throw new InvalidArgumentException( 'DuckDB known AUTO_INCREMENT column names must be non-empty strings.' );
+			}
+
+			$normalized[ strtolower( trim( $table_name ) ) ] = trim( $column_name );
+		}
+
+		$this->known_auto_increment_columns = $normalized;
+	}
+
+	/**
+	 * Get exact table-to-AUTO_INCREMENT-column mappings known by the driver.
+	 *
+	 * @return array<string,string> AUTO_INCREMENT columns keyed by normalized table name.
+	 */
+	public function get_known_auto_increment_columns(): array {
+		return $this->known_auto_increment_columns;
+	}
+
+	/**
+	 * Seed persistent table and column metadata caches learned by an earlier request.
+	 *
+	 * @param array<string,mixed> $cache Schema metadata cache payload.
+	 * @return void
+	 */
+	public function set_schema_metadata_cache( array $cache ): void {
+		$tables = array();
+		if ( isset( $cache['tables'] ) && is_array( $cache['tables'] ) ) {
+			foreach ( $cache['tables'] as $table_name ) {
+				if ( is_string( $table_name ) && '' !== trim( $table_name ) ) {
+					$tables[ strtolower( trim( $table_name ) ) ] = trim( $table_name );
+				}
+			}
+		}
+
+		$columns = isset( $cache['columns'] ) && is_array( $cache['columns'] ) ? $cache['columns'] : array();
+		foreach ( $columns as $table_name => $metadata_rows ) {
+			if ( ! is_string( $table_name ) || '' === trim( $table_name ) || ! is_array( $metadata_rows ) ) {
+				continue;
+			}
+
+			$table_name = trim( $table_name );
+			$metadata   = $this->normalize_schema_metadata_cache_rows( $metadata_rows );
+			if ( count( $metadata ) === 0 ) {
+				continue;
+			}
+
+			$tables[ strtolower( $table_name ) ] = $table_name;
+			$cache_key                          = $this->metadata_table_cache_key( $table_name, false );
+			$this->column_metadata_cache[ $cache_key ]       = $metadata;
+			$this->table_column_metadata_cache[ $cache_key ] = $metadata;
+			$this->visible_table_reference_cache[ strtolower( $table_name ) ] = array(
+				'table_name' => $table_name,
+				'temporary'  => false,
+			);
+			$this->update_known_auto_increment_columns_from_metadata( $table_name, $metadata, false );
+		}
+
+		if ( count( $tables ) > 0 ) {
+			ksort( $tables );
+			$this->table_name_cache[ $this->metadata_ensure_key( 'tables', false ) ] = array_values( $tables );
+		}
+	}
+
+	/**
+	 * Export persistent table and column metadata suitable for a future request.
+	 *
+	 * @return array{tables:string[],columns:array<string,array<int,array<string,mixed>>>} Schema metadata cache payload.
+	 */
+	public function get_schema_metadata_cache(): array {
+		$tables  = $this->user_table_names();
+		$columns = array();
+		foreach ( $tables as $table_name ) {
+			$metadata = $this->table_column_metadata_rows( $table_name, false );
+			if ( count( $metadata ) > 0 ) {
+				$columns[ $table_name ] = $metadata;
+			}
+		}
+
+		sort( $tables );
+		ksort( $columns );
+		return array(
+			'tables'  => $tables,
+			'columns' => $columns,
+		);
+	}
+
+	/**
+	 * Normalize persisted column metadata rows.
+	 *
+	 * @param array<int,mixed> $metadata_rows Raw column metadata rows.
+	 * @return array<int,array<string,mixed>> Normalized rows.
+	 */
+	private function normalize_schema_metadata_cache_rows( array $metadata_rows ): array {
+		$normalized = array();
+		foreach ( $metadata_rows as $row ) {
+			if ( ! is_array( $row ) || ! isset( $row['column_name'] ) || '' === trim( (string) $row['column_name'] ) ) {
+				continue;
+			}
+
+			$normalized[] = array(
+				'ordinal_position' => isset( $row['ordinal_position'] ) ? (int) $row['ordinal_position'] : count( $normalized ) + 1,
+				'column_name'      => trim( (string) $row['column_name'] ),
+				'column_type'      => isset( $row['column_type'] ) ? (string) $row['column_type'] : '',
+				'is_nullable'      => isset( $row['is_nullable'] ) ? (string) $row['is_nullable'] : '',
+				'column_key'       => isset( $row['column_key'] ) ? (string) $row['column_key'] : '',
+				'column_default'   => array_key_exists( 'column_default', $row ) ? $row['column_default'] : null,
+				'extra'            => isset( $row['extra'] ) ? (string) $row['extra'] : '',
+				'collation_name'   => array_key_exists( 'collation_name', $row ) ? $row['collation_name'] : null,
+				'comment'          => isset( $row['comment'] ) ? (string) $row['comment'] : '',
+			);
+		}
+
+		usort(
+			$normalized,
+			function ( array $a, array $b ): int {
+				return (int) $a['ordinal_position'] <=> (int) $b['ordinal_position'];
+			}
+		);
+
+		return $normalized;
+	}
+
+	/**
+	 * Remember a persistent table's AUTO_INCREMENT column.
+	 *
+	 * Temporary tables are session-scoped and must be resolved through the
+	 * generic metadata path because they can shadow persistent WordPress tables.
+	 *
+	 * @param string $table_name  Table name.
+	 * @param string $column_name AUTO_INCREMENT column name.
+	 * @param bool   $temporary   Whether the table is temporary.
+	 * @return void
+	 */
+	private function remember_known_auto_increment_column( string $table_name, string $column_name, bool $temporary = false ): void {
+		if ( $temporary ) {
+			return;
+		}
+
+		$table_name  = trim( $table_name );
+		$column_name = trim( $column_name );
+		if ( '' === $table_name || '' === $column_name ) {
+			return;
+		}
+
+		$this->known_auto_increment_columns[ strtolower( $table_name ) ] = $column_name;
+	}
+
+	/**
+	 * Forget a known persistent AUTO_INCREMENT mapping.
+	 *
+	 * @param string      $table_name  Table name.
+	 * @param string|null $column_name Optional column name that must match the known mapping.
+	 * @param bool        $temporary   Whether the table is temporary.
+	 * @return void
+	 */
+	private function forget_known_auto_increment_column( string $table_name, ?string $column_name = null, bool $temporary = false ): void {
+		if ( $temporary ) {
+			return;
+		}
+
+		$key = strtolower( trim( $table_name ) );
+		if ( '' === $key || ! isset( $this->known_auto_increment_columns[ $key ] ) ) {
+			return;
+		}
+
+		if ( null !== $column_name && 0 !== strcasecmp( $this->known_auto_increment_columns[ $key ], trim( $column_name ) ) ) {
+			return;
+		}
+
+		unset( $this->known_auto_increment_columns[ $key ] );
+	}
+
+	/**
+	 * Forget all known AUTO_INCREMENT metadata for a persistent table.
+	 *
+	 * @param string $table_name Table name.
+	 * @param bool   $temporary  Whether the table is temporary.
+	 * @return void
+	 */
+	private function forget_known_auto_increment_table( string $table_name, bool $temporary = false ): void {
+		$this->forget_known_auto_increment_column( $table_name, null, $temporary );
+	}
+
+	/**
+	 * Update a persistent table's known AUTO_INCREMENT mapping from metadata rows.
+	 *
+	 * @param string                         $table_name Table name.
+	 * @param array<int,array<string,mixed>> $metadata   Column metadata rows.
+	 * @param bool                           $temporary  Whether the table is temporary.
+	 * @return void
+	 */
+	private function update_known_auto_increment_columns_from_metadata( string $table_name, array $metadata, bool $temporary = false ): void {
+		if ( $temporary ) {
+			return;
+		}
+
+		$this->forget_known_auto_increment_table( $table_name, false );
+		foreach ( $metadata as $column ) {
+			if ( ! is_array( $column ) ) {
+				continue;
+			}
+			if (
+				! isset( $column['column_name'] )
+				|| ! isset( $column['extra'] )
+				|| false === stripos( (string) $column['extra'], 'auto_increment' )
+			) {
+				continue;
+			}
+
+			$this->remember_known_auto_increment_column( $table_name, (string) $column['column_name'], false );
+			return;
+		}
+	}
+
+	/**
+	 * Update a persistent table's known AUTO_INCREMENT mapping from one changed row.
+	 *
+	 * @param string              $table_name Table name.
+	 * @param array<string,mixed> $metadata   Column metadata row.
+	 * @param bool                $temporary  Whether the table is temporary.
+	 * @return void
+	 */
+	private function update_known_auto_increment_column_from_single_metadata_row( string $table_name, array $metadata, bool $temporary = false ): void {
+		if (
+			isset( $metadata['column_name'], $metadata['extra'] )
+			&& false !== stripos( (string) $metadata['extra'], 'auto_increment' )
+		) {
+			$this->remember_known_auto_increment_column( $table_name, (string) $metadata['column_name'], $temporary );
+			return;
+		}
+
+		$this->forget_known_auto_increment_table( $table_name, $temporary );
 	}
 
 	/**
@@ -699,27 +1269,35 @@ class WP_DuckDB_Driver {
 
 			switch ( $tokens[0]->id ) {
 				case WP_MySQL_Lexer::BEGIN_SYMBOL:
+					$this->commit_request_transaction();
 					$this->found_rows = 0;
 					return $this->execute_begin_transaction_statement( $tokens );
 				case WP_MySQL_Lexer::START_SYMBOL:
+					$this->commit_request_transaction();
 					$this->found_rows = 0;
 					return $this->execute_start_transaction_statement( $tokens );
 				case WP_MySQL_Lexer::COMMIT_SYMBOL:
+					$this->commit_request_transaction();
 					$this->found_rows = 0;
 					return $this->execute_commit_statement( $tokens );
 				case WP_MySQL_Lexer::ROLLBACK_SYMBOL:
+					$this->commit_request_transaction();
 					$this->found_rows = 0;
 					return $this->execute_rollback_statement( $tokens );
 				case WP_MySQL_Lexer::SAVEPOINT_SYMBOL:
+					$this->commit_request_transaction();
 					$this->found_rows = 0;
 					return $this->execute_savepoint_statement( $tokens );
 				case WP_MySQL_Lexer::RELEASE_SYMBOL:
+					$this->commit_request_transaction();
 					$this->found_rows = 0;
 					return $this->execute_release_savepoint_statement( $tokens );
 				case WP_MySQL_Lexer::LOCK_SYMBOL:
+					$this->commit_request_transaction();
 					$this->found_rows = 0;
 					return $this->execute_lock_tables_statement( $tokens );
 				case WP_MySQL_Lexer::UNLOCK_SYMBOL:
+					$this->commit_request_transaction();
 					$this->found_rows = 0;
 					return $this->execute_unlock_tables_statement( $tokens );
 				case WP_MySQL_Lexer::SET_SYMBOL:
@@ -731,27 +1309,35 @@ class WP_DuckDB_Driver {
 				case WP_MySQL_Lexer::SELECT_SYMBOL:
 					return $this->execute_select( $tokens );
 				case WP_MySQL_Lexer::CREATE_SYMBOL:
+					$this->commit_request_transaction();
 					$this->found_rows = 0;
 					return $this->execute_create( $tokens );
 				case WP_MySQL_Lexer::INSERT_SYMBOL:
+					$this->defer_request_transaction_for_current_statement();
 					$this->found_rows = 0;
 					return $this->execute_insert( $tokens );
 				case WP_MySQL_Lexer::REPLACE_SYMBOL:
+					$this->defer_request_transaction_for_current_statement();
 					$this->found_rows = 0;
 					return $this->execute_replace( $tokens );
 				case WP_MySQL_Lexer::UPDATE_SYMBOL:
+					$this->defer_request_transaction_for_current_statement();
 					$this->found_rows = 0;
 					return $this->execute_update( $tokens );
 				case WP_MySQL_Lexer::DELETE_SYMBOL:
+					$this->defer_request_transaction_for_current_statement();
 					$this->found_rows = 0;
 					return $this->execute_delete( $tokens );
 				case WP_MySQL_Lexer::DROP_SYMBOL:
+					$this->commit_request_transaction();
 					$this->found_rows = 0;
 					return $this->execute_drop( $tokens );
 				case WP_MySQL_Lexer::TRUNCATE_SYMBOL:
+					$this->commit_request_transaction();
 					$this->found_rows = 0;
 					return $this->execute_truncate_table( $tokens );
 				case WP_MySQL_Lexer::ALTER_SYMBOL:
+					$this->commit_request_transaction();
 					$this->found_rows = 0;
 					if ( $this->is_alter_view_statement( $tokens ) ) {
 						return $this->execute_alter_view( $tokens );
@@ -775,8 +1361,12 @@ class WP_DuckDB_Driver {
 			$profile_error    = true;
 			$this->found_rows = 0;
 			$this->rollback_failed_active_transaction( $e );
+			if ( $this->request_transaction_active && ! $this->connection->inTransaction() ) {
+				$this->request_transaction_active = false;
+			}
 			throw $e;
 		} finally {
+			$this->request_transaction_pending_write = false;
 			if ( $profile_enabled ) {
 				$this->record_query_profile(
 					$query,
@@ -873,6 +1463,31 @@ class WP_DuckDB_Driver {
 		$wordpress_posts_slug_status_lookup_result = $this->execute_wordpress_posts_slug_status_lookup_fast_path_statement( $normalized );
 		if ( null !== $wordpress_posts_slug_status_lookup_result ) {
 			return $wordpress_posts_slug_status_lookup_result;
+		}
+
+		$wordpress_posts_impossible_name_in_result = $this->execute_wordpress_posts_impossible_name_in_fast_path_statement( $normalized );
+		if ( null !== $wordpress_posts_impossible_name_in_result ) {
+			return $wordpress_posts_impossible_name_in_result;
+		}
+
+		$wordpress_posts_impossible_id_result = $this->execute_wordpress_posts_impossible_id_fast_path_statement( $normalized );
+		if ( null !== $wordpress_posts_impossible_id_result ) {
+			return $wordpress_posts_impossible_id_result;
+		}
+
+		$wordpress_posts_id_list_result = $this->execute_wordpress_posts_id_list_fast_path_statement( $normalized );
+		if ( null !== $wordpress_posts_id_list_result ) {
+			return $wordpress_posts_id_list_result;
+		}
+
+		$wordpress_posts_page_hierarchy_result = $this->execute_wordpress_posts_page_hierarchy_fast_path_statement( $normalized );
+		if ( null !== $wordpress_posts_page_hierarchy_result ) {
+			return $wordpress_posts_page_hierarchy_result;
+		}
+
+		$wordpress_posts_id_in_result = $this->execute_wordpress_posts_id_in_fast_path_statement( $normalized );
+		if ( null !== $wordpress_posts_id_in_result ) {
+			return $wordpress_posts_id_in_result;
 		}
 
 		$wordpress_term_taxonomy_lookup_result = $this->execute_wordpress_term_taxonomy_lookup_fast_path_statement( $normalized );
@@ -2187,11 +2802,11 @@ class WP_DuckDB_Driver {
 			. $this->connection->quote_identifier( $column_name )
 			. ' FROM '
 			. $this->connection->quote_identifier( $table_name )
-			. ' WHERE lower('
+			. ' WHERE '
 			. $this->connection->quote_identifier( 'option_name' )
-			. ') IS NOT DISTINCT FROM lower(CAST('
+			. ' COLLATE NOCASE = CAST('
 			. $option_name_sql
-			. ' AS VARCHAR))';
+			. ' AS VARCHAR)';
 
 		if ( preg_match( '/\s+LIMIT\s+1$/i', $normalized_query ) ) {
 			$sql .= ' LIMIT 1';
@@ -2216,10 +2831,11 @@ class WP_DuckDB_Driver {
 	 * @return WP_DuckDB_Result_Statement|null Fast-path result, or null.
 	 */
 	private function execute_wordpress_options_update_fast_path_statement( string $query ): ?WP_DuckDB_Result_Statement {
-		$literal_pattern = '\'(?:\\\\.|\'\'|[^\'\\\\])*\'';
+		$identifier_pattern = '`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_]*';
+		$literal_pattern    = '\'(?:\\\\.|\'\'|[^\'\\\\])*\'';
 		if (
 			! preg_match(
-				'/^\s*UPDATE\s+(?<table>`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_]*)\s+SET\s+(?<value_column>`option_value`|option_value)\s*=\s*(?<option_value>' . $literal_pattern . ')\s+WHERE\s+(?<name_column>`option_name`|option_name)\s*=\s*(?<option_name>' . $literal_pattern . ')\s*;?\s*$/i',
+				'/^\s*UPDATE\s+(?<table>' . $identifier_pattern . ')\s+SET\s+(?<first_column>' . $identifier_pattern . ')\s*=\s*(?<first_value>' . $literal_pattern . ')(?:\s*,\s*(?<second_column>' . $identifier_pattern . ')\s*=\s*(?<second_value>' . $literal_pattern . '))?\s+WHERE\s+(?<name_column>`option_name`|option_name)\s*=\s*(?<option_name>' . $literal_pattern . ')\s*;?\s*$/i',
 				$query,
 				$matches
 			)
@@ -2232,39 +2848,60 @@ class WP_DuckDB_Driver {
 			return null;
 		}
 
-		$value_column = strtolower( $this->fast_path_mysql_identifier_value( $matches['value_column'] ) );
-		if ( 'option_value' !== $value_column ) {
-			return null;
-		}
-
 		$name_column = strtolower( $this->fast_path_mysql_identifier_value( $matches['name_column'] ) );
 		if ( 'option_name' !== $name_column ) {
 			return null;
 		}
 
-		$option_value     = $this->fast_path_mysql_single_quoted_literal_value( $matches['option_value'] );
-		$option_name      = $this->fast_path_mysql_single_quoted_literal_value( $matches['option_name'] );
-		$option_value_sql = $this->connection->quote( $option_value );
-		$option_name_sql  = $this->connection->quote( $option_name );
-		$value_column_sql = $this->connection->quote_identifier( 'option_value' );
+		$assignments = array();
+		foreach ( array( 'first', 'second' ) as $slot ) {
+			if ( ! isset( $matches[ $slot . '_column' ] ) || '' === $matches[ $slot . '_column' ] ) {
+				continue;
+			}
+
+			$column_name = strtolower( $this->fast_path_mysql_identifier_value( $matches[ $slot . '_column' ] ) );
+			if ( 'option_value' !== $column_name && 'autoload' !== $column_name ) {
+				return null;
+			}
+
+			if ( isset( $assignments[ $column_name ] ) ) {
+				return null;
+			}
+
+			$assignments[ $column_name ] = $this->connection->quote(
+				$this->fast_path_mysql_single_quoted_literal_value( $matches[ $slot . '_value' ] )
+			);
+		}
+
+		if ( empty( $assignments ) || ! isset( $assignments['option_value'] ) ) {
+			return null;
+		}
+
+		$option_name_sql = $this->connection->quote( $this->fast_path_mysql_single_quoted_literal_value( $matches['option_name'] ) );
+		$set_sql         = array();
+		$changed_sql     = array();
+		foreach ( $assignments as $column_name => $value_sql ) {
+			$column_sql    = $this->connection->quote_identifier( $column_name );
+			$set_sql[]     = $column_sql . ' = ' . $value_sql;
+			$changed_sql[] = $this->byte_sensitive_update_value_sql( $column_sql )
+				. ' IS DISTINCT FROM '
+				. $this->byte_sensitive_update_value_sql( $value_sql );
+		}
 
 		$sql = 'UPDATE '
 			. $this->connection->quote_identifier( $table_name )
 			. ' SET '
-			. $value_column_sql
-			. ' = '
-			. $option_value_sql
-			. ' WHERE lower('
+			. implode( ', ', $set_sql )
+			. ' WHERE '
 			. $this->connection->quote_identifier( 'option_name' )
-			. ') IS NOT DISTINCT FROM lower(CAST('
+			. ' COLLATE NOCASE = CAST('
 			. $option_name_sql
-			. ' AS VARCHAR))'
+			. ' AS VARCHAR)'
 			. ' AND ('
-			. $this->byte_sensitive_update_value_sql( $value_column_sql )
-			. ' IS DISTINCT FROM '
-			. $this->byte_sensitive_update_value_sql( $option_value_sql )
+			. implode( ' OR ', $changed_sql )
 			. ')';
 
+		$this->begin_request_transaction_if_needed();
 		$this->found_rows = 0;
 		return $this->execute_duckdb_query( $sql, 'Failed to execute DuckDB UPDATE' );
 	}
@@ -2324,34 +2961,7 @@ class WP_DuckDB_Driver {
 		$table_reference = $this->resolve_write_table_reference( $requested_table_name );
 		$table_name      = $table_reference['table_name'];
 		$table_sql       = $this->connection->quote_identifier( $table_name );
-		$name_predicate  = 'lower('
-			. $this->connection->quote_identifier( 'option_name' )
-			. ') IS NOT DISTINCT FROM lower(CAST('
-			. $option_name_sql
-			. ' AS VARCHAR))';
-		$matched         = false !== $this->execute_duckdb_query(
-			'SELECT 1 FROM '
-				. $table_sql
-				. ' WHERE '
-				. $name_predicate
-				. ' LIMIT 1',
-			'Failed to inspect DuckDB duplicate key target'
-		)->fetch( PDO::FETCH_NUM );
-
-		$this->found_rows = 0;
-		if ( $matched ) {
-			return $this->execute_duckdb_query(
-				'UPDATE '
-					. $table_sql
-					. ' SET '
-					. implode( ', ', $assignments )
-					. ' WHERE '
-					. $name_predicate,
-				'Failed to execute DuckDB INSERT'
-			);
-		}
-
-		$sql = 'INSERT INTO '
+		$insert_sql      = 'INSERT INTO '
 			. $table_sql
 			. ' ('
 			. $this->connection->quote_identifier( 'option_name' )
@@ -2365,17 +2975,46 @@ class WP_DuckDB_Driver {
 			. $option_value_sql
 			. ', '
 			. $autoload_sql
-			. ')';
+			. ') ON CONFLICT ('
+			. $this->connection->quote_identifier( 'option_name' )
+			. ') DO NOTHING';
 
+		$this->begin_request_transaction_if_needed();
+		$this->found_rows = 0;
 		try {
-			return $this->execute_auto_increment_returning_write( $sql, 'Failed to execute DuckDB INSERT', 'option_id' );
+			$inserted = $this->execute_auto_increment_returning_write( $insert_sql, 'Failed to execute DuckDB INSERT', 'option_id' );
 		} catch ( WP_DuckDB_Driver_Exception $e ) {
-			if ( false !== stripos( $e->getMessage(), 'option_id' ) ) {
+			if (
+				false !== stripos( $e->getMessage(), 'option_id' )
+				|| false !== stripos( $e->getMessage(), 'conflict target' )
+				|| false !== stripos( $e->getMessage(), 'UNIQUE/PRIMARY KEY' )
+			) {
+				$this->rollback_request_transaction_after_swallowed_write_error( $e );
 				return null;
 			}
 
 			throw $e;
 		}
+
+		if ( $inserted->rowCount() > 0 ) {
+			return $inserted;
+		}
+
+		$name_predicate = ''
+			. $this->connection->quote_identifier( 'option_name' )
+			. ' COLLATE NOCASE = CAST('
+			. $option_name_sql
+			. ' AS VARCHAR)';
+
+		return $this->execute_duckdb_query(
+			'UPDATE '
+				. $table_sql
+				. ' SET '
+				. implode( ', ', $assignments )
+				. ' WHERE '
+				. $name_predicate,
+			'Failed to execute DuckDB INSERT'
+		);
 	}
 
 	/**
@@ -2457,7 +3096,7 @@ class WP_DuckDB_Driver {
 			return null;
 		}
 
-		if ( WP_DuckDB_Connection::class !== get_class( $this->connection ) ) {
+		if ( ! $this->connection_supports_returning_insert_id() ) {
 			return null;
 		}
 
@@ -2490,6 +3129,7 @@ class WP_DuckDB_Driver {
 			. $meta_value_sql
 			. ')';
 
+		$this->begin_request_transaction_if_needed();
 		$this->found_rows = 0;
 		return $this->execute_auto_increment_returning_write( $sql, 'Failed to execute DuckDB INSERT', 'umeta_id' );
 	}
@@ -2683,6 +3323,349 @@ class WP_DuckDB_Driver {
 	}
 
 	/**
+	 * Return WordPress' impossible block-template posts lookup without touching DuckDB.
+	 *
+	 * WordPress can issue posts-table ID lookups that include "AND ( 0 = 1 )"
+	 * when a block-template candidate list has no eligible post types. The exact
+	 * shape is common on front-page requests and is guaranteed to return no rows.
+	 *
+	 * @param string $normalized_query Normalized MySQL query.
+	 * @return WP_DuckDB_Result_Statement|null Fast-path result, or null.
+	 */
+	private function execute_wordpress_posts_impossible_name_in_fast_path_statement( string $normalized_query ): ?WP_DuckDB_Result_Statement {
+		$identifier_pattern = '`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_]*';
+		$literal_pattern    = '\'(?:\\\\.|\'\'|[^\'\\\\])*\'';
+		if (
+			! preg_match(
+				'/^SELECT\s+(?<select_table>' . $identifier_pattern . ')\s*\.\s*(?<select_column>`ID`|ID)\s+FROM\s+(?<from_table>' . $identifier_pattern . ')\s+WHERE\s+1\s*=\s*1\s+AND\s+(?<name_table>' . $identifier_pattern . ')\s*\.\s*(?<name_column>`post_name`|post_name)\s+IN\s*\(\s*(?<post_names>' . $literal_pattern . '(?:\s*,\s*' . $literal_pattern . ')*)\s*\)\s+AND\s+\(\s*0\s*=\s*1\s*\)\s+AND\s+(?<type_table>' . $identifier_pattern . ')\s*\.\s*(?<type_column>`post_type`|post_type)\s*=\s*' . $literal_pattern . '\s+AND\s+\(\(\s*(?<status_table>' . $identifier_pattern . ')\s*\.\s*(?<status_column>`post_status`|post_status)\s*=\s*' . $literal_pattern . '\s*\)\)\s+GROUP\s+BY\s+(?<group_table>' . $identifier_pattern . ')\s*\.\s*(?<group_column>`ID`|ID)\s+ORDER\s+BY\s+(?<order_table>' . $identifier_pattern . ')\s*\.\s*(?<order_column>`post_date`|post_date)\s+(?<order_dir>ASC|DESC)\s+LIMIT\s+(?<offset>[0-9]+|\'[0-9]+\')\s*,\s*(?<limit>[0-9]+|\'[0-9]+\')$/i',
+				$normalized_query,
+				$matches
+			)
+		) {
+			return null;
+		}
+
+		$table_name = $this->fast_path_mysql_identifier_value( $matches['from_table'] );
+		if ( ! $this->is_wordpress_posts_table_name( $table_name ) ) {
+			return null;
+		}
+
+		foreach ( array( 'select_table', 'name_table', 'type_table', 'status_table', 'group_table', 'order_table' ) as $table_match ) {
+			if ( ! $this->fast_path_identifier_matches( $table_name, $matches[ $table_match ] ) ) {
+				return null;
+			}
+		}
+
+		if (
+			! $this->fast_path_identifier_matches( 'ID', $matches['select_column'] )
+			|| ! $this->fast_path_identifier_matches( 'post_name', $matches['name_column'] )
+			|| ! $this->fast_path_identifier_matches( 'post_type', $matches['type_column'] )
+			|| ! $this->fast_path_identifier_matches( 'post_status', $matches['status_column'] )
+			|| ! $this->fast_path_identifier_matches( 'ID', $matches['group_column'] )
+			|| ! $this->fast_path_identifier_matches( 'post_date', $matches['order_column'] )
+			|| null === $this->fast_path_mysql_unsigned_integer_literal_value( $matches['offset'] )
+			|| null === $this->fast_path_mysql_unsigned_integer_literal_value( $matches['limit'] )
+		) {
+			return null;
+		}
+
+		$this->found_rows = 0;
+		return new WP_DuckDB_Result_Statement(
+			array( 'ID' ),
+			array(),
+			0,
+			$this->wordpress_direct_column_result_metadata( $table_name, 'ID' )
+		);
+	}
+
+	/**
+	 * Return WordPress' impossible posts ID lookup without touching DuckDB.
+	 *
+	 * @param string $normalized_query Normalized MySQL query.
+	 * @return WP_DuckDB_Result_Statement|null Fast-path result, or null.
+	 */
+	private function execute_wordpress_posts_impossible_id_fast_path_statement( string $normalized_query ): ?WP_DuckDB_Result_Statement {
+		$identifier_pattern = '`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_]*';
+		$literal_pattern    = '\'(?:\\\\.|\'\'|[^\'\\\\])*\'';
+		if (
+			! preg_match(
+				'/^SELECT\s+(?<select_table>' . $identifier_pattern . ')\s*\.\s*(?<select_column>`ID`|ID)\s+FROM\s+(?<from_table>' . $identifier_pattern . ')\s+WHERE\s+1\s*=\s*1\s+AND\s+\(\s*0\s*=\s*1\s*\)\s+AND\s+(?<type_table>' . $identifier_pattern . ')\s*\.\s*(?<type_column>`post_type`|post_type)\s*=\s*' . $literal_pattern . '\s+AND\s+\(\(\s*(?<status_table>' . $identifier_pattern . ')\s*\.\s*(?<status_column>`post_status`|post_status)\s*=\s*' . $literal_pattern . '\s*\)\)\s+GROUP\s+BY\s+(?<group_table>' . $identifier_pattern . ')\s*\.\s*(?<group_column>`ID`|ID)\s+ORDER\s+BY\s+(?<order_table>' . $identifier_pattern . ')\s*\.\s*(?<order_column>`post_date`|post_date)\s+(?<order_dir>ASC|DESC)\s+LIMIT\s+(?<offset>[0-9]+|\'[0-9]+\')\s*,\s*(?<limit>[0-9]+|\'[0-9]+\')$/i',
+				$normalized_query,
+				$matches
+			)
+		) {
+			return null;
+		}
+
+		$table_name = $this->fast_path_mysql_identifier_value( $matches['from_table'] );
+		if ( ! $this->is_wordpress_posts_table_name( $table_name ) ) {
+			return null;
+		}
+
+		foreach ( array( 'select_table', 'type_table', 'status_table', 'group_table', 'order_table' ) as $table_match ) {
+			if ( ! $this->fast_path_identifier_matches( $table_name, $matches[ $table_match ] ) ) {
+				return null;
+			}
+		}
+
+		if (
+			! $this->fast_path_identifier_matches( 'ID', $matches['select_column'] )
+			|| ! $this->fast_path_identifier_matches( 'post_type', $matches['type_column'] )
+			|| ! $this->fast_path_identifier_matches( 'post_status', $matches['status_column'] )
+			|| ! $this->fast_path_identifier_matches( 'ID', $matches['group_column'] )
+			|| ! $this->fast_path_identifier_matches( 'post_date', $matches['order_column'] )
+			|| null === $this->fast_path_mysql_unsigned_integer_literal_value( $matches['offset'] )
+			|| null === $this->fast_path_mysql_unsigned_integer_literal_value( $matches['limit'] )
+		) {
+			return null;
+		}
+
+		$this->found_rows = 0;
+		return new WP_DuckDB_Result_Statement(
+			array( 'ID' ),
+			array(),
+			0,
+			$this->wordpress_direct_column_result_metadata( $table_name, 'ID' )
+		);
+	}
+
+	/**
+	 * Execute WordPress' common posts ID list query without parser/metadata fanout.
+	 *
+	 * @param string $normalized_query Normalized MySQL query.
+	 * @return WP_DuckDB_Result_Statement|null Fast-path result, or null.
+	 */
+	private function execute_wordpress_posts_id_list_fast_path_statement( string $normalized_query ): ?WP_DuckDB_Result_Statement {
+		$identifier_pattern = '`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_]*';
+		$literal_pattern    = '\'(?:\\\\.|\'\'|[^\'\\\\])*\'';
+		if (
+			! preg_match(
+				'/^SELECT\s+(?<calc>SQL_CALC_FOUND_ROWS\s+)?(?<select_table>' . $identifier_pattern . ')\s*\.\s*(?<select_column>`ID`|ID)\s+FROM\s+(?<from_table>' . $identifier_pattern . ')\s+WHERE\s+1\s*=\s*1\s+AND\s+(?:\(\s*\(\s*)?(?<type_table>' . $identifier_pattern . ')\s*\.\s*(?<type_column>`post_type`|post_type)\s*=\s*(?<post_type>' . $literal_pattern . ')\s+AND\s+(?:\(\s*){1,2}(?<status_table>' . $identifier_pattern . ')\s*\.\s*(?<status_column>`post_status`|post_status)\s*=\s*(?<post_status>' . $literal_pattern . ')\s*(?:\)\s*){2,3}\s+ORDER\s+BY\s+(?<order_table>' . $identifier_pattern . ')\s*\.\s*(?<order_column>`ID`|ID|`post_date`|post_date)\s+(?<order_dir>ASC|DESC)\s+LIMIT\s+(?<offset>[0-9]+|\'[0-9]+\')\s*,\s*(?<limit>[0-9]+|\'[0-9]+\')$/i',
+				$normalized_query,
+				$matches
+			)
+		) {
+			return null;
+		}
+
+		$table_name = $this->fast_path_mysql_identifier_value( $matches['from_table'] );
+		if ( ! $this->is_wordpress_posts_table_name( $table_name ) ) {
+			return null;
+		}
+
+		foreach ( array( 'select_table', 'type_table', 'status_table', 'order_table' ) as $table_match ) {
+			if ( ! $this->fast_path_identifier_matches( $table_name, $matches[ $table_match ] ) ) {
+				return null;
+			}
+		}
+
+		if (
+			! $this->fast_path_identifier_matches( 'ID', $matches['select_column'] )
+			|| ! $this->fast_path_identifier_matches( 'post_type', $matches['type_column'] )
+			|| ! $this->fast_path_identifier_matches( 'post_status', $matches['status_column'] )
+		) {
+			return null;
+		}
+
+		$order_column = $this->fast_path_mysql_identifier_value( $matches['order_column'] );
+		if ( ! in_array( strtolower( $order_column ), array( 'id', 'post_date' ), true ) ) {
+			return null;
+		}
+
+		$offset = $this->fast_path_mysql_unsigned_integer_literal_value( $matches['offset'] );
+		$limit  = $this->fast_path_mysql_unsigned_integer_literal_value( $matches['limit'] );
+		if ( null === $offset || null === $limit ) {
+			return null;
+		}
+
+		$where_sql = $this->connection->quote_identifier( 'post_type' )
+			. ' = '
+			. $this->connection->quote( $this->fast_path_mysql_single_quoted_literal_value( $matches['post_type'] ) )
+			. ' AND '
+			. $this->connection->quote_identifier( 'post_status' )
+			. ' = '
+			. $this->connection->quote( $this->fast_path_mysql_single_quoted_literal_value( $matches['post_status'] ) );
+
+		$uses_calc       = isset( $matches['calc'] ) && '' !== $matches['calc'];
+		$order_direction = strtoupper( $matches['order_dir'] );
+		$sql             = 'SELECT '
+			. $this->connection->quote_identifier( 'ID' );
+		if ( $uses_calc && 0 === $offset && $limit > 0 ) {
+			$sql .= ', COUNT(*) OVER() AS ' . $this->connection->quote_identifier( '__wp_duckdb_found_rows' );
+		} elseif ( $uses_calc ) {
+			$count_statement  = $this->execute_duckdb_query(
+				'SELECT COUNT(*) AS cnt FROM '
+					. $this->connection->quote_identifier( $table_name )
+					. ' WHERE '
+					. $where_sql,
+				'Failed to count DuckDB SQL_CALC_FOUND_ROWS rows'
+			);
+			$this->found_rows = (int) $count_statement->fetchColumn();
+		}
+
+		$sql .= ' FROM '
+			. $this->connection->quote_identifier( $table_name )
+			. ' WHERE '
+			. $where_sql
+			. ' ORDER BY '
+			. $this->connection->quote_identifier( $order_column )
+			. ' '
+			. $order_direction;
+		if ( 0 !== strcasecmp( 'ID', $order_column ) ) {
+			$sql .= ', ' . $this->connection->quote_identifier( 'ID' ) . ( 'DESC' === $order_direction ? ' DESC' : ' ASC' );
+		}
+		$sql .= ' LIMIT ' . (string) $limit . ' OFFSET ' . (string) $offset;
+
+		$result = $this->execute_duckdb_query( $sql, 'Unsupported DuckDB MySQL-emulation SELECT statement' );
+		if ( $uses_calc && 0 === $offset && $limit > 0 ) {
+			$rows             = array();
+			$this->found_rows = 0;
+			foreach ( $result->fetchAll( PDO::FETCH_NUM ) as $row ) {
+				if ( isset( $row[1] ) ) {
+					$this->found_rows = (int) $row[1];
+				}
+				$rows[] = array( $row[0] ?? null );
+			}
+
+			return new WP_DuckDB_Result_Statement(
+				array( 'ID' ),
+				$rows,
+				0,
+				$this->wordpress_direct_column_result_metadata( $table_name, 'ID' )
+			);
+		}
+
+		if ( ! $uses_calc ) {
+			$this->found_rows = $sql;
+		}
+
+		return $this->apply_result_column_metadata(
+			$result,
+			$this->wordpress_direct_column_result_metadata( $table_name, 'ID' )
+		);
+	}
+
+	/**
+	 * Execute WordPress' front-page published page hierarchy query without parser fanout.
+	 *
+	 * @param string $normalized_query Normalized MySQL query.
+	 * @return WP_DuckDB_Result_Statement|null Fast-path result, or null.
+	 */
+	private function execute_wordpress_posts_page_hierarchy_fast_path_statement( string $normalized_query ): ?WP_DuckDB_Result_Statement {
+		$identifier_pattern = '`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_]*';
+		$literal_pattern    = '\'(?:\\\\.|\'\'|[^\'\\\\])*\'';
+		if (
+			! preg_match(
+				'/^SELECT\s+(?<select_table>' . $identifier_pattern . ')\s*\.\s*\*\s+FROM\s+(?<from_table>' . $identifier_pattern . ')\s+WHERE\s+1\s*=\s*1\s+AND\s+(?<type_table>' . $identifier_pattern . ')\s*\.\s*(?<type_column>`post_type`|post_type)\s*=\s*(?<post_type>' . $literal_pattern . ')\s+AND\s+\(\(\s*(?<status_table>' . $identifier_pattern . ')\s*\.\s*(?<status_column>`post_status`|post_status)\s*=\s*(?<post_status>' . $literal_pattern . ')\s*\)\)\s+ORDER\s+BY\s+(?<menu_table>' . $identifier_pattern . ')\s*\.\s*(?<menu_column>`menu_order`|menu_order)\s+ASC\s*,\s*(?<title_table>' . $identifier_pattern . ')\s*\.\s*(?<title_column>`post_title`|post_title)\s+ASC$/i',
+				$normalized_query,
+				$matches
+			)
+		) {
+			return null;
+		}
+
+		$table_name = $this->fast_path_mysql_identifier_value( $matches['from_table'] );
+		if ( ! $this->is_wordpress_posts_table_name( $table_name ) ) {
+			return null;
+		}
+
+		foreach ( array( 'select_table', 'type_table', 'status_table', 'menu_table', 'title_table' ) as $table_match ) {
+			if ( ! $this->fast_path_identifier_matches( $table_name, $matches[ $table_match ] ) ) {
+				return null;
+			}
+		}
+
+		if (
+			! $this->fast_path_identifier_matches( 'post_type', $matches['type_column'] )
+			|| ! $this->fast_path_identifier_matches( 'post_status', $matches['status_column'] )
+			|| ! $this->fast_path_identifier_matches( 'menu_order', $matches['menu_column'] )
+			|| ! $this->fast_path_identifier_matches( 'post_title', $matches['title_column'] )
+		) {
+			return null;
+		}
+
+		$sql = 'SELECT * FROM '
+			. $this->connection->quote_identifier( $table_name )
+			. ' WHERE '
+			. $this->connection->quote_identifier( 'post_type' )
+			. ' = '
+			. $this->connection->quote( $this->fast_path_mysql_single_quoted_literal_value( $matches['post_type'] ) )
+			. ' AND '
+			. $this->connection->quote_identifier( 'post_status' )
+			. ' = '
+			. $this->connection->quote( $this->fast_path_mysql_single_quoted_literal_value( $matches['post_status'] ) )
+			. ' ORDER BY '
+			. $this->connection->quote_identifier( 'menu_order' )
+			. ' ASC, '
+			. $this->connection->quote_identifier( 'post_title' )
+			. ' ASC';
+
+		$result           = $this->execute_duckdb_query( $sql, 'Unsupported DuckDB MySQL-emulation SELECT statement' );
+		$this->found_rows = $sql;
+
+		return $this->apply_result_column_metadata(
+			$result,
+			$this->wordpress_result_column_metadata_from_result( $table_name, $result )
+		);
+	}
+
+	/**
+	 * Execute WordPress' post-cache priming wildcard lookup without metadata fanout.
+	 *
+	 * @param string $normalized_query Normalized MySQL query.
+	 * @return WP_DuckDB_Result_Statement|null Fast-path result, or null.
+	 */
+	private function execute_wordpress_posts_id_in_fast_path_statement( string $normalized_query ): ?WP_DuckDB_Result_Statement {
+		$identifier_pattern = '`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_]*';
+		if (
+			! preg_match(
+				'/^SELECT\s+(?<select_table>' . $identifier_pattern . ')\s*\.\s*\*\s+FROM\s+(?<from_table>' . $identifier_pattern . ')\s+WHERE\s+(?<id_column>`ID`|ID)\s+IN\s*\(\s*(?<ids>[0-9]+(?:\s*,\s*[0-9]+)*)\s*\)$/i',
+				$normalized_query,
+				$matches
+			)
+		) {
+			return null;
+		}
+
+		$table_name = $this->fast_path_mysql_identifier_value( $matches['from_table'] );
+		if (
+			! $this->is_wordpress_posts_table_name( $table_name )
+			|| ! $this->fast_path_identifier_matches( $table_name, $matches['select_table'] )
+			|| ! $this->fast_path_identifier_matches( 'ID', $matches['id_column'] )
+		) {
+			return null;
+		}
+
+		$ids = array();
+		foreach ( preg_split( '/\s*,\s*/', trim( $matches['ids'] ) ) as $id_literal ) {
+			$id = $this->fast_path_mysql_unsigned_integer_literal_value( $id_literal );
+			if ( null === $id ) {
+				return null;
+			}
+			$ids[] = $id;
+		}
+		if ( count( $ids ) === 0 ) {
+			return null;
+		}
+
+		$sql = 'SELECT * FROM '
+			. $this->connection->quote_identifier( $table_name )
+			. ' WHERE '
+			. $this->connection->quote_identifier( 'ID' )
+			. ' IN ('
+			. implode( ', ', array_map( 'strval', $ids ) )
+			. ')';
+
+		$result           = $this->execute_duckdb_query( $sql, 'Unsupported DuckDB MySQL-emulation SELECT statement' );
+		$this->found_rows = $sql;
+
+		return $this->apply_result_column_metadata(
+			$result,
+			$this->wordpress_result_column_metadata_from_result( $table_name, $result )
+		);
+	}
+
+	/**
 	 * Execute WordPress' hot term + term_taxonomy lookup without full parser fanout.
 	 *
 	 * @param string $normalized_query Normalized MySQL query.
@@ -2732,36 +3715,6 @@ class WP_DuckDB_Driver {
 			}
 		}
 
-		$terms_reference = $this->resolve_visible_user_table_reference( $requested_terms_table );
-		if ( null === $terms_reference ) {
-			return null;
-		}
-
-		$taxonomy_reference = $this->resolve_visible_user_table_reference( $requested_taxonomy_table );
-		if ( null === $taxonomy_reference ) {
-			return null;
-		}
-
-		$terms_column_meta = $this->wordpress_table_wildcard_result_column_metadata(
-			$terms_reference['table_name'],
-			$terms_reference['temporary'],
-			$terms_alias
-		);
-		if ( null === $terms_column_meta ) {
-			return null;
-		}
-
-		$taxonomy_column_meta = $this->wordpress_table_wildcard_result_column_metadata(
-			$taxonomy_reference['table_name'],
-			$taxonomy_reference['temporary'],
-			$taxonomy_alias
-		);
-		if ( null === $taxonomy_column_meta ) {
-			return null;
-		}
-
-		$column_meta = array_merge( $terms_column_meta, $taxonomy_column_meta );
-
 		$term_ids = array();
 		foreach ( preg_split( '/\s*,\s*/', trim( $matches['term_ids'] ) ) as $id_literal ) {
 			$term_id = $this->fast_path_mysql_unsigned_integer_literal_value( $id_literal );
@@ -2781,11 +3734,11 @@ class WP_DuckDB_Driver {
 			. '.*, '
 			. $taxonomy_alias_sql
 			. '.* FROM '
-			. $this->connection->quote_identifier( $terms_reference['table_name'] )
+			. $this->connection->quote_identifier( $requested_terms_table )
 			. ' AS '
 			. $terms_alias_sql
 			. ' INNER JOIN '
-			. $this->connection->quote_identifier( $taxonomy_reference['table_name'] )
+			. $this->connection->quote_identifier( $requested_taxonomy_table )
 			. ' AS '
 			. $taxonomy_alias_sql
 			. ' ON '
@@ -2807,7 +3760,16 @@ class WP_DuckDB_Driver {
 		$result           = $this->execute_duckdb_query( $sql, 'Unsupported DuckDB MySQL-emulation SELECT statement' );
 		$this->found_rows = $sql;
 
-		return $this->apply_result_column_metadata( $result, $column_meta );
+		return $this->apply_result_column_metadata(
+			$result,
+			$this->wordpress_term_taxonomy_lookup_result_metadata_from_result(
+				$requested_terms_table,
+				$terms_alias,
+				$requested_taxonomy_table,
+				$taxonomy_alias,
+				$result
+			)
+		);
 	}
 
 	/**
@@ -2998,7 +3960,7 @@ class WP_DuckDB_Driver {
 		$literal_pattern    = '\'(?:\\\\.|\'\'|[^\'\\\\\s])*\'';
 		if (
 			! preg_match(
-				'/^SELECT\s+DISTINCT\s+(?<terms_select_alias>' . $identifier_pattern . ')\s*\.\s*(?<term_id_column>`term_id`|term_id)\s+FROM\s+(?<terms_table>' . $identifier_pattern . ')\s+AS\s+(?<terms_alias>' . $identifier_pattern . ')\s+INNER\s+JOIN\s+(?<taxonomy_table>' . $identifier_pattern . ')\s+AS\s+(?<taxonomy_alias>' . $identifier_pattern . ')\s+ON\s+(?<terms_on_alias>' . $identifier_pattern . ')\s*\.\s*(?<terms_on_column>`term_id`|term_id)\s*=\s*(?<taxonomy_on_alias>' . $identifier_pattern . ')\s*\.\s*(?<taxonomy_on_column>`term_id`|term_id)\s+INNER\s+JOIN\s+(?<relationships_table>' . $identifier_pattern . ')\s+AS\s+(?<relationships_alias>' . $identifier_pattern . ')\s+ON\s+(?<relationships_on_alias>' . $identifier_pattern . ')\s*\.\s*(?<relationships_on_column>`term_taxonomy_id`|term_taxonomy_id)\s*=\s*(?<taxonomy_relationship_alias>' . $identifier_pattern . ')\s*\.\s*(?<taxonomy_relationship_column>`term_taxonomy_id`|term_taxonomy_id)\s+WHERE\s+(?<taxonomy_where_alias>' . $identifier_pattern . ')\s*\.\s*(?<taxonomy_where_column>`taxonomy`|taxonomy)\s+IN\s*\(\s*(?<taxonomies>' . $literal_pattern . '(?:\s*,\s*' . $literal_pattern . ')*)\s*\)\s+AND\s+(?<relationships_where_alias>' . $identifier_pattern . ')\s*\.\s*(?<relationships_where_column>`object_id`|object_id)\s+IN\s*\(\s*(?<object_ids>[0-9]+(?:\s*,\s*[0-9]+)*)\s*\)\s+ORDER\s+BY\s+(?<order_alias>' . $identifier_pattern . ')\s*\.\s*(?<order_column>`name`|name)\s+ASC$/i',
+				'/^SELECT\s+DISTINCT\s+(?<terms_select_alias>' . $identifier_pattern . ')\s*\.\s*(?<term_id_column>`term_id`|term_id)(?:\s*,\s*(?<object_select_alias>' . $identifier_pattern . ')\s*\.\s*(?<object_id_select_column>`object_id`|object_id))?\s+FROM\s+(?<terms_table>' . $identifier_pattern . ')\s+AS\s+(?<terms_alias>' . $identifier_pattern . ')\s+INNER\s+JOIN\s+(?<taxonomy_table>' . $identifier_pattern . ')\s+AS\s+(?<taxonomy_alias>' . $identifier_pattern . ')\s+ON\s+(?<terms_on_alias>' . $identifier_pattern . ')\s*\.\s*(?<terms_on_column>`term_id`|term_id)\s*=\s*(?<taxonomy_on_alias>' . $identifier_pattern . ')\s*\.\s*(?<taxonomy_on_column>`term_id`|term_id)\s+INNER\s+JOIN\s+(?<relationships_table>' . $identifier_pattern . ')\s+AS\s+(?<relationships_alias>' . $identifier_pattern . ')\s+ON\s+(?<relationships_on_alias>' . $identifier_pattern . ')\s*\.\s*(?<relationships_on_column>`term_taxonomy_id`|term_taxonomy_id)\s*=\s*(?<taxonomy_relationship_alias>' . $identifier_pattern . ')\s*\.\s*(?<taxonomy_relationship_column>`term_taxonomy_id`|term_taxonomy_id)\s+WHERE\s+(?<taxonomy_where_alias>' . $identifier_pattern . ')\s*\.\s*(?<taxonomy_where_column>`taxonomy`|taxonomy)\s+IN\s*\(\s*(?<taxonomies>' . $literal_pattern . '(?:\s*,\s*' . $literal_pattern . ')*)\s*\)\s+AND\s+(?<relationships_where_alias>' . $identifier_pattern . ')\s*\.\s*(?<relationships_where_column>`object_id`|object_id)\s+IN\s*\(\s*(?<object_ids>[0-9]+(?:\s*,\s*[0-9]+)*)\s*\)\s+ORDER\s+BY\s+(?<order_alias>' . $identifier_pattern . ')\s*\.\s*(?<order_column>`name`|name)\s+ASC$/i',
 				$normalized_query,
 				$matches
 			)
@@ -3029,6 +3991,7 @@ class WP_DuckDB_Driver {
 			|| ! $this->fast_path_identifier_matches( $taxonomy_alias, $matches['taxonomy_where_alias'] )
 			|| ! $this->fast_path_identifier_matches( $relationships_alias, $matches['relationships_on_alias'] )
 			|| ! $this->fast_path_identifier_matches( $relationships_alias, $matches['relationships_where_alias'] )
+			|| ( isset( $matches['object_select_alias'] ) && '' !== $matches['object_select_alias'] && ! $this->fast_path_identifier_matches( $relationships_alias, $matches['object_select_alias'] ) )
 		) {
 			return null;
 		}
@@ -3043,6 +4006,9 @@ class WP_DuckDB_Driver {
 			'relationships_where_column'   => 'object_id',
 			'order_column'                 => 'name',
 		);
+		if ( isset( $matches['object_id_select_column'] ) && '' !== $matches['object_id_select_column'] ) {
+			$expected_columns['object_id_select_column'] = 'object_id';
+		}
 		foreach ( $expected_columns as $match_name => $column_name ) {
 			if ( 0 !== strcasecmp( $column_name, $this->fast_path_mysql_identifier_value( $matches[ $match_name ] ) ) ) {
 				return null;
@@ -3078,16 +4044,34 @@ class WP_DuckDB_Driver {
 		$sql                     = 'SELECT DISTINCT '
 			. $terms_alias_sql
 			. '.'
-			. $this->connection->quote_identifier( 'term_id' )
-			. ' FROM '
-			. $this->connection->quote_identifier( $terms_table )
+			. $this->connection->quote_identifier( 'term_id' );
+		if ( isset( $matches['object_id_select_column'] ) && '' !== $matches['object_id_select_column'] ) {
+			$sql .= ', '
+				. $relationships_alias_sql
+				. '.'
+				. $this->connection->quote_identifier( 'object_id' );
+		}
+		$sql .= ' FROM '
+			. $this->connection->quote_identifier( $relationships_table )
 			. ' AS '
-			. $terms_alias_sql
+			. $relationships_alias_sql
 			. ' INNER JOIN '
 			. $this->connection->quote_identifier( $taxonomy_table )
 			. ' AS '
 			. $taxonomy_alias_sql
 			. ' ON '
+			. $relationships_alias_sql
+			. '.'
+			. $this->connection->quote_identifier( 'term_taxonomy_id' )
+			. ' = '
+			. $taxonomy_alias_sql
+			. '.'
+			. $this->connection->quote_identifier( 'term_taxonomy_id' )
+			. ' INNER JOIN '
+			. $this->connection->quote_identifier( $terms_table )
+			. ' AS '
+			. $terms_alias_sql
+			. ' ON '
 			. $terms_alias_sql
 			. '.'
 			. $this->connection->quote_identifier( 'term_id' )
@@ -3095,18 +4079,6 @@ class WP_DuckDB_Driver {
 			. $taxonomy_alias_sql
 			. '.'
 			. $this->connection->quote_identifier( 'term_id' )
-			. ' INNER JOIN '
-			. $this->connection->quote_identifier( $relationships_table )
-			. ' AS '
-			. $relationships_alias_sql
-			. ' ON '
-			. $relationships_alias_sql
-			. '.'
-			. $this->connection->quote_identifier( 'term_taxonomy_id' )
-			. ' = '
-			. $taxonomy_alias_sql
-			. '.'
-			. $this->connection->quote_identifier( 'term_taxonomy_id' )
 			. ' WHERE '
 			. $taxonomy_alias_sql
 			. '.'
@@ -4041,6 +5013,17 @@ class WP_DuckDB_Driver {
 	 * @return array<int,array<string,mixed>> Column metadata.
 	 */
 	private function wordpress_options_single_column_result_metadata( string $table_name, string $column_name ): array {
+		return $this->wordpress_direct_column_result_metadata( $table_name, $column_name );
+	}
+
+	/**
+	 * Build minimal MySQL-shaped metadata for one direct table column.
+	 *
+	 * @param string $table_name  Table name.
+	 * @param string $column_name Selected column name.
+	 * @return array<int,array<string,mixed>> Column metadata.
+	 */
+	private function wordpress_direct_column_result_metadata( string $table_name, string $column_name ): array {
 		return array(
 			array(
 				'table'           => $table_name,
@@ -4050,6 +5033,71 @@ class WP_DuckDB_Driver {
 				'mysqli:db'       => $this->database,
 			),
 		);
+	}
+
+	/**
+	 * Build direct table metadata from result column names without table introspection.
+	 *
+	 * @param string                    $table_name Table name.
+	 * @param WP_DuckDB_Result_Statement $result    Query result.
+	 * @return array<int,array<string,mixed>> Column metadata.
+	 */
+	private function wordpress_result_column_metadata_from_result( string $table_name, WP_DuckDB_Result_Statement $result ): array {
+		$column_meta = array();
+		for ( $i = 0; $i < $result->columnCount(); ++$i ) {
+			$meta        = $result->getColumnMeta( $i );
+			$column_name = is_array( $meta ) && isset( $meta['name'] ) ? (string) $meta['name'] : '';
+			$column_meta[] = array(
+				'table'           => $table_name,
+				'name'            => $column_name,
+				'mysqli:orgname'  => $column_name,
+				'mysqli:orgtable' => $table_name,
+				'mysqli:db'       => $this->database,
+			);
+		}
+
+		return $column_meta;
+	}
+
+	/**
+	 * Build alias-aware metadata for the hot t.*, tt.* term-taxonomy lookup.
+	 *
+	 * @param string                     $terms_table    Terms table name.
+	 * @param string                     $terms_alias    Terms result alias.
+	 * @param string                     $taxonomy_table Taxonomy table name.
+	 * @param string                     $taxonomy_alias Taxonomy result alias.
+	 * @param WP_DuckDB_Result_Statement $result         Query result.
+	 * @return array<int,array<string,mixed>> Column metadata.
+	 */
+	private function wordpress_term_taxonomy_lookup_result_metadata_from_result( string $terms_table, string $terms_alias, string $taxonomy_table, string $taxonomy_alias, WP_DuckDB_Result_Statement $result ): array {
+		$taxonomy_offset = $result->columnCount();
+		for ( $i = 0; $i < $result->columnCount(); ++$i ) {
+			$meta        = $result->getColumnMeta( $i );
+			$column_name = is_array( $meta ) && isset( $meta['name'] ) ? (string) $meta['name'] : '';
+			if ( 0 === strcasecmp( 'term_taxonomy_id', $column_name ) ) {
+				$taxonomy_offset = $i;
+				break;
+			}
+		}
+
+		$column_meta = array();
+		for ( $i = 0; $i < $result->columnCount(); ++$i ) {
+			$meta        = $result->getColumnMeta( $i );
+			$column_name = is_array( $meta ) && isset( $meta['name'] ) ? (string) $meta['name'] : '';
+			$is_taxonomy = $i >= $taxonomy_offset;
+			$table_name  = $is_taxonomy ? $taxonomy_table : $terms_table;
+			$table_alias = $is_taxonomy ? $taxonomy_alias : $terms_alias;
+
+			$column_meta[] = array(
+				'table'           => $table_alias,
+				'name'            => $column_name,
+				'mysqli:orgname'  => $column_name,
+				'mysqli:orgtable' => $table_name,
+				'mysqli:db'       => $this->database,
+			);
+		}
+
+		return $column_meta;
 	}
 
 	/**
@@ -4437,12 +5485,159 @@ class WP_DuckDB_Driver {
 	}
 
 	/**
+	 * Clear cached schema metadata.
+	 *
+	 * @return void
+	 */
+	public function clear_metadata_caches(): void {
+		$this->clear_schema_metadata_cache();
+	}
+
+	/**
+	 * Get MySQL-facing column charset metadata rows for a table.
+	 *
+	 * This narrow metadata API is for the WordPress drop-in. It returns the
+	 * stored MySQL column metadata shape used by SHOW FULL COLUMNS without
+	 * executing a SQL-level SHOW statement internally.
+	 *
+	 * @param string $table_name MySQL table name.
+	 * @return array|false Column metadata rows, or false when unavailable.
+	 */
+	public function get_mysql_column_charset_metadata_for_table( string $table_name ) {
+		$table_name = trim( $table_name, "`\" \t\n\r\0\x0B" );
+		if ( '' === $table_name ) {
+			return false;
+		}
+
+		if ( false !== strpos( $table_name, '.' ) ) {
+			$table_name = substr( $table_name, strrpos( $table_name, '.' ) + 1 );
+			$table_name = trim( $table_name, "`\" \t\n\r\0\x0B" );
+			if ( '' === $table_name ) {
+				return false;
+			}
+		}
+
+		try {
+			$metadata_rows = $this->table_column_metadata_rows( $table_name, false );
+			if ( empty( $metadata_rows ) ) {
+				$metadata_rows = $this->table_column_metadata_rows( $table_name, true );
+			}
+		} catch ( Throwable $e ) {
+			return false;
+		}
+
+		return empty( $metadata_rows ) ? false : $metadata_rows;
+	}
+
+	/**
 	 * Close the underlying DuckDB connection.
 	 *
 	 * @return void
 	 */
 	public function close(): void {
+		$this->commit_request_transaction();
 		$this->connection->close();
+	}
+
+	/**
+	 * Commit a driver-opened request transaction, when active.
+	 *
+	 * @return void
+	 */
+	public function commit_request_transaction(): void {
+		if ( ! $this->request_transaction_active ) {
+			return;
+		}
+
+		$this->request_transaction_active = false;
+		if ( $this->connection->inTransaction() ) {
+			$this->connection->commit();
+			$this->last_duckdb_queries[] = 'COMMIT';
+		}
+	}
+
+	/**
+	 * Start a request-scoped transaction before DML when the option is enabled.
+	 *
+	 * @return void
+	 */
+	private function begin_request_transaction_if_needed(): void {
+		if ( ! $this->request_transaction_enabled || $this->connection->inTransaction() ) {
+			return;
+		}
+
+		$this->connection->beginTransaction();
+		$this->request_transaction_active = true;
+		$this->last_duckdb_queries[]      = 'BEGIN TRANSACTION';
+	}
+
+	/**
+	 * Mark the current top-level DML statement for deferred request transaction start.
+	 *
+	 * Metadata probes and compatibility fallbacks can legitimately fail before
+	 * the final user-table write. Deferring BEGIN keeps those probes from
+	 * poisoning the request transaction.
+	 *
+	 * @return void
+	 */
+	private function defer_request_transaction_for_current_statement(): void {
+		if ( ! $this->request_transaction_enabled || $this->connection->inTransaction() ) {
+			return;
+		}
+
+		$this->request_transaction_pending_write = true;
+	}
+
+	/**
+	 * Start a deferred request transaction when a translated write is about to run.
+	 *
+	 * @param string $sql DuckDB SQL.
+	 * @return void
+	 */
+	private function begin_deferred_request_transaction_for_write_sql( string $sql ): void {
+		if ( ! $this->request_transaction_pending_write || ! $this->is_request_transaction_write_sql( $sql ) ) {
+			return;
+		}
+
+		$this->request_transaction_pending_write = false;
+		$this->begin_request_transaction_if_needed();
+	}
+
+	/**
+	 * Check whether a translated SQL statement is user-table DML.
+	 *
+	 * @param string $sql DuckDB SQL.
+	 * @return bool Whether the statement should be batched.
+	 */
+	private function is_request_transaction_write_sql( string $sql ): bool {
+		return (bool) preg_match( '/^\s*(?:INSERT|UPDATE|DELETE|REPLACE)\b/i', $sql );
+	}
+
+	/**
+	 * Register a shutdown commit for request-scoped transactions.
+	 *
+	 * @return void
+	 */
+	private function register_request_transaction_shutdown_commit(): void {
+		if ( $this->request_transaction_shutdown_registered ) {
+			return;
+		}
+
+		register_shutdown_function( array( $this, 'commit_request_transaction_at_shutdown' ) );
+		$this->request_transaction_shutdown_registered = true;
+	}
+
+	/**
+	 * Commit a request transaction from PHP shutdown without fataling the request.
+	 *
+	 * @return void
+	 */
+	public function commit_request_transaction_at_shutdown(): void {
+		try {
+			$this->commit_request_transaction();
+		} catch ( Throwable $e ) {
+			error_log( '[duckdb-request-transaction-commit] ' . $e->getMessage() );
+		}
 	}
 
 	/**
@@ -4509,6 +5704,19 @@ class WP_DuckDB_Driver {
 		$this->connection->rollback();
 		$this->clear_schema_state_after_rollback();
 		$this->clear_emulated_savepoints();
+	}
+
+	/**
+	 * Roll back a request transaction after a swallowed native write probe error.
+	 *
+	 * @param Throwable $error Query failure.
+	 * @return void
+	 */
+	private function rollback_request_transaction_after_swallowed_write_error( Throwable $error ): void {
+		$this->rollback_failed_active_transaction( $error );
+		if ( $this->request_transaction_active && ! $this->connection->inTransaction() ) {
+			$this->request_transaction_active = false;
+		}
 	}
 
 	/**
@@ -19814,6 +21022,7 @@ class WP_DuckDB_Driver {
 		);
 
 		$this->clear_schema_metadata_cache( $table_name, $temporary );
+		$this->update_known_auto_increment_column_from_single_metadata_row( $table_name, $metadata, $temporary );
 	}
 
 	/**
@@ -19838,6 +21047,7 @@ class WP_DuckDB_Driver {
 		);
 
 		$this->clear_schema_metadata_cache( $table_name, $temporary );
+		$this->forget_known_auto_increment_column( $table_name, $column_name, $temporary );
 	}
 
 	/**
@@ -28068,11 +29278,16 @@ class WP_DuckDB_Driver {
 			return $value_sql;
 		}
 
-		$value_sql = $this->coerce_temporal_write_value_sql(
-			$data_type,
-			$value_sql,
-			$this->write_value_display_sql( $value_tokens, $value_sql )
-		);
+		$literal_temporal_sql = $this->static_temporal_literal_write_value_sql( $data_type, $value_tokens );
+		if ( null !== $literal_temporal_sql ) {
+			$value_sql = $literal_temporal_sql;
+		} else {
+			$value_sql = $this->coerce_temporal_write_value_sql(
+				$data_type,
+				$value_sql,
+				$this->write_value_display_sql( $value_tokens, $value_sql )
+			);
+		}
 
 		if (
 			$coalesce_non_strict_not_null
@@ -28811,6 +30026,115 @@ class WP_DuckDB_Driver {
 	 */
 	private function temporal_implicit_default( string $data_type ): ?string {
 		return self::TEMPORAL_IMPLICIT_DEFAULT_MAP[ $data_type ] ?? null;
+	}
+
+	/**
+	 * Return storage SQL for static canonical temporal literals.
+	 *
+	 * Most WordPress writes use already-normalized mysql-format date strings.
+	 * Avoiding the full runtime CASE/regexp/TRY_CAST expression keeps the common
+	 * path cheap while leaving noncanonical and invalid values on the compatibility
+	 * path that preserves MySQL SQL-mode behavior.
+	 *
+	 * @param string            $data_type    MySQL temporal data type.
+	 * @param WP_Parser_Token[] $value_tokens Value tokens.
+	 * @return string|null Quoted storage value, or null when the full path is required.
+	 */
+	private function static_temporal_literal_write_value_sql( string $data_type, array $value_tokens ): ?string {
+		if ( 1 !== count( $value_tokens ) ) {
+			return null;
+		}
+
+		$token = $value_tokens[0];
+		if ( WP_MySQL_Lexer::NULL_SYMBOL === $token->id || WP_MySQL_Lexer::NULL2_SYMBOL === $token->id ) {
+			return 'NULL';
+		}
+
+		if ( WP_MySQL_Lexer::SINGLE_QUOTED_TEXT !== $token->id && WP_MySQL_Lexer::DOUBLE_QUOTED_TEXT !== $token->id ) {
+			return null;
+		}
+
+		$value = $this->token_value( $token );
+		if ( '0000-00-00' === $value || '0000-00-00 00:00:00' === $value ) {
+			if ( $this->is_sql_mode_active( 'NO_ZERO_DATE' ) && $this->is_strict_sql_mode_active() ) {
+				return null;
+			}
+
+			return $this->connection->quote( 'date' === $data_type ? '0000-00-00' : '0000-00-00 00:00:00' );
+		}
+
+		$normalized_date = $this->normalized_static_temporal_date_literal( $value );
+		if ( null !== $normalized_date ) {
+			return $this->connection->quote( 'date' === $data_type ? $normalized_date : $normalized_date . ' 00:00:00' );
+		}
+
+		if ( 'date' === $data_type ) {
+			$normalized_datetime_date = $this->normalized_static_temporal_datetime_literal( $value, true );
+			return null === $normalized_datetime_date ? null : $this->connection->quote( $normalized_datetime_date );
+		}
+
+		$normalized_datetime = $this->normalized_static_temporal_datetime_literal( $value, false );
+		return null === $normalized_datetime ? null : $this->connection->quote( $normalized_datetime );
+	}
+
+	/**
+	 * Normalize a static YYYY-MM-DD literal when it is valid.
+	 *
+	 * @param string $value Literal value.
+	 * @return string|null Normalized date, or null for noncanonical/invalid input.
+	 */
+	private function normalized_static_temporal_date_literal( string $value ): ?string {
+		if ( 1 !== preg_match( '/\A([0-9]{4})-([0-9]{2})-([0-9]{2})\z/', $value, $matches ) ) {
+			return null;
+		}
+
+		$year  = (int) $matches[1];
+		$month = (int) $matches[2];
+		$day   = (int) $matches[3];
+		if ( 0 === $year || 0 === $month || 0 === $day || ! checkdate( $month, $day, $year ) ) {
+			return null;
+		}
+
+		return sprintf( '%04d-%02d-%02d', $year, $month, $day );
+	}
+
+	/**
+	 * Normalize a static datetime/timestamp literal when it is valid.
+	 *
+	 * @param string $value     Literal value.
+	 * @param bool   $date_only Whether only the date component should be returned.
+	 * @return string|null Normalized value, or null for noncanonical/invalid input.
+	 */
+	private function normalized_static_temporal_datetime_literal( string $value, bool $date_only ): ?string {
+		if (
+			1 !== preg_match(
+				'/\A([0-9]{4})-([0-9]{2})-([0-9]{2})(?:[ T]([0-9]{1,2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]+)?|T([0-9]{2}):([0-9]{2}):([0-9]{2})Z)\z/',
+				$value,
+				$matches
+			)
+		) {
+			return null;
+		}
+
+		$year  = (int) $matches[1];
+		$month = (int) $matches[2];
+		$day   = (int) $matches[3];
+		if ( 0 === $year || 0 === $month || 0 === $day || ! checkdate( $month, $day, $year ) ) {
+			return null;
+		}
+
+		if ( $date_only ) {
+			return sprintf( '%04d-%02d-%02d', $year, $month, $day );
+		}
+
+		$hour   = isset( $matches[4] ) && '' !== $matches[4] ? (int) $matches[4] : (int) $matches[7];
+		$minute = isset( $matches[5] ) && '' !== $matches[5] ? (int) $matches[5] : (int) $matches[8];
+		$second = isset( $matches[6] ) && '' !== $matches[6] ? (int) $matches[6] : (int) $matches[9];
+		if ( $hour > 23 || $minute > 59 || $second > 59 ) {
+			return null;
+		}
+
+		return sprintf( '%04d-%02d-%02d %02d:%02d:%02d', $year, $month, $day, $hour, $minute, $second );
 	}
 
 	/**
@@ -29671,17 +30995,6 @@ class WP_DuckDB_Driver {
 		}
 
 		return $this->join_sql_pieces( $pieces );
-	}
-
-	/**
-	 * Initialize DuckDB macros that emulate simple MySQL functions.
-	 */
-	private function initialize_session_macros(): void {
-		try {
-			$this->connection->query( 'CREATE OR REPLACE MACRO date_format(d, f) AS strftime(TRY_CAST(d AS TIMESTAMP), f)' );
-		} catch ( WP_DuckDB_Driver_Exception $e ) {
-			throw new WP_DuckDB_Driver_Exception( 'Failed to initialize DuckDB MySQL compatibility macros: ' . $e->getMessage(), 0, $e );
-		}
 	}
 
 	/**
@@ -34227,7 +35540,25 @@ class WP_DuckDB_Driver {
 	 * @param bool   $allow_on_duplicate_returning_insert_id Whether proven ODKU insert branches may use RETURNING.
 	 * @return WP_DuckDB_Result_Statement
 	 */
-	private function execute_auto_increment_write( string $table_name, string $sql, string $context, array $tokens = array(), ?int $table_index = null, bool $allow_on_duplicate_returning_insert_id = false ): WP_DuckDB_Result_Statement {
+		private function execute_auto_increment_write( string $table_name, string $sql, string $context, array $tokens = array(), ?int $table_index = null, bool $allow_on_duplicate_returning_insert_id = false ): WP_DuckDB_Result_Statement {
+			$known_column_name = $this->known_auto_increment_column_for_omitted_write( $table_name, $tokens, $table_index, $allow_on_duplicate_returning_insert_id );
+			if ( null !== $known_column_name ) {
+				try {
+					return $this->execute_auto_increment_returning_write(
+						$sql,
+						$context,
+						$known_column_name,
+						$this->sequence_name( $table_name, $known_column_name, false )
+					);
+				} catch ( WP_DuckDB_Driver_Exception $e ) {
+					if ( ! $this->is_missing_returning_column_exception( $e, $known_column_name ) ) {
+						throw $e;
+					}
+				$this->rollback_request_transaction_after_swallowed_write_error( $e );
+				$this->last_insert_id = 0;
+			}
+		}
+
 		$table_reference     = $this->resolve_visible_user_table_reference( $table_name );
 		$metadata            = null === $table_reference ? null : $this->auto_increment_metadata_for_table( $table_reference['table_name'], $table_reference['temporary'] );
 		$sequence_name       = null === $metadata ? null : $metadata['sequence_name'];
@@ -34240,7 +35571,9 @@ class WP_DuckDB_Driver {
 		$column_was_omitted  = null !== $metadata && null !== $table_index
 			? $this->auto_increment_column_omitted_from_write( $tokens, $table_index, $metadata['column_name'] )
 			: false;
-		$before              = null === $sequence_name || $column_was_omitted ? null : $this->sequence_currval( $sequence_name );
+		$before              = null === $sequence_name || $column_was_omitted || $this->connection->inTransaction()
+			? null
+			: $this->sequence_currval( $sequence_name );
 
 		$insert_ignore_write                  = null !== $metadata
 			&& null !== $table_reference
@@ -34266,7 +35599,7 @@ class WP_DuckDB_Driver {
 			&& null !== $table_reference
 			&& null !== $table_index
 			&& $column_was_omitted
-			&& WP_DuckDB_Connection::class === get_class( $this->connection )
+			&& $this->connection_supports_returning_insert_id()
 			&& (
 				$allow_on_duplicate_returning_insert_id
 				|| ! $this->is_insert_on_duplicate_key_update_write( $tokens, $table_index )
@@ -34285,14 +35618,16 @@ class WP_DuckDB_Driver {
 			throw new WP_DuckDB_Driver_Exception( 'UNIQUE constraint failed: ' . $table_reference['table_name'] . '.' . $metadata['column_name'] );
 		}
 
-		if ( $use_returning_insert_id ) {
-			return $this->execute_auto_increment_returning_write( $sql, $context, $metadata['column_name'] );
-		}
+			if ( $use_returning_insert_id ) {
+				return $this->execute_auto_increment_returning_write( $sql, $context, $metadata['column_name'], $metadata['sequence_name'] );
+			}
 
 		$result = $this->execute_duckdb_query( $sql, $context );
 
 		if ( null !== $sequence_name && ( $result->rowCount() > 0 || ! $insert_ignore_write ) ) {
-			$after             = $this->sequence_currval( $sequence_name );
+			$after             = $column_was_omitted || null !== $before
+				? $this->sequence_currval( $sequence_name )
+				: null;
 			$sequence_advanced = null !== $after
 				&& (
 					( null !== $before && $after !== $before )
@@ -34352,14 +35687,84 @@ class WP_DuckDB_Driver {
 	}
 
 	/**
+	 * Return a caller-supplied AUTO_INCREMENT column for a safe omitted-column write.
+	 *
+	 * @param string             $table_name                              Requested table name.
+	 * @param WP_Parser_Token[]  $tokens                                  MySQL token stream.
+	 * @param int|null           $table_index                             Index of the table token.
+	 * @param bool               $allow_on_duplicate_returning_insert_id   Whether ODKU insert branches may use RETURNING.
+	 * @return string|null Known AUTO_INCREMENT column, or null.
+	 */
+	private function known_auto_increment_column_for_omitted_write( string $table_name, array $tokens, ?int $table_index, bool $allow_on_duplicate_returning_insert_id ): ?string {
+		if (
+			null === $table_index
+			|| ! isset( $tokens[0] )
+			|| ! $this->connection_supports_returning_insert_id()
+		) {
+			return null;
+		}
+
+		$column_name = $this->known_auto_increment_columns[ strtolower( $table_name ) ] ?? null;
+		if ( null === $column_name ) {
+			return null;
+		}
+
+		if (
+			! $allow_on_duplicate_returning_insert_id
+			&& $this->is_insert_on_duplicate_key_update_write( $tokens, $table_index )
+		) {
+			return null;
+		}
+
+		if ( ! $this->auto_increment_column_omitted_from_write( $tokens, $table_index, $column_name ) ) {
+			return null;
+		}
+
+		if ( null !== $this->resolve_temporary_user_table_name( $table_name ) ) {
+			return null;
+		}
+
+		return $column_name;
+	}
+
+	/**
+	 * Check whether the active connection can return generated IDs directly.
+	 *
+	 * @return bool Whether AUTO_INCREMENT writes may use DuckDB RETURNING.
+	 */
+	private function connection_supports_returning_insert_id(): bool {
+		return WP_DuckDB_Connection::class === get_class( $this->connection )
+			|| $this->connection instanceof WP_DuckDB_Remote_Connection;
+	}
+
+	/**
+	 * Check whether a failed RETURNING shortcut only proved the column was absent.
+	 *
+	 * @param WP_DuckDB_Driver_Exception $exception   Query failure.
+	 * @param string                     $column_name RETURNING column name.
+	 * @return bool Whether the write can be retried through the generic path.
+	 */
+	private function is_missing_returning_column_exception( WP_DuckDB_Driver_Exception $exception, string $column_name ): bool {
+		$message = $exception->getMessage();
+		if ( false === stripos( $message, $column_name ) ) {
+			return false;
+		}
+
+		return false !== stripos( $message, 'Referenced column' )
+			|| false !== stripos( $message, 'not found in FROM clause' )
+			|| false !== stripos( $message, 'Binder Error' );
+	}
+
+	/**
 	 * Execute an omitted AUTO_INCREMENT write with DuckDB RETURNING.
 	 *
 	 * @param string $sql         DuckDB INSERT/REPLACE SQL.
 	 * @param string $context     Failure context.
 	 * @param string $column_name AUTO_INCREMENT column name.
+	 * @param string|null $sequence_name AUTO_INCREMENT sequence name.
 	 * @return WP_DuckDB_Result_Statement
 	 */
-	private function execute_auto_increment_returning_write( string $sql, string $context, string $column_name ): WP_DuckDB_Result_Statement {
+	private function execute_auto_increment_returning_write( string $sql, string $context, string $column_name, ?string $sequence_name = null ): WP_DuckDB_Result_Statement {
 		$result = $this->execute_duckdb_query(
 			$sql . ' RETURNING ' . $this->connection->quote_identifier( $column_name ),
 			$context
@@ -34368,6 +35773,9 @@ class WP_DuckDB_Driver {
 
 		if ( count( $ids ) > 0 ) {
 			$this->last_insert_id = max( array_map( 'intval', $ids ) );
+			if ( null !== $sequence_name ) {
+				$this->sequence_current_values[ $sequence_name ] = $this->last_insert_id;
+			}
 		}
 
 		return new WP_DuckDB_Result_Statement( array(), array(), count( $ids ) );
@@ -34698,12 +36106,13 @@ class WP_DuckDB_Driver {
 	 *
 	 * @param string[] $sequence_names Sequence names.
 	 */
-	private function drop_auto_increment_sequences( array $sequence_names ): void {
-		foreach ( $sequence_names as $sequence_name ) {
-			$this->execute_duckdb_query(
-				'DROP SEQUENCE IF EXISTS ' . $this->connection->quote_identifier( $sequence_name ),
-				'Failed to drop DuckDB AUTO_INCREMENT sequence'
-			);
+		private function drop_auto_increment_sequences( array $sequence_names ): void {
+			foreach ( $sequence_names as $sequence_name ) {
+				unset( $this->sequence_current_values[ $sequence_name ] );
+				$this->execute_duckdb_query(
+					'DROP SEQUENCE IF EXISTS ' . $this->connection->quote_identifier( $sequence_name ),
+					'Failed to drop DuckDB AUTO_INCREMENT sequence'
+				);
 		}
 	}
 
@@ -34866,6 +36275,13 @@ class WP_DuckDB_Driver {
 	 * @return int|null Current value.
 	 */
 	private function sequence_currval( string $sequence_name ): ?int {
+		if ( isset( $this->sequence_current_values[ $sequence_name ] ) ) {
+			return $this->sequence_current_values[ $sequence_name ];
+		}
+		if ( $this->connection->inTransaction() ) {
+			return null;
+		}
+
 		try {
 			$stmt  = $this->connection->query( 'SELECT currval(' . $this->connection->quote( $sequence_name ) . ')' );
 			$value = $stmt->fetchColumn();
@@ -34873,7 +36289,12 @@ class WP_DuckDB_Driver {
 			return null;
 		}
 
-		return false === $value || null === $value ? null : (int) $value;
+		if ( false === $value || null === $value ) {
+			return null;
+		}
+
+		$this->sequence_current_values[ $sequence_name ] = (int) $value;
+		return $this->sequence_current_values[ $sequence_name ];
 	}
 
 	/**
@@ -34889,7 +36310,8 @@ class WP_DuckDB_Driver {
 		);
 
 		$value = $stmt->fetchColumn();
-		return false === $value || null === $value ? 0 : (int) $value;
+		$this->sequence_current_values[ $sequence_name ] = false === $value || null === $value ? 0 : (int) $value;
+		return $this->sequence_current_values[ $sequence_name ];
 	}
 
 	/**
@@ -34927,6 +36349,7 @@ class WP_DuckDB_Driver {
 				. ')',
 			'Failed to advance DuckDB AUTO_INCREMENT sequence'
 		);
+		$this->sequence_current_values[ $sequence_name ] = $target_value;
 	}
 
 	/**
@@ -34937,16 +36360,19 @@ class WP_DuckDB_Driver {
 	 * @param string $sequence_name Sequence name.
 	 * @param int    $next_value    Desired next generated value.
 	 */
-	private function prime_auto_increment_sequence( string $sequence_name, int $next_value ): void {
-		if ( $next_value <= 1 ) {
-			return;
-		}
+		private function prime_auto_increment_sequence( string $sequence_name, int $next_value ): void {
+			if ( $next_value <= 1 ) {
+				unset( $this->sequence_current_values[ $sequence_name ] );
+				return;
+			}
 
-		$this->execute_duckdb_query(
-			'SELECT nextval(' . $this->connection->quote( $sequence_name ) . ')',
-			'Failed to initialize DuckDB AUTO_INCREMENT sequence'
-		);
-	}
+			$stmt  = $this->execute_duckdb_query(
+				'SELECT nextval(' . $this->connection->quote( $sequence_name ) . ') AS value',
+				'Failed to initialize DuckDB AUTO_INCREMENT sequence'
+			);
+			$value = $stmt->fetchColumn();
+			$this->sequence_current_values[ $sequence_name ] = false === $value || null === $value ? $next_value - 1 : (int) $value;
+		}
 
 	/**
 	 * Execute DuckDB SQL and preserve inspectable SQL output.
@@ -34956,6 +36382,7 @@ class WP_DuckDB_Driver {
 	 * @return WP_DuckDB_Result_Statement
 	 */
 	private function execute_duckdb_query( string $sql, string $context ): WP_DuckDB_Result_Statement {
+		$this->begin_deferred_request_transaction_for_write_sql( $sql );
 		$this->last_duckdb_queries[] = $sql;
 		$profile_enabled             = self::query_profile_enabled();
 		$profile_started_at          = $profile_enabled ? microtime( true ) : 0.0;
@@ -35617,6 +37044,7 @@ class WP_DuckDB_Driver {
 	private function clear_schema_state_after_rollback(): void {
 		$this->clear_schema_metadata_cache();
 		$this->clear_metadata_table_ensure_cache();
+		$this->sequence_current_values = array();
 	}
 
 	/**
@@ -35954,6 +37382,7 @@ class WP_DuckDB_Driver {
 		);
 
 		$this->clear_schema_metadata_cache( $table_name, $temporary );
+		$this->update_known_auto_increment_columns_from_metadata( $table_name, $metadata, $temporary );
 	}
 
 	/**
@@ -36226,6 +37655,9 @@ class WP_DuckDB_Driver {
 		);
 
 		$this->clear_schema_metadata_cache( $table_name, $temporary );
+		if ( isset( $column['extra'] ) && false !== stripos( (string) $column['extra'], 'auto_increment' ) ) {
+			$this->remember_known_auto_increment_column( $table_name, (string) $column['column_name'], $temporary );
+		}
 	}
 
 	/**
@@ -36429,6 +37861,7 @@ class WP_DuckDB_Driver {
 		}
 
 		$this->clear_schema_metadata_cache( $table_name, $temporary );
+		$this->forget_known_auto_increment_table( $table_name, $temporary );
 	}
 
 	/**

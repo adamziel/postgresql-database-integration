@@ -254,12 +254,27 @@ class WP_DuckDB_Storage_Backend {
 	/**
 	 * Create a WordPress-compatible DuckDB driver for this backend.
 	 *
-	 * @param string $database Database name exposed to WordPress.
+	 * @param string $database       Database name exposed to WordPress.
+	 * @param array  $driver_options Additional WP_DuckDB_Driver options.
 	 * @return WP_DuckDB_Driver
 	 *
 	 * @throws WP_DuckDB_Driver_Exception When DuckDB cannot connect or hydrate.
 	 */
-	public function create_driver( string $database ): WP_DuckDB_Driver {
+	public function create_driver( string $database, array $driver_options = array() ): WP_DuckDB_Driver {
+		$remote_options = $this->configured_remote_connection_options();
+		if ( ! $this->is_external() && null !== $remote_options ) {
+			return new WP_DuckDB_Driver(
+				array_merge(
+					$driver_options,
+					array(
+						'database' => $database,
+						'path'     => $this->database_path,
+						'remote'   => $remote_options,
+					)
+				)
+			);
+		}
+
 		$this->acquire_database_lock();
 		$this->connection = new WP_DuckDB_Connection( array( 'path' => $this->database_path ) );
 		$this->run_setup_sql();
@@ -270,11 +285,131 @@ class WP_DuckDB_Storage_Backend {
 		}
 
 		return new WP_DuckDB_Driver(
-			array(
-				'connection' => $this->connection,
-				'database'   => $database,
+			array_merge(
+				$driver_options,
+				array(
+					'connection' => $this->connection,
+					'database'   => $database,
+				)
 			)
 		);
+	}
+
+	/**
+	 * Read the optional DuckDB remote connection settings.
+	 *
+	 * @return array<string,mixed>|null Remote connection options, or null when embedded mode is enabled.
+	 */
+	private function configured_remote_connection_options(): ?array {
+		$transport = $this->configured_value(
+			array( 'WP_DUCKDB_CONNECTION', 'DUCKDB_CONNECTION', 'WP_DUCKDB_REMOTE_TRANSPORT', 'DUCKDB_REMOTE_TRANSPORT' )
+		);
+		$transport = null === $transport ? null : $this->normalize_remote_transport( $transport );
+		if ( null !== $transport && in_array( $transport, array( 'embedded', 'ffi' ), true ) ) {
+			return null;
+		}
+
+		$socket = $this->configured_value( array( 'WP_DUCKDB_REMOTE_SOCKET', 'DUCKDB_REMOTE_SOCKET' ) );
+		$url    = $this->configured_value( array( 'WP_DUCKDB_REMOTE_URL', 'DUCKDB_REMOTE_URL' ) );
+		$host   = $this->configured_value( array( 'WP_DUCKDB_REMOTE_HOST', 'DUCKDB_REMOTE_HOST' ) );
+		$port   = $this->configured_value( array( 'WP_DUCKDB_REMOTE_PORT', 'DUCKDB_REMOTE_PORT' ) );
+		$command = $this->configured_value( array( 'WP_DUCKDB_SIDECAR_COMMAND', 'DUCKDB_SIDECAR_COMMAND' ) );
+
+		if ( null === $transport ) {
+			if ( null !== $socket ) {
+				$transport = 'unix';
+			} elseif ( null !== $url ) {
+				$transport = 'http';
+			} elseif ( null !== $command ) {
+				$transport = 'sidecar';
+			} elseif ( null !== $host || null !== $port ) {
+				$transport = 'tcp';
+			} else {
+				return null;
+			}
+		}
+
+		$remote = array( 'transport' => $transport );
+		if ( 'unix' === $transport ) {
+			$remote['socket'] = $socket;
+		} elseif ( 'http' === $transport ) {
+			$remote['url']  = $url;
+			$remote['host'] = $host;
+			$remote['port'] = $port;
+		} elseif ( 'tcp' === $transport ) {
+			$remote['host'] = null === $host ? '127.0.0.1' : $host;
+			$remote['port'] = $port;
+		} elseif ( 'sidecar' === $transport ) {
+			$remote['command']       = $command;
+			$remote['database_path'] = $this->database_path;
+		}
+
+		return $remote;
+	}
+
+	/**
+	 * Normalize a configured DuckDB transport name.
+	 *
+	 * @param mixed $transport Transport value.
+	 * @return string Normalized transport.
+	 */
+	private function normalize_remote_transport( $transport ): string {
+		if ( ! is_string( $transport ) || '' === trim( $transport ) ) {
+			throw new InvalidArgumentException( 'DuckDB connection transport must be a non-empty string.' );
+		}
+
+		$transport = strtolower( str_replace( '_', '-', trim( $transport ) ) );
+		$aliases   = array(
+			'direct'          => 'embedded',
+			'native'          => 'embedded',
+			'embedded-ffi'    => 'embedded',
+			'unix-socket'     => 'unix',
+			'socket'          => 'unix',
+			'tcp-socket'      => 'tcp',
+			'stdio'           => 'sidecar',
+			'managed-sidecar' => 'sidecar',
+		);
+		if ( isset( $aliases[ $transport ] ) ) {
+			$transport = $aliases[ $transport ];
+		}
+
+		if ( ! in_array( $transport, array( 'embedded', 'ffi', 'unix', 'tcp', 'http', 'sidecar' ), true ) ) {
+			throw new InvalidArgumentException( 'DuckDB connection transport must be embedded, ffi, unix, tcp, http, or sidecar.' );
+		}
+
+		return $transport;
+	}
+
+	/**
+	 * Read a value from constants or environment variables.
+	 *
+	 * @param string[] $names Constant/env names.
+	 * @return mixed|null Configured value.
+	 */
+	private function configured_value( array $names ) {
+		foreach ( $names as $name ) {
+			if ( defined( $name ) && ! $this->is_empty_config_value( constant( $name ) ) ) {
+				return constant( $name );
+			}
+		}
+		foreach ( $names as $name ) {
+			$value = getenv( $name );
+			if ( ! $this->is_empty_config_value( $value ) ) {
+				return $value;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Check whether a configured value is empty.
+	 *
+	 * @param mixed $value Configured value.
+	 * @return bool Whether the value is empty.
+	 */
+	private function is_empty_config_value( $value ): bool {
+		return false === $value || null === $value || ( is_string( $value ) && '' === trim( $value ) );
 	}
 
 	/**
