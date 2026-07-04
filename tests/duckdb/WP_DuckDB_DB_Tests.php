@@ -4,6 +4,86 @@ require_once __DIR__ . '/WP_DuckDB_TestCase.php';
 
 #[PHPUnit\Framework\Attributes\Group( 'duckdb' )]
 class WP_DuckDB_DB_Tests extends WP_DuckDB_TestCase {
+	public function test_core_charset_adapter_paths_use_duckdb_metadata(): void {
+		$this->requireDuckDBRuntime();
+
+		$result = $this->run_isolated_wpdb_script(
+			<<<'PHP'
+$database_dir = sys_get_temp_dir() . '/wp-duckdb-db-charset-' . getmypid() . '-' . bin2hex( random_bytes( 4 ) ) . '/';
+mkdir( $database_dir, 0777, true );
+
+define( 'FQDBDIR', $database_dir );
+define( 'FQDUCKDB', $database_dir . '.ht.duckdb' );
+
+require_once getcwd() . '/vendor/autoload.php';
+require_once getcwd() . '/wp-includes/database/load.php';
+require_once getcwd() . '/wp-includes/duckdb/class-wp-duckdb-db.php';
+
+class WP_DuckDB_DB_Charset_Test_Adapter extends WP_DuckDB_DB {
+	public function table_charset_for_test( string $table ) {
+		return $this->get_table_charset( $table );
+	}
+
+	public function strip_invalid_text_from_query_for_test( string $query ) {
+		return $this->strip_invalid_text_from_query( $query );
+	}
+
+	public function check_safe_collation_for_test( string $query ) {
+		return $this->check_safe_collation( $query );
+	}
+}
+
+$db = new WP_DuckDB_DB_Charset_Test_Adapter( 'wordpress' );
+$db->query( 'DROP TABLE IF EXISTS test_get_table_charset_1' );
+$db->query( 'CREATE TABLE test_get_table_charset_1 ( a VARCHAR(50) CHARACTER SET big5, b TEXT CHARACTER SET big5 )' );
+
+$db->query( 'DROP TABLE IF EXISTS test_get_column_charset_7' );
+$db->query( 'CREATE TABLE test_get_column_charset_7 ( a VARCHAR(50) CHARACTER SET big5, b TEXT CHARACTER SET koi8r )' );
+
+$db->query( 'DROP TABLE IF EXISTS strip_invalid_text_from_query_table_1' );
+$db->query( 'CREATE TABLE strip_invalid_text_from_query_table_1 ( a VARCHAR(50) CHARACTER SET utf8, b VARCHAR(50) CHARACTER SET utf8mb4 )' );
+$emoji          = "\xf0\x9f\x98\x88";
+$unsafe_insert  = "INSERT INTO strip_invalid_text_from_query_table_1 VALUES ('foo{$emoji}bar', 'foo')";
+$stripped_insert = $db->strip_invalid_text_from_query_for_test( $unsafe_insert );
+
+$db->query( 'DROP TABLE IF EXISTS table_collation_check_0' );
+$db->query( 'CREATE TABLE table_collation_check_0 ( a VARCHAR(50) COLLATE utf8_bin )' );
+$safe_collation = $db->check_safe_collation_for_test( "SELECT * FROM table_collation_check_0 WHERE a='{$emoji}'" );
+
+$db->query( 'DROP TABLE IF EXISTS table_collation_check_2' );
+$db->query( 'CREATE TABLE table_collation_check_2 ( a VARCHAR(50) COLLATE utf8_unicode_ci )' );
+$unsafe_collation = $db->check_safe_collation_for_test( "SELECT * FROM table_collation_check_2 WHERE a='{$emoji}'" );
+
+$payload = array(
+	'table_charset'     => $db->table_charset_for_test( 'test_get_table_charset_1' ),
+	'table_charset_uc'  => $db->table_charset_for_test( 'TEST_GET_TABLE_CHARSET_1' ),
+	'big5_col_charset'  => $db->get_col_charset( 'test_get_column_charset_7', 'a' ),
+	'koi8r_col_charset' => $db->get_col_charset( 'TEST_GET_COLUMN_CHARSET_7', 'B' ),
+	'stripped_insert'   => $stripped_insert,
+	'safe_collation'    => $safe_collation,
+	'unsafe_collation'  => $unsafe_collation,
+);
+
+$db->close();
+wp_duckdb_db_test_remove_dir( $database_dir );
+wp_duckdb_db_test_respond( $payload );
+PHP
+		);
+
+		$this->assertSame(
+			array(
+				'table_charset'     => 'big5',
+				'table_charset_uc'  => 'big5',
+				'big5_col_charset'  => 'big5',
+				'koi8r_col_charset' => 'koi8r',
+				'stripped_insert'   => "INSERT INTO strip_invalid_text_from_query_table_1 VALUES ('foobar', 'foo')",
+				'safe_collation'    => true,
+				'unsafe_collation'  => false,
+			),
+			$result
+		);
+	}
+
 	public function test_close_clears_cached_driver_and_check_connection_reconnects(): void {
 		$this->requireDuckDBRuntime();
 
@@ -153,6 +233,7 @@ class wpdb {
 	public $show_errors = false;
 	public $check_current_query = true;
 	public $func_call = '';
+	public $checking_collation = false;
 	protected $dbh = null;
 	private $allow_unsafe_unquoted_parameters = true;
 
@@ -197,6 +278,121 @@ class wpdb {
 	public function add_placeholder_escape( $query ) {
 		return $query;
 	}
+
+	public function check_ascii( $input ) {
+		return ! preg_match( '/[^\x00-\x7F]/', $input );
+	}
+
+	public function get_table_from_query( $query ) {
+		if ( preg_match( '/^\s*(?:SELECT\b.*?\bFROM|INSERT\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)\s+`?([A-Za-z0-9_]+)`?/is', $query, $matches ) ) {
+			return $matches[1];
+		}
+
+		return false;
+	}
+
+	protected function strip_invalid_text_from_query( $query ) {
+		$trimmed_query = ltrim( $query, "\r\n\t (" );
+		if ( preg_match( '/^(?:SHOW|DESCRIBE|DESC|EXPLAIN|CREATE)\s/i', $trimmed_query ) ) {
+			return $query;
+		}
+
+		$table = $this->get_table_from_query( $query );
+		if ( $table ) {
+			$charset = $this->get_table_charset( $table );
+			if ( is_wp_error( $charset ) ) {
+				return $charset;
+			}
+
+			if ( 'binary' === $charset ) {
+				return $query;
+			}
+		} else {
+			$charset = $this->charset;
+		}
+
+		$data = array(
+			'value'   => $query,
+			'charset' => $charset,
+			'ascii'   => false,
+			'length'  => false,
+		);
+
+		$data = $this->strip_invalid_text( array( $data ) );
+		if ( is_wp_error( $data ) ) {
+			return $data;
+		}
+
+		return $data[0]['value'];
+	}
+
+	protected function check_safe_collation( $query ) {
+		if ( $this->checking_collation ) {
+			return true;
+		}
+
+		$query = ltrim( $query, "\r\n\t (" );
+		if ( preg_match( '/^(?:SHOW|DESCRIBE|DESC|EXPLAIN|CREATE)\s/i', $query ) ) {
+			return true;
+		}
+
+		if ( $this->check_ascii( $query ) ) {
+			return true;
+		}
+
+		$table = $this->get_table_from_query( $query );
+		if ( ! $table ) {
+			return false;
+		}
+
+		$this->checking_collation = true;
+		$collation                = $this->get_table_charset( $table );
+		$this->checking_collation = false;
+
+		if ( false === $collation || 'latin1' === $collation ) {
+			return true;
+		}
+
+		$table = strtolower( $table );
+		if ( empty( $this->col_meta[ $table ] ) ) {
+			return false;
+		}
+
+		$safe_collations = array(
+			'utf8_bin',
+			'utf8_general_ci',
+			'utf8mb3_bin',
+			'utf8mb3_general_ci',
+			'utf8mb4_bin',
+			'utf8mb4_general_ci',
+		);
+
+		foreach ( $this->col_meta[ $table ] as $col ) {
+			if ( empty( $col->Collation ) ) {
+				continue;
+			}
+
+			if ( ! in_array( $col->Collation, $safe_collations, true ) ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+}
+
+class WP_Error {
+	public $code;
+	public $message;
+
+	public function __construct( $code = '', $message = '' ) {
+		$this->code    = $code;
+		$this->message = $message;
+	}
+}
+
+function is_wp_error( $thing ) {
+	return $thing instanceof WP_Error;
 }
 
 function apply_filters( $tag, $value ) {
@@ -204,6 +400,10 @@ function apply_filters( $tag, $value ) {
 }
 
 function wp_load_translations_early() {}
+
+function mbstring_binary_safe_encoding() {}
+
+function reset_mbstring_encoding() {}
 
 function __( $text ) {
 	return $text;

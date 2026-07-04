@@ -3158,17 +3158,232 @@ class WP_DuckDB_DB extends wpdb {
 	 * @return array|WP_Error Stripped values, or error.
 	 */
 	protected function strip_invalid_text( $data ) {
-		if ( '' !== $this->charset ) {
-			return parent::strip_invalid_text( $data );
+		foreach ( $data as &$value ) {
+			$charset = $value['charset'];
+
+			if ( is_array( $value['length'] ) ) {
+				$length                  = $value['length']['length'];
+				$truncate_by_byte_length = 'byte' === $value['length']['type'];
+			} else {
+				$length                  = false;
+				$truncate_by_byte_length = false;
+			}
+
+			if ( false === $charset || ! is_string( $value['value'] ) ) {
+				continue;
+			}
+
+			$needs_validation = true;
+			if (
+				'latin1' === $charset
+				|| ( ! isset( $value['ascii'] ) && $this->check_ascii( $value['value'] ) )
+			) {
+				$truncate_by_byte_length = true;
+				$needs_validation        = false;
+			}
+
+			if ( $truncate_by_byte_length ) {
+				mbstring_binary_safe_encoding();
+				if ( false !== $length && strlen( $value['value'] ) > $length ) {
+					$value['value'] = substr( $value['value'], 0, $length );
+				}
+				reset_mbstring_encoding();
+
+				if ( ! $needs_validation ) {
+					continue;
+				}
+			}
+
+			if ( ( 'utf8' === $charset || 'utf8mb3' === $charset || 'utf8mb4' === $charset ) && function_exists( 'mb_strlen' ) ) {
+				$value['value'] = $this->strip_duckdb_invalid_utf8_text( $value['value'], $charset, $length );
+				continue;
+			}
+
+			$stripped = $this->strip_duckdb_invalid_legacy_text( $value['value'], $charset, $value['length'] );
+			if ( false === $stripped ) {
+				return new WP_Error( 'wpdb_strip_invalid_text_failure', __( 'Could not strip invalid text.' ) );
+			}
+
+			$value['value'] = $stripped;
+		}
+		unset( $value );
+
+		return $data;
+	}
+
+	/**
+	 * Strip invalid UTF-8 text using WordPress core's local regex path.
+	 *
+	 * @param string    $value   Text value.
+	 * @param string    $charset MySQL charset.
+	 * @param int|false $length  Optional character length.
+	 * @return string Stripped value.
+	 */
+	private function strip_duckdb_invalid_utf8_text( string $value, string $charset, $length ): string {
+		$regex = '/
+			(
+				(?: [\x00-\x7F]
+				|   [\xC2-\xDF][\x80-\xBF]
+				|   \xE0[\xA0-\xBF][\x80-\xBF]
+				|   [\xE1-\xEC][\x80-\xBF]{2}
+				|   \xED[\x80-\x9F][\x80-\xBF]
+				|   [\xEE-\xEF][\x80-\xBF]{2}';
+
+		if ( 'utf8mb4' === $charset ) {
+			$regex .= '
+				|    \xF0[\x90-\xBF][\x80-\xBF]{2}
+				|    [\xF1-\xF3][\x80-\xBF]{3}
+				|    \xF4[\x80-\x8F][\x80-\xBF]{2}
+			';
 		}
 
-		$this->charset = 'utf8mb4';
+		$regex .= '){1,40}
+			)
+			| .
+			/x';
 
-		try {
-			return parent::strip_invalid_text( $data );
-		} finally {
-			$this->charset = '';
+		$value = preg_replace( $regex, '$1', $value );
+		if ( false !== $length && mb_strlen( $value, 'UTF-8' ) > $length ) {
+			$value = mb_substr( $value, 0, $length, 'UTF-8' );
 		}
+
+		return $value;
+	}
+
+	/**
+	 * Strip invalid text for MySQL legacy charsets using PHP conversion.
+	 *
+	 * @param string      $value   Text value.
+	 * @param string      $charset MySQL charset.
+	 * @param array|false $length  Optional length metadata.
+	 * @return string|false Stripped value, or false when unsupported.
+	 */
+	private function strip_duckdb_invalid_legacy_text( string $value, string $charset, $length ) {
+		$charset            = $this->normalize_duckdb_mysql_charset( $charset );
+		$connection_charset = $this->get_duckdb_connection_charset();
+
+		if ( is_array( $length ) && 'byte' === $length['type'] ) {
+			return $this->strip_duckdb_invalid_trailing_bytes( $value, $connection_charset );
+		}
+
+		if ( $charset === $connection_charset && $this->is_duckdb_single_byte_mysql_charset( $charset ) ) {
+			if ( is_array( $length ) ) {
+				return substr( $value, 0, (int) $length['length'] );
+			}
+
+			return $value;
+		}
+
+		if ( ! function_exists( 'mb_convert_encoding' ) ) {
+			return false;
+		}
+
+		$target_encoding     = $this->get_duckdb_php_encoding_for_mysql_charset( $charset );
+		$connection_encoding = $this->get_duckdb_php_encoding_for_mysql_charset( $connection_charset );
+		if ( null === $target_encoding || null === $connection_encoding ) {
+			return false;
+		}
+
+		$target_value = $value;
+		if ( $target_encoding !== $connection_encoding ) {
+			$target_value = mb_convert_encoding( $value, $target_encoding, $connection_encoding );
+		}
+
+		if ( is_array( $length ) ) {
+			$target_value = mb_substr( $target_value, 0, (int) $length['length'], $target_encoding );
+		}
+
+		if ( $target_encoding === $connection_encoding ) {
+			return $this->strip_duckdb_invalid_trailing_bytes( $target_value, $connection_charset );
+		}
+
+		return mb_convert_encoding( $target_value, $connection_encoding, $target_encoding );
+	}
+
+	/**
+	 * Strip a partial trailing multibyte sequence after byte truncation.
+	 *
+	 * @param string $value   Text value.
+	 * @param string $charset MySQL charset.
+	 * @return string|false Stripped value, or false when unsupported.
+	 */
+	private function strip_duckdb_invalid_trailing_bytes( string $value, string $charset ) {
+		$charset = $this->normalize_duckdb_mysql_charset( $charset );
+		if ( $this->is_duckdb_single_byte_mysql_charset( $charset ) ) {
+			return $value;
+		}
+
+		$encoding = $this->get_duckdb_php_encoding_for_mysql_charset( $charset );
+		if ( null === $encoding || ! function_exists( 'mb_check_encoding' ) ) {
+			return false;
+		}
+
+		while ( '' !== $value && ! mb_check_encoding( $value, $encoding ) ) {
+			$value = substr( $value, 0, -1 );
+		}
+
+		return $value;
+	}
+
+	/**
+	 * Get the current MySQL-compatible connection charset.
+	 *
+	 * @return string Charset.
+	 */
+	private function get_duckdb_connection_charset(): string {
+		if ( ! empty( $this->charset ) ) {
+			return $this->normalize_duckdb_mysql_charset( (string) $this->charset );
+		}
+
+		return 'utf8mb4';
+	}
+
+	/**
+	 * Normalize a MySQL charset for DuckDB adapter logic.
+	 *
+	 * @param string $charset Charset.
+	 * @return string Normalized charset.
+	 */
+	private function normalize_duckdb_mysql_charset( string $charset ): string {
+		$charset = strtolower( trim( $charset, "'\"` \t\n\r\0\x0B" ) );
+		return 'utf8mb3' === $charset ? 'utf8' : $charset;
+	}
+
+	/**
+	 * Check whether a charset is single-byte for truncation purposes.
+	 *
+	 * @param string $charset MySQL charset.
+	 * @return bool Whether the charset is single-byte.
+	 */
+	private function is_duckdb_single_byte_mysql_charset( string $charset ): bool {
+		return in_array(
+			$this->normalize_duckdb_mysql_charset( $charset ),
+			array( 'ascii', 'binary', 'cp1251', 'hebrew', 'koi8r', 'latin1', 'tis620' ),
+			true
+		);
+	}
+
+	/**
+	 * Map a MySQL charset to a PHP mbstring encoding.
+	 *
+	 * @param string $charset MySQL charset.
+	 * @return string|null PHP encoding, or null when unsupported.
+	 */
+	private function get_duckdb_php_encoding_for_mysql_charset( string $charset ): ?string {
+		$encodings = array(
+			'ascii'   => 'ASCII',
+			'big5'    => 'BIG-5',
+			'cp1251'  => 'Windows-1251',
+			'hebrew'  => 'ISO-8859-8',
+			'koi8r'   => 'KOI8-R',
+			'latin1'  => 'ISO-8859-1',
+			'ujis'    => 'EUC-JP',
+			'utf8'    => 'UTF-8',
+			'utf8mb4' => 'UTF-8',
+		);
+
+		$charset = $this->normalize_duckdb_mysql_charset( $charset );
+		return $encodings[ $charset ] ?? null;
 	}
 
 	/**
