@@ -9,7 +9,7 @@ Current backends:
 - PostgreSQL, using the local PostgreSQL driver.
 - DuckDB, using the local DuckDB driver.
 - SQLite, routed through the upstream WordPress SQLite Database Integration
-  project included as a Git submodule.
+  project packaged with the plugin installer.
 
 ## Quick Start: WordPress On DuckDB JSON
 
@@ -18,8 +18,8 @@ WordPress by hand. This Docker example starts WordPress with `DB_ENGINE=duckdb`
 and `DUCKDB_BACKEND=json`, then stores each WordPress table as a JSON file.
 
 ```bash
-git clone --recurse-submodules https://github.com/adamziel/wordpress-databases-support.git
-cd wordpress-databases-support/examples/duckdb-json-wordpress
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/archive/trunk.tar.gz | tar -xz
+cd wordpress-databases-support-trunk/examples/duckdb-json-wordpress
 docker compose up --build
 ```
 
@@ -48,19 +48,69 @@ for port, admin-account, and reset options.
 
 ## Installation
 
-Clone with submodules so SQLite support is available:
+Run this from the root of a new WordPress site:
 
 ```bash
-git clone --recurse-submodules https://github.com/adamziel/wordpress-databases-support.git
+curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php
 ```
 
-Place the repository at:
+That command installs the plugin at:
 
 ```text
 wp-content/plugins/wordpress-databases-support
 ```
 
-### New Site Setup Helper
+It also downloads the pinned SQLite integration package, so SQLite support is
+available without a Git checkout or submodules. After the install finishes, open
+the printed setup wizard URL and choose SQLite, PostgreSQL, or DuckDB before
+running WordPress' normal installer.
+
+To install the plugin and configure the database drop-in in one command, pass
+setup flags after `php --`.
+
+SQLite:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes
+```
+
+DuckDB:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=duckdb --install-duckdb-client --yes
+```
+
+PostgreSQL:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+  --engine=postgresql \
+  --db-name=wordpress \
+  --db-user=wordpress \
+  --db-password=secret \
+  --db-host=127.0.0.1:5432 \
+  --yes
+```
+
+Useful bootstrap options:
+
+| Option | Purpose |
+| --- | --- |
+| `--wp-path=/path/to/wordpress` | WordPress root. Defaults to the current directory. |
+| `--plugin-dir=/path/to/plugin` | Plugin install directory. Defaults to `wp-content/plugins/wordpress-databases-support`. |
+| `--setup=browser\|cli\|none` | Print the browser wizard URL, run CLI setup, or only install the plugin. If `--engine` is present, the installer defaults to CLI setup. |
+| `--ref=trunk` | Repository branch, tag, or commit to install from GitHub archives. |
+| `--plugin-zip=/path/to/wordpress-databases-support.zip` | Install from a packaged plugin zip instead of GitHub source archives. |
+| `--sqlite-ref=v3.0.0-rc.7` | SQLite integration release tag to package with the install. |
+| `--sqlite-zip=/path/to/plugin-sqlite-database-integration.zip` | Use a local SQLite integration package zip. |
+| `--force-install` | Replace an existing plugin directory. |
+| `--install-duckdb-client` | Run Composer inside the installed plugin and install `satur.io/duckdb` plus the DuckDB C library. |
+
+Database setup flags such as `--engine`, `--db-name`, `--duckdb-connection`,
+`--force`, `--dry-run`, `--strict`, and `--yes` are forwarded to
+`bin/setup-database.php`.
+
+### Setup Wizard And CLI
 
 For a new WordPress site, use the setup helper before opening WordPress'
 standard installer. It installs the database drop-in, writes a managed block in
@@ -84,7 +134,7 @@ php wp-content/plugins/wordpress-databases-support/bin/setup-database.php \
   --yes
 ```
 
-One-liner form when the plugin is already checked out in `wp-content/plugins`:
+One-liner form when the plugin is already installed in `wp-content/plugins`:
 
 ```bash
 php -r "require 'wp-content/plugins/wordpress-databases-support/bin/setup-database.php';" -- --engine=duckdb --yes
@@ -949,12 +999,12 @@ job and skips non-database image-stack assertions for PDF/AVIF rendering.
 Build a plugin zip:
 
 ```bash
-git submodule update --init --recursive
 ./bin/build-plugin-zip.sh
 ```
 
-The release workflow builds `build/wordpress-databases-support.zip` on manual
-runs and publishes that zip to GitHub Releases for tags matching `v*`.
+The build script initializes the SQLite integration dependency when needed. The
+release workflow builds `build/wordpress-databases-support.zip` on manual runs
+and publishes that zip to GitHub Releases for tags matching `v*`.
 
 ## Current Limitations
 

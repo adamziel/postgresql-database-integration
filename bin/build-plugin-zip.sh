@@ -31,6 +31,8 @@ cp "$ROOT_DIR/load.php" "$PLUGIN_DIR/"
 cp "$ROOT_DIR/setup-database.php" "$PLUGIN_DIR/"
 cp "$ROOT_DIR/wordpress-databases-support.php" "$PLUGIN_DIR/"
 mkdir -p "$PLUGIN_DIR/bin"
+cp "$ROOT_DIR/bin/duckdb-sidecar.php" "$PLUGIN_DIR/bin/"
+cp "$ROOT_DIR/bin/install-database-support.php" "$PLUGIN_DIR/bin/"
 cp "$ROOT_DIR/bin/setup-database.php" "$PLUGIN_DIR/bin/"
 cp -R "$ROOT_DIR/wp-includes" "$PLUGIN_DIR/wp-includes"
 
