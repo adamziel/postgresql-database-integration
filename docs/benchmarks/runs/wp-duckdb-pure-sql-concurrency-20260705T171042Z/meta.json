@@ -1,0 +1,47 @@
+{
+  "run_id": "wp-duckdb-pure-sql-concurrency-20260705T171042Z",
+  "created_at": "2026-07-05T17:11:43Z",
+  "output_dir": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-pure-sql-concurrency-20260705T171042Z",
+  "work_root": "/tmp/wp-duckdb-pure-sql-concurrency-20260705T171042Z",
+  "source_fixture_run": "wp-duckdb-tcp-storage-comparison-20260705T094510Z",
+  "backends": [
+    "mysql",
+    "duckdb"
+  ],
+  "backend_details": [
+    {
+      "backend": "mysql",
+      "display": "MySQL / MariaDB native SQL",
+      "duckdb_involved": false,
+      "connection": "PyMySQL over local TCP",
+      "storage_target": "MariaDB copied WordPress database"
+    },
+    {
+      "backend": "duckdb",
+      "display": "DuckDB native SQL",
+      "duckdb_involved": true,
+      "connection": "Python DuckDB in-process connections, one process with worker threads",
+      "storage_target": "Copied native .duckdb WordPress database file"
+    }
+  ],
+  "scenarios": {
+    "front_page_sql": "Direct SQL approximation of the benchmark front page: autoloaded options, core options, latest posts, postmeta, term joins, event count.",
+    "rest_read_sql": "Direct SQL equivalent of the benchmark REST read probe: six posts, seed postmeta, blogname, option count, event count.",
+    "rest_write_sql": "Direct SQL equivalent of the benchmark REST write probe: insert event, insert unique option, update shared last-payload option."
+  },
+  "concurrency": [
+    1,
+    2,
+    4,
+    8
+  ],
+  "read_requests_per_scenario": 1000,
+  "write_requests_per_scenario": 500,
+  "wordpress_removed_from_hot_path": true,
+  "wordpress_version": "7.0",
+  "python_version": "3.14.4",
+  "duckdb_python_version": "1.5.4",
+  "pymysql_version": "2.2.8",
+  "commit": "f6408c684cbc",
+  "host": "Linux-7.0.9-204.fc44.x86_64-x86_64-with-glibc2.43"
+}
