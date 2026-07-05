@@ -1,0 +1,15 @@
+:root {
+  --sl-color-accent-low: #e5f4ff;
+  --sl-color-accent: #2271b1;
+  --sl-color-accent-high: #0a4b78;
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #102c42;
+  --sl-color-accent: #72aee6;
+  --sl-color-accent-high: #d9f0ff;
+}
+
+code {
+  overflow-wrap: anywhere;
+}

@@ -1,12 +1,16 @@
-# Run WordPress With DuckDB JSON Storage
+---
+title: DuckDB JSON WordPress Example
+description: Run a local WordPress site that stores every table as a JSON file through DuckDB.
+---
 
-Start a local WordPress site that uses DuckDB as the WordPress database adapter
-and stores each WordPress table as a JSON file.
+This Docker example starts WordPress with `DB_ENGINE=duckdb` and
+`DUCKDB_BACKEND=json`, then stores each WordPress table as a JSON file.
 
-The published docs version of this example is
-<https://adamziel.github.io/wordpress-databases-support/examples/duckdb-json-wordpress/>.
+## Run It
 
 ```bash
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/archive/trunk.tar.gz | tar -xz
+cd wordpress-databases-support-trunk/examples/duckdb-json-wordpress
 docker compose up --build
 ```
 
@@ -20,10 +24,6 @@ examples/duckdb-json-wordpress/data/duckdb-json/
 
 You should see files such as `wp_options.json`, `wp_posts.json`, and
 `wp_users.json` after the first startup finishes.
-
-The same `data/` directory also contains `.ht.duckdb-working`, DuckDB's mutable
-working database. The external WordPress table storage is the JSON files under
-`data/duckdb-json/`.
 
 ## What This Runs
 
@@ -43,11 +43,6 @@ define( 'DUCKDB_WORKING_DATABASE_FILE', __DIR__ . '/wp-content/database/.ht.duck
 On container startup, `entrypoint.sh` copies the drop-in to `wp-content/db.php`,
 runs the WordPress installer if needed, and flushes the DuckDB working tables
 back to JSON storage.
-
-The Apache container is intentionally configured with one request worker and
-WP-Cron is disabled. DuckDB uses a mutable working database while hydrating and
-flushing the JSON files, so this local example serializes web requests instead
-of opening the same working file from multiple PHP processes.
 
 ## Options
 
@@ -70,10 +65,9 @@ docker compose down
 rm -rf data
 ```
 
-## Troubleshooting
+## Concurrency Boundary
 
-If startup fails, the container prints a `DuckDB JSON diagnostics` block before
-it exits. That block includes the PHP/FFI runtime state, the user running the
-check, database path permissions, JSON table file sizes, DuckDB connection
-status, table count, `wp_options` count, and `siteurl`. Include that diagnostic
-block when reporting a failure.
+The Apache container is intentionally configured with one request worker and
+WP-Cron is disabled. DuckDB uses a mutable working database while hydrating and
+flushing the JSON files, so this local example serializes web requests instead
+of opening the same working file from multiple PHP processes.

@@ -1,0 +1,16 @@
+{
+  "name": "wordpress-databases-support-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prebuild": "node scripts/sync-benchmarks.mjs",
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.3",
+    "astro": "^7.0.6",
+    "sharp": "^0.35.3"
+  }
+}
