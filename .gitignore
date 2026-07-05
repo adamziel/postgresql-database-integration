@@ -7,3 +7,7 @@
 /.DS_Store
 /artifacts/duckdb-production-readiness/runs/
 /artifacts/duckdb-benchmarks/runs/
+/docs-site/node_modules/
+/docs-site/.astro/
+/docs-site/dist/
+/docs-site/public/benchmarks/
