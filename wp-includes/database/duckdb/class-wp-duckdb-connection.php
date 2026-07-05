@@ -72,6 +72,172 @@ class WP_DuckDB_Connection {
 		} catch ( Throwable $e ) {
 			throw new WP_DuckDB_Driver_Exception( 'Failed to open DuckDB database: ' . $e->getMessage(), 0, $e );
 		}
+
+		$this->apply_connection_setup_sql( $options );
+	}
+
+	/**
+	 * Run optional per-connection DuckDB setup SQL.
+	 *
+	 * This is for connection-level DuckDB settings such as SET threads=2. It is
+	 * intentionally separate from DUCKDB_BACKEND_SETUP_SQL, which configures
+	 * external storage backends with INSTALL, LOAD, ATTACH, and secrets.
+	 *
+	 * @param array $options Connection options.
+	 * @return void
+	 *
+	 * @throws InvalidArgumentException When setup SQL configuration is invalid.
+	 * @throws WP_DuckDB_Driver_Exception When a setup statement fails.
+	 */
+	protected function apply_connection_setup_sql( array $options = array() ): void {
+		$setup_sql = $this->connection_setup_sql_from_options( $options );
+		foreach ( $setup_sql as $sql ) {
+			try {
+				$this->query( $sql );
+			} catch ( Throwable $e ) {
+				throw new WP_DuckDB_Driver_Exception(
+					'DuckDB connection setup failed for statement "' . $this->format_setup_sql_for_error( $sql ) . '": ' . $e->getMessage(),
+					0,
+					$e
+				);
+			}
+		}
+	}
+
+	/**
+	 * Resolve setup SQL from options, constants, or environment variables.
+	 *
+	 * @param array $options Connection options.
+	 * @return string[] SQL statements.
+	 *
+	 * @throws InvalidArgumentException When setup SQL configuration is invalid.
+	 */
+	protected function connection_setup_sql_from_options( array $options ): array {
+		if ( array_key_exists( 'connection_setup_sql', $options ) ) {
+			return $this->normalize_connection_setup_sql( $options['connection_setup_sql'], 'connection option "connection_setup_sql"' );
+		}
+
+		$json = $this->first_non_empty_environment_value(
+			array(
+				'WP_DUCKDB_CONNECTION_SETUP_SQL_JSON',
+				'DUCKDB_CONNECTION_SETUP_SQL_JSON',
+			)
+		);
+		if ( null !== $json ) {
+			$decoded = json_decode( $json, true );
+			if ( ! is_array( $decoded ) ) {
+				throw new InvalidArgumentException( 'DuckDB connection setup SQL JSON must decode to an array of SQL strings.' );
+			}
+
+			return $this->normalize_connection_setup_sql( $decoded, 'DuckDB connection setup SQL JSON' );
+		}
+
+		$value = $this->first_non_empty_constant_or_environment_value(
+			array(
+				'WP_DUCKDB_CONNECTION_SETUP_SQL',
+				'DUCKDB_CONNECTION_SETUP_SQL',
+			)
+		);
+
+		return $this->normalize_connection_setup_sql( $value, 'DuckDB connection setup SQL' );
+	}
+
+	/**
+	 * Normalize setup SQL into a list of non-empty statements.
+	 *
+	 * @param mixed  $value Configuration value.
+	 * @param string $source Human-readable source.
+	 * @return string[] SQL statements.
+	 *
+	 * @throws InvalidArgumentException When setup SQL configuration is invalid.
+	 */
+	private function normalize_connection_setup_sql( $value, string $source ): array {
+		if ( null === $value || false === $value || ( is_string( $value ) && '' === trim( $value ) ) ) {
+			return array();
+		}
+
+		if ( is_string( $value ) ) {
+			return array( trim( $value ) );
+		}
+
+		if ( ! is_array( $value ) ) {
+			throw new InvalidArgumentException( $source . ' must be a SQL string or an array of SQL strings.' );
+		}
+
+		$statements = array();
+		foreach ( $value as $statement ) {
+			if ( ! is_string( $statement ) ) {
+				throw new InvalidArgumentException( $source . ' must contain only SQL strings.' );
+			}
+			$statement = trim( $statement );
+			if ( '' !== $statement ) {
+				$statements[] = $statement;
+			}
+		}
+
+		return $statements;
+	}
+
+	/**
+	 * Read the first non-empty constant or environment value.
+	 *
+	 * @param string[] $names Constant/environment names.
+	 * @return mixed|null Value.
+	 */
+	private function first_non_empty_constant_or_environment_value( array $names ) {
+		foreach ( $names as $name ) {
+			if ( defined( $name ) ) {
+				$value = constant( $name );
+				if ( ! $this->is_empty_config_value( $value ) ) {
+					return $value;
+				}
+			}
+		}
+
+		return $this->first_non_empty_environment_value( $names );
+	}
+
+	/**
+	 * Read the first non-empty environment value.
+	 *
+	 * @param string[] $names Environment names.
+	 * @return string|null Value.
+	 */
+	private function first_non_empty_environment_value( array $names ): ?string {
+		foreach ( $names as $name ) {
+			$value = getenv( $name );
+			if ( is_string( $value ) && ! $this->is_empty_config_value( $value ) ) {
+				return $value;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Check whether a configured value is empty.
+	 *
+	 * @param mixed $value Configured value.
+	 * @return bool Whether the value is empty.
+	 */
+	private function is_empty_config_value( $value ): bool {
+		return false === $value || null === $value || ( is_string( $value ) && '' === trim( $value ) );
+	}
+
+	/**
+	 * Format setup SQL for a compact exception message.
+	 *
+	 * @param string $sql SQL statement.
+	 * @return string Bounded SQL.
+	 */
+	private function format_setup_sql_for_error( string $sql ): string {
+		$sql = preg_replace( '/\s+/', ' ', str_replace( array( "\r", "\n" ), ' ', $sql ) );
+		$sql = trim( (string) $sql );
+		if ( strlen( $sql ) > 200 ) {
+			$sql = substr( $sql, 0, 197 ) . '...';
+		}
+
+		return $sql;
 	}
 
 	/**

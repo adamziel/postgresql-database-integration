@@ -1,0 +1,860 @@
+{
+  "run_id": "wp-duckdb-pure-sql-settings-20260705T172338Z",
+  "generated_at": "2026-07-05T17:24:49Z",
+  "meta": {
+    "run_id": "wp-duckdb-pure-sql-settings-20260705T172338Z",
+    "created_at": "2026-07-05T17:23:38Z",
+    "output_dir": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-pure-sql-settings-20260705T172338Z",
+    "work_root": "/tmp/wp-duckdb-pure-sql-settings-20260705T172338Z",
+    "source_database": "/tmp/wp-duckdb-pure-sql-concurrency-20260705T171042Z/duckdb.duckdb",
+    "source_fixture_run": "wp-duckdb-pure-sql-concurrency-20260705T171042Z",
+    "purpose": "Measure whether DuckDB SET options materially improve native DuckDB performance for WordPress-shaped SQL workloads.",
+    "settings_cases": [
+      {
+        "setting": "default",
+        "setup_sql": [],
+        "notes": "DuckDB defaults on this host."
+      },
+      {
+        "setting": "threads=1",
+        "setup_sql": [
+          "SET threads=1"
+        ],
+        "notes": "Reduce DuckDB internal parallelism for small OLTP-shaped queries."
+      },
+      {
+        "setting": "threads=2",
+        "setup_sql": [
+          "SET threads=2"
+        ],
+        "notes": "Small internal parallelism."
+      },
+      {
+        "setting": "threads=4",
+        "setup_sql": [
+          "SET threads=4"
+        ],
+        "notes": "Moderate internal parallelism."
+      },
+      {
+        "setting": "preserve_insertion_order=false",
+        "setup_sql": [
+          "SET preserve_insertion_order=false"
+        ],
+        "notes": "DuckDB docs recommend this mainly for memory-heavy bulk work."
+      },
+      {
+        "setting": "wal_autocheckpoint=1GB",
+        "setup_sql": [
+          "SET wal_autocheckpoint='1GB'"
+        ],
+        "notes": "Defer automatic checkpoints during the write workload."
+      }
+    ],
+    "concurrency": [
+      1,
+      8
+    ],
+    "read_requests_per_scenario": 600,
+    "write_requests_per_scenario": 300,
+    "python_version": "3.14.4",
+    "duckdb_python_version": "1.5.4",
+    "commit": "a70a0bab5536"
+  },
+  "benchmarks": [
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "front_page_sql",
+      "setting": "default",
+      "requests": 600,
+      "concurrency": 1,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 5376.342,
+      "attempts_sec": 111.6,
+      "ok_requests_sec": 111.6,
+      "latency_ms": {
+        "min": 7.61,
+        "p50": 8.659,
+        "p95": 10.772,
+        "p99": 12.626,
+        "max": 35.614
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_read_sql",
+      "setting": "default",
+      "requests": 600,
+      "concurrency": 1,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 3076.386,
+      "attempts_sec": 195.034,
+      "ok_requests_sec": 195.034,
+      "latency_ms": {
+        "min": 4.629,
+        "p50": 4.999,
+        "p95": 5.512,
+        "p99": 6.045,
+        "max": 24.59
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_write_sql",
+      "setting": "default",
+      "requests": 300,
+      "concurrency": 1,
+      "ok": 300,
+      "errors": 0,
+      "total_ms": 1114.559,
+      "attempts_sec": 269.165,
+      "ok_requests_sec": 269.165,
+      "latency_ms": {
+        "min": 3.068,
+        "p50": 3.363,
+        "p95": 4.034,
+        "p99": 5.018,
+        "max": 44.411
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "front_page_sql",
+      "setting": "default",
+      "requests": 600,
+      "concurrency": 8,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 1126.081,
+      "attempts_sec": 532.821,
+      "ok_requests_sec": 532.821,
+      "latency_ms": {
+        "min": 10.824,
+        "p50": 13.959,
+        "p95": 16.672,
+        "p99": 63.908,
+        "max": 66.276
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_read_sql",
+      "setting": "default",
+      "requests": 600,
+      "concurrency": 8,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 689.418,
+      "attempts_sec": 870.3,
+      "ok_requests_sec": 870.3,
+      "latency_ms": {
+        "min": 6.552,
+        "p50": 8.626,
+        "p95": 10.445,
+        "p99": 24.824,
+        "max": 26.333
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_write_sql",
+      "setting": "default",
+      "requests": 300,
+      "concurrency": 8,
+      "ok": 217,
+      "errors": 83,
+      "total_ms": 896.654,
+      "attempts_sec": 334.577,
+      "ok_requests_sec": 242.011,
+      "latency_ms": {
+        "min": 6.661,
+        "p50": 20.951,
+        "p95": 43.94,
+        "p99": 57.076,
+        "max": 65.979
+      },
+      "error_samples": [
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!"
+      ]
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "front_page_sql",
+      "setting": "threads=1",
+      "requests": 600,
+      "concurrency": 1,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 4390.617,
+      "attempts_sec": 136.655,
+      "ok_requests_sec": 136.655,
+      "latency_ms": {
+        "min": 6.652,
+        "p50": 7.146,
+        "p95": 7.833,
+        "p99": 9.823,
+        "max": 27.402
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_read_sql",
+      "setting": "threads=1",
+      "requests": 600,
+      "concurrency": 1,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 2618.652,
+      "attempts_sec": 229.125,
+      "ok_requests_sec": 229.125,
+      "latency_ms": {
+        "min": 3.851,
+        "p50": 4.198,
+        "p95": 5.086,
+        "p99": 7.111,
+        "max": 24.454
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_write_sql",
+      "setting": "threads=1",
+      "requests": 300,
+      "concurrency": 1,
+      "ok": 300,
+      "errors": 0,
+      "total_ms": 960.04,
+      "attempts_sec": 312.487,
+      "ok_requests_sec": 312.487,
+      "latency_ms": {
+        "min": 2.886,
+        "p50": 2.964,
+        "p95": 3.611,
+        "p99": 5.093,
+        "max": 23.581
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "front_page_sql",
+      "setting": "threads=1",
+      "requests": 600,
+      "concurrency": 8,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 975.992,
+      "attempts_sec": 614.759,
+      "ok_requests_sec": 614.759,
+      "latency_ms": {
+        "min": 9.052,
+        "p50": 11.705,
+        "p95": 16.102,
+        "p99": 33.043,
+        "max": 51.675
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_read_sql",
+      "setting": "threads=1",
+      "requests": 600,
+      "concurrency": 8,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 602.719,
+      "attempts_sec": 995.489,
+      "ok_requests_sec": 995.489,
+      "latency_ms": {
+        "min": 5.314,
+        "p50": 7.308,
+        "p95": 9.755,
+        "p99": 23.138,
+        "max": 26.51
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_write_sql",
+      "setting": "threads=1",
+      "requests": 300,
+      "concurrency": 8,
+      "ok": 202,
+      "errors": 98,
+      "total_ms": 840.885,
+      "attempts_sec": 356.767,
+      "ok_requests_sec": 240.223,
+      "latency_ms": {
+        "min": 6.85,
+        "p50": 19.736,
+        "p95": 40.137,
+        "p99": 58.814,
+        "max": 68.457
+      },
+      "error_samples": [
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!"
+      ]
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "front_page_sql",
+      "setting": "threads=2",
+      "requests": 600,
+      "concurrency": 1,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 4523.759,
+      "attempts_sec": 132.633,
+      "ok_requests_sec": 132.633,
+      "latency_ms": {
+        "min": 6.6,
+        "p50": 7.226,
+        "p95": 8.533,
+        "p99": 10.551,
+        "max": 29.315
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_read_sql",
+      "setting": "threads=2",
+      "requests": 600,
+      "concurrency": 1,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 2592.245,
+      "attempts_sec": 231.46,
+      "ok_requests_sec": 231.46,
+      "latency_ms": {
+        "min": 3.888,
+        "p50": 4.079,
+        "p95": 4.749,
+        "p99": 5.161,
+        "max": 25.458
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_write_sql",
+      "setting": "threads=2",
+      "requests": 300,
+      "concurrency": 1,
+      "ok": 300,
+      "errors": 0,
+      "total_ms": 968.198,
+      "attempts_sec": 309.854,
+      "ok_requests_sec": 309.854,
+      "latency_ms": {
+        "min": 2.934,
+        "p50": 3.02,
+        "p95": 3.362,
+        "p99": 3.82,
+        "max": 25.71
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "front_page_sql",
+      "setting": "threads=2",
+      "requests": 600,
+      "concurrency": 8,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 1008.512,
+      "attempts_sec": 594.936,
+      "ok_requests_sec": 594.936,
+      "latency_ms": {
+        "min": 8.869,
+        "p50": 12.684,
+        "p95": 16.171,
+        "p99": 31.881,
+        "max": 38.45
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_read_sql",
+      "setting": "threads=2",
+      "requests": 600,
+      "concurrency": 8,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 635.785,
+      "attempts_sec": 943.715,
+      "ok_requests_sec": 943.715,
+      "latency_ms": {
+        "min": 5.751,
+        "p50": 7.774,
+        "p95": 10.434,
+        "p99": 21.946,
+        "max": 24.81
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_write_sql",
+      "setting": "threads=2",
+      "requests": 300,
+      "concurrency": 8,
+      "ok": 232,
+      "errors": 68,
+      "total_ms": 860.227,
+      "attempts_sec": 348.745,
+      "ok_requests_sec": 269.696,
+      "latency_ms": {
+        "min": 6.026,
+        "p50": 19.978,
+        "p95": 42.485,
+        "p99": 57.809,
+        "max": 79.393
+      },
+      "error_samples": [
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!"
+      ]
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "front_page_sql",
+      "setting": "threads=4",
+      "requests": 600,
+      "concurrency": 1,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 4947.086,
+      "attempts_sec": 121.284,
+      "ok_requests_sec": 121.284,
+      "latency_ms": {
+        "min": 6.867,
+        "p50": 8.11,
+        "p95": 9.428,
+        "p99": 12.417,
+        "max": 40.225
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_read_sql",
+      "setting": "threads=4",
+      "requests": 600,
+      "concurrency": 1,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 3210.391,
+      "attempts_sec": 186.893,
+      "ok_requests_sec": 186.893,
+      "latency_ms": {
+        "min": 4.264,
+        "p50": 5.12,
+        "p95": 6.248,
+        "p99": 8.467,
+        "max": 24.834
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_write_sql",
+      "setting": "threads=4",
+      "requests": 300,
+      "concurrency": 1,
+      "ok": 300,
+      "errors": 0,
+      "total_ms": 1169.57,
+      "attempts_sec": 256.505,
+      "ok_requests_sec": 256.505,
+      "latency_ms": {
+        "min": 3.154,
+        "p50": 3.592,
+        "p95": 4.231,
+        "p99": 5.243,
+        "max": 44.139
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "front_page_sql",
+      "setting": "threads=4",
+      "requests": 600,
+      "concurrency": 8,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 1040.839,
+      "attempts_sec": 576.458,
+      "ok_requests_sec": 576.458,
+      "latency_ms": {
+        "min": 9.399,
+        "p50": 13.064,
+        "p95": 15.838,
+        "p99": 47.017,
+        "max": 54.203
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_read_sql",
+      "setting": "threads=4",
+      "requests": 600,
+      "concurrency": 8,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 589.236,
+      "attempts_sec": 1018.268,
+      "ok_requests_sec": 1018.268,
+      "latency_ms": {
+        "min": 5.302,
+        "p50": 7.251,
+        "p95": 9.308,
+        "p99": 23.633,
+        "max": 25.025
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_write_sql",
+      "setting": "threads=4",
+      "requests": 300,
+      "concurrency": 8,
+      "ok": 217,
+      "errors": 83,
+      "total_ms": 834.493,
+      "attempts_sec": 359.5,
+      "ok_requests_sec": 260.038,
+      "latency_ms": {
+        "min": 5.641,
+        "p50": 19.346,
+        "p95": 40.43,
+        "p99": 52.117,
+        "max": 74.335
+      },
+      "error_samples": [
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!"
+      ]
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "front_page_sql",
+      "setting": "preserve_insertion_order=false",
+      "requests": 600,
+      "concurrency": 1,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 5827.771,
+      "attempts_sec": 102.955,
+      "ok_requests_sec": 102.955,
+      "latency_ms": {
+        "min": 7.696,
+        "p50": 9.009,
+        "p95": 12.532,
+        "p99": 17.788,
+        "max": 62.123
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_read_sql",
+      "setting": "preserve_insertion_order=false",
+      "requests": 600,
+      "concurrency": 1,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 3286.405,
+      "attempts_sec": 182.57,
+      "ok_requests_sec": 182.57,
+      "latency_ms": {
+        "min": 4.591,
+        "p50": 5.253,
+        "p95": 6.222,
+        "p99": 8.37,
+        "max": 26.633
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_write_sql",
+      "setting": "preserve_insertion_order=false",
+      "requests": 300,
+      "concurrency": 1,
+      "ok": 300,
+      "errors": 0,
+      "total_ms": 1093.895,
+      "attempts_sec": 274.249,
+      "ok_requests_sec": 274.249,
+      "latency_ms": {
+        "min": 3.223,
+        "p50": 3.449,
+        "p95": 3.928,
+        "p99": 4.571,
+        "max": 21.478
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "front_page_sql",
+      "setting": "preserve_insertion_order=false",
+      "requests": 600,
+      "concurrency": 8,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 1111.466,
+      "attempts_sec": 539.828,
+      "ok_requests_sec": 539.828,
+      "latency_ms": {
+        "min": 10.231,
+        "p50": 13.624,
+        "p95": 16.518,
+        "p99": 47.993,
+        "max": 51.539
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_read_sql",
+      "setting": "preserve_insertion_order=false",
+      "requests": 600,
+      "concurrency": 8,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 674.378,
+      "attempts_sec": 889.709,
+      "ok_requests_sec": 889.709,
+      "latency_ms": {
+        "min": 6.551,
+        "p50": 8.449,
+        "p95": 9.902,
+        "p99": 26.42,
+        "max": 30.346
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_write_sql",
+      "setting": "preserve_insertion_order=false",
+      "requests": 300,
+      "concurrency": 8,
+      "ok": 224,
+      "errors": 76,
+      "total_ms": 945.317,
+      "attempts_sec": 317.354,
+      "ok_requests_sec": 236.958,
+      "latency_ms": {
+        "min": 7.806,
+        "p50": 22.427,
+        "p95": 46.563,
+        "p99": 57.628,
+        "max": 59.381
+      },
+      "error_samples": [
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!"
+      ]
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "front_page_sql",
+      "setting": "wal_autocheckpoint=1GB",
+      "requests": 600,
+      "concurrency": 1,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 5562.446,
+      "attempts_sec": 107.866,
+      "ok_requests_sec": 107.866,
+      "latency_ms": {
+        "min": 7.901,
+        "p50": 8.895,
+        "p95": 11.207,
+        "p99": 13.419,
+        "max": 47.89
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_read_sql",
+      "setting": "wal_autocheckpoint=1GB",
+      "requests": 600,
+      "concurrency": 1,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 3218.742,
+      "attempts_sec": 186.408,
+      "ok_requests_sec": 186.408,
+      "latency_ms": {
+        "min": 4.638,
+        "p50": 5.182,
+        "p95": 6.049,
+        "p99": 7.468,
+        "max": 26.013
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_write_sql",
+      "setting": "wal_autocheckpoint=1GB",
+      "requests": 300,
+      "concurrency": 1,
+      "ok": 300,
+      "errors": 0,
+      "total_ms": 1104.333,
+      "attempts_sec": 271.657,
+      "ok_requests_sec": 271.657,
+      "latency_ms": {
+        "min": 3.122,
+        "p50": 3.416,
+        "p95": 4.097,
+        "p99": 5.019,
+        "max": 27.803
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "front_page_sql",
+      "setting": "wal_autocheckpoint=1GB",
+      "requests": 600,
+      "concurrency": 8,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 1139.071,
+      "attempts_sec": 526.745,
+      "ok_requests_sec": 526.745,
+      "latency_ms": {
+        "min": 10.822,
+        "p50": 14.298,
+        "p95": 16.549,
+        "p99": 39.928,
+        "max": 42.686
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_read_sql",
+      "setting": "wal_autocheckpoint=1GB",
+      "requests": 600,
+      "concurrency": 8,
+      "ok": 600,
+      "errors": 0,
+      "total_ms": 705.634,
+      "attempts_sec": 850.299,
+      "ok_requests_sec": 850.299,
+      "latency_ms": {
+        "min": 6.554,
+        "p50": 8.845,
+        "p95": 10.63,
+        "p99": 25.016,
+        "max": 27.675
+      },
+      "error_samples": []
+    },
+    {
+      "type": "benchmark",
+      "backend": "duckdb",
+      "label": "rest_write_sql",
+      "setting": "wal_autocheckpoint=1GB",
+      "requests": 300,
+      "concurrency": 8,
+      "ok": 221,
+      "errors": 79,
+      "total_ms": 957.707,
+      "attempts_sec": 313.248,
+      "ok_requests_sec": 230.759,
+      "latency_ms": {
+        "min": 7.385,
+        "p50": 22.0,
+        "p95": 49.007,
+        "p99": 60.821,
+        "max": 79.951
+      },
+      "error_samples": [
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!",
+        "TransactionException: TransactionContext Error: Conflict on update!"
+      ]
+    }
+  ],
+  "total_requests": 18000,
+  "total_errors": 487
+}

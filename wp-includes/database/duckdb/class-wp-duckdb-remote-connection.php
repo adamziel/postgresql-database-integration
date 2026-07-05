@@ -83,6 +83,8 @@ class WP_DuckDB_Remote_Connection extends WP_DuckDB_Connection {
 		} else {
 			$this->connect_line_socket();
 		}
+
+		$this->apply_connection_setup_sql( $options );
 	}
 
 	/**

@@ -1,0 +1,60 @@
+{
+  "run_id": "wp-duckdb-pure-sql-settings-20260705T172338Z",
+  "created_at": "2026-07-05T17:23:38Z",
+  "output_dir": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-pure-sql-settings-20260705T172338Z",
+  "work_root": "/tmp/wp-duckdb-pure-sql-settings-20260705T172338Z",
+  "source_database": "/tmp/wp-duckdb-pure-sql-concurrency-20260705T171042Z/duckdb.duckdb",
+  "source_fixture_run": "wp-duckdb-pure-sql-concurrency-20260705T171042Z",
+  "purpose": "Measure whether DuckDB SET options materially improve native DuckDB performance for WordPress-shaped SQL workloads.",
+  "settings_cases": [
+    {
+      "setting": "default",
+      "setup_sql": [],
+      "notes": "DuckDB defaults on this host."
+    },
+    {
+      "setting": "threads=1",
+      "setup_sql": [
+        "SET threads=1"
+      ],
+      "notes": "Reduce DuckDB internal parallelism for small OLTP-shaped queries."
+    },
+    {
+      "setting": "threads=2",
+      "setup_sql": [
+        "SET threads=2"
+      ],
+      "notes": "Small internal parallelism."
+    },
+    {
+      "setting": "threads=4",
+      "setup_sql": [
+        "SET threads=4"
+      ],
+      "notes": "Moderate internal parallelism."
+    },
+    {
+      "setting": "preserve_insertion_order=false",
+      "setup_sql": [
+        "SET preserve_insertion_order=false"
+      ],
+      "notes": "DuckDB docs recommend this mainly for memory-heavy bulk work."
+    },
+    {
+      "setting": "wal_autocheckpoint=1GB",
+      "setup_sql": [
+        "SET wal_autocheckpoint='1GB'"
+      ],
+      "notes": "Defer automatic checkpoints during the write workload."
+    }
+  ],
+  "concurrency": [
+    1,
+    8
+  ],
+  "read_requests_per_scenario": 600,
+  "write_requests_per_scenario": 300,
+  "python_version": "3.14.4",
+  "duckdb_python_version": "1.5.4",
+  "commit": "a70a0bab5536"
+}

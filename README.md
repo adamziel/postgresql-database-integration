@@ -164,6 +164,7 @@ Common constants:
 | `DUCKDB_REMOTE_HOST` / `DUCKDB_REMOTE_PORT` | Host and port for `DUCKDB_CONNECTION=tcp`. |
 | `DUCKDB_REMOTE_URL` | HTTP endpoint for `DUCKDB_CONNECTION=http`. |
 | `DUCKDB_SIDECAR_COMMAND` | Stdio sidecar command for `DUCKDB_CONNECTION=sidecar`. |
+| `DUCKDB_CONNECTION_SETUP_SQL` | Optional SQL string or array of SQL strings to run on each DuckDB connection, such as `SET threads=2`. Use `WP_DUCKDB_CONNECTION_SETUP_SQL_JSON` for sidecar process environments. |
 | `WP_DUCKDB_REQUEST_TRANSACTION` | Optional performance flag. Set to `1` to batch request writes into one DuckDB transaction. |
 
 SQL templates support these placeholders:
@@ -289,6 +290,88 @@ cross-connection visibility.
 
 The raw benchmark evidence is kept under `docs/benchmarks/runs/`; see
 `docs/benchmarks/duckdb-performance-findings.md` for the current summary.
+
+#### Backend Performance Expectations
+
+DuckDB is usable as WordPress storage, but it is not a drop-in performance peer
+for MySQL on the current WordPress request workload. Treat the numbers below as
+local, WordPress-shaped benchmark evidence, not universal database benchmarks.
+Higher requests per second is better.
+
+The `mysql` row is native WordPress MySQL/MariaDB. DuckDB is not loaded there.
+Rows named `DuckDB -> ...` mean WordPress talks to DuckDB, and DuckDB hydrates
+from or flushes to that storage target.
+
+| Storage path | DuckDB involved | Front page c1 / c8 | REST read c1 / c8 | REST write c1 / c8 | Practical reading |
+| --- | --- | ---: | ---: | ---: | --- |
+| MySQL/MariaDB native | No | 19.6 / 81.4 | 65.5 / 269.5 | 60.1 / 213.7 | Baseline for production WordPress OLTP. |
+| DuckDB native over TCP sidecar | Yes | 17.8 / 18.9 | 52.9 / 48.7 | 36.2 / 34.7 | Works, but throughput is mostly flat as concurrency rises. |
+| DuckDB -> JSON files | Yes | 4.2 / 4.2 | 5.1 / 4.8 | 4.8 / 4.8 | Useful for demos, interchange, and inspection; not high-throughput request storage. |
+| DuckDB -> SQLite attach | Yes | 2.9 / 2.9 | 3.3 / 3.1 | 3.1 / 3.1 | Proof that attached backends can persist WordPress data, not a performance path. |
+
+The same conclusion shows up when WordPress is removed from the hot path and the
+benchmark runs only WordPress-shaped SQL against copied WordPress databases:
+
+| Direct SQL workload at concurrency 8 | MySQL/MariaDB native SQL | DuckDB native SQL | DuckDB / MySQL |
+| --- | ---: | ---: | ---: |
+| Front-page-shaped reads | 241.4 rps | 145.6 rps | 60% |
+| REST-read-shaped reads | 886.2 rps | 390.0 rps | 44% |
+| REST-write-shaped writes | 2382.5 rps | 248.1 successful rps | 10% |
+
+The write-shaped direct SQL case also produced DuckDB transaction conflicts
+when concurrent workers updated the same option row. WordPress-level code can
+retry or serialize those hot writes, but the conflict behavior is real and
+should be considered before using DuckDB for a busy mutable site.
+
+Raw evidence:
+
+- [`wp-duckdb-tcp-storage-comparison-20260705T094510Z`](docs/benchmarks/runs/wp-duckdb-tcp-storage-comparison-20260705T094510Z/summary.json)
+- [`wp-duckdb-pure-sql-concurrency-20260705T171042Z`](docs/benchmarks/runs/wp-duckdb-pure-sql-concurrency-20260705T171042Z/summary.json)
+
+#### DuckDB Performance Settings
+
+DuckDB supports connection settings through SQL `SET` statements. This plugin
+can run them through `DUCKDB_CONNECTION_SETUP_SQL`:
+
+```php
+define( 'DUCKDB_CONNECTION_SETUP_SQL', array(
+	'SET threads=2',
+) );
+```
+
+For an independently managed sidecar process, put the same settings in the
+sidecar environment:
+
+```bash
+WP_DUCKDB_CONNECTION_SETUP_SQL_JSON='["SET threads=2"]' \
+php -d ffi.enable=1 wp-content/plugins/wordpress-databases-support/bin/duckdb-sidecar.php \
+	--socket=/run/wp-duckdb/wordpress.sock \
+	--path=/var/www/html/wp-content/database/.ht.duckdb
+```
+
+In the local direct-SQL tuning pass, increasing memory or checkpoint thresholds
+did not close the WordPress gap. The only consistently useful setting was
+reducing DuckDB internal parallelism for many small WordPress-shaped queries:
+
+| Setting | Front-page SQL c8 vs default | REST-read SQL c8 vs default | REST-write SQL c8 vs default | Write conflicts |
+| --- | ---: | ---: | ---: | ---: |
+| Default | 1.00x | 1.00x | 1.00x | 83 / 300 |
+| `SET threads=1` | 1.15x | 1.14x | 0.99x | 98 / 300 |
+| `SET threads=2` | 1.12x | 1.08x | 1.11x | 68 / 300 |
+| `SET threads=4` | 1.08x | 1.17x | 1.07x | 83 / 300 |
+| `SET preserve_insertion_order=false` | 1.01x | 1.02x | 0.98x | 76 / 300 |
+| `SET wal_autocheckpoint='1GB'` | 0.99x | 0.98x | 0.95x | 79 / 300 |
+
+`threads=1` or `threads=2` is worth testing for WordPress request serving,
+especially through a long-running sidecar. It is not a production guarantee,
+and it does not solve concurrent writes to the same hot rows. Settings such as
+`memory_limit`, `preserve_insertion_order=false`, and larger WAL checkpoint
+thresholds are more relevant to bulk scans, imports, and memory pressure than
+to small OLTP-style WordPress requests.
+
+Raw tuning evidence:
+
+- [`wp-duckdb-pure-sql-settings-20260705T172338Z`](docs/benchmarks/runs/wp-duckdb-pure-sql-settings-20260705T172338Z/summary.json)
 
 #### Local Parquet, CSV, Or JSON Files
 

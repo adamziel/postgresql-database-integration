@@ -742,6 +742,9 @@ class WP_DuckDB_Driver {
 		if ( 'sidecar' === $transport && ! isset( $remote_options['database_path'] ) && isset( $driver_options['path'] ) ) {
 			$remote_options['database_path'] = $driver_options['path'];
 		}
+		if ( ! array_key_exists( 'connection_setup_sql', $remote_options ) && array_key_exists( 'connection_setup_sql', $driver_options ) ) {
+			$remote_options['connection_setup_sql'] = $driver_options['connection_setup_sql'];
+		}
 
 		return $remote_options;
 	}

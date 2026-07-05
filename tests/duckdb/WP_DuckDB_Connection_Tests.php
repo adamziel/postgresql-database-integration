@@ -767,6 +767,70 @@ class WP_DuckDB_Connection_Tests extends WP_DuckDB_TestCase {
 		$this->assertFalse( $stmt->fetch() );
 	}
 
+	public function test_connection_setup_sql_runs_after_native_open(): void {
+		$this->requireDuckDBRuntime();
+
+		$connection = new WP_DuckDB_Connection(
+			array(
+				'path'                 => ':memory:',
+				'connection_setup_sql' => array(
+					'SET threads=1',
+					'CREATE TABLE connection_setup_probe (id INTEGER, label VARCHAR)',
+					"INSERT INTO connection_setup_probe VALUES (1, 'ready')",
+				),
+			)
+		);
+
+		$this->assertSame(
+			array( 1, 'ready' ),
+			$connection->query( 'SELECT id, label FROM connection_setup_probe' )->fetch( PDO::FETCH_NUM )
+		);
+		$this->assertSame( '1', (string) $connection->query( "SELECT value FROM duckdb_settings() WHERE name = 'threads'" )->fetchColumn() );
+	}
+
+	public function test_connection_setup_sql_failure_has_context(): void {
+		$this->requireDuckDBRuntime();
+
+		$this->expectException( WP_DuckDB_Driver_Exception::class );
+		$this->expectExceptionMessage( 'DuckDB connection setup failed for statement "SET definitely_not_a_duckdb_setting=1"' );
+
+		new WP_DuckDB_Connection(
+			array(
+				'path'                 => ':memory:',
+				'connection_setup_sql' => 'SET definitely_not_a_duckdb_setting=1',
+			)
+		);
+	}
+
+	public function test_connection_setup_sql_json_environment_runs_after_native_open(): void {
+		$this->requireDuckDBRuntime();
+
+		$previous = getenv( 'WP_DUCKDB_CONNECTION_SETUP_SQL_JSON' );
+		putenv(
+			'WP_DUCKDB_CONNECTION_SETUP_SQL_JSON=' . json_encode(
+				array(
+					'CREATE TABLE env_connection_setup_probe (id INTEGER, label VARCHAR)',
+					"INSERT INTO env_connection_setup_probe VALUES (1, 'env-ready')",
+				),
+				JSON_UNESCAPED_SLASHES
+			)
+		);
+
+		try {
+			$connection = new WP_DuckDB_Connection( array( 'path' => ':memory:' ) );
+			$this->assertSame(
+				'env-ready',
+				$connection->query( 'SELECT label FROM env_connection_setup_probe WHERE id = 1' )->fetchColumn()
+			);
+		} finally {
+			if ( false === $previous ) {
+				putenv( 'WP_DUCKDB_CONNECTION_SETUP_SQL_JSON' );
+			} else {
+				putenv( 'WP_DUCKDB_CONNECTION_SETUP_SQL_JSON=' . $previous );
+			}
+		}
+	}
+
 	public function test_select_count_alias_is_fetchable_result_set(): void {
 		$this->requireDuckDBRuntime();
 
@@ -1140,8 +1204,16 @@ class WP_DuckDB_Connection_Tests extends WP_DuckDB_TestCase {
 				$pipes              = $sidecar['pipes'];
 				$connection_options = $sidecar['connection_options'];
 			}
+			$connection_options['connection_setup_sql'] = array(
+				'CREATE TABLE IF NOT EXISTS remote_setup_probe_' . $transport . ' (id INTEGER, label VARCHAR)',
+				"INSERT INTO remote_setup_probe_" . $transport . " VALUES (1, 'setup')",
+			);
 
 			$connection = new WP_DuckDB_Remote_Connection( $connection_options );
+			$this->assertSame(
+				'setup',
+				$connection->query( 'SELECT label FROM remote_setup_probe_' . $transport . ' WHERE id = 1' )->fetchColumn()
+			);
 			$connection->query( 'CREATE TABLE sidecar_test (id INTEGER, label VARCHAR)' );
 			$insert = $connection->query( "INSERT INTO sidecar_test VALUES (1, 'first'), (2, 'second')" );
 
