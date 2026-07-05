@@ -253,22 +253,67 @@ stop_minio_server() {
 	fi
 }
 
+free_tcp_port() {
+	php <<'PHP'
+<?php
+$server = stream_socket_server( 'tcp://127.0.0.1:0', $errno, $errstr );
+if ( false === $server ) {
+	fwrite( STDERR, $errstr . "\n" );
+	exit( 1 );
+}
+$name = stream_socket_get_name( $server, false );
+fclose( $server );
+if ( ! is_string( $name ) || ! preg_match( '/:(\d+)$/', $name, $matches ) ) {
+	exit( 1 );
+}
+echo $matches[1];
+PHP
+}
+
 start_duckdb_sidecar_server() {
 	local backend_slug=$1
 	local wp_root=$2
-	local socket=$3
-	local database="$wp_root/wp-content/database/.ht.duckdb-benchmark"
+	local backend=$3
+	local transport=$4
+	local endpoint=$5
+	local database_dir="$wp_root/wp-content/database/"
+	local database="$database_dir.ht.duckdb-benchmark"
 	local plugin_dir="$wp_root/wp-content/plugins/wordpress-databases-support"
 	local log="$output_dir/$backend_slug-duckdb-sidecar.log"
+	local command
 
-	mkdir -p "$(dirname "$socket")" "$(dirname "$database")"
-	rm -f "$socket"
+	if ! is_native_duckdb_backend "$backend"; then
+		database="${WP_DUCKDB_WORKING_DATABASE_FILE:-${DUCKDB_WORKING_DATABASE_FILE:-}}"
+		if [ -n "$database" ]; then
+			database=${database//\{root\}/$wp_root}
+			database=${database//\{database_dir\}/$database_dir}
+			database=${database//\{backend\}/$backend}
+			database=${database//\{backend_slug\}/$backend_slug}
+		else
+			database="$database_dir.ht.duckdb-benchmark-$backend_slug-working"
+		fi
+	fi
 
-	php -d ffi.enable=1 "$plugin_dir/bin/duckdb-sidecar.php" --socket="$socket" --path="$database" >"$log" 2>&1 &
+	mkdir -p "$(dirname "$database")"
+	command=(php -d ffi.enable=1 "$plugin_dir/bin/duckdb-sidecar.php" --path="$database")
+	if [ "$transport" = "unix" ]; then
+		mkdir -p "$(dirname "$endpoint")"
+		rm -f "$endpoint"
+		command+=(--socket="$endpoint")
+	elif [ "$transport" = "tcp" ]; then
+		command+=(--tcp="$endpoint")
+	elif [ "$transport" = "http" ]; then
+		command+=(--http="$endpoint")
+	else
+		echo "Unsupported DuckDB sidecar transport for benchmark: $transport" >&2
+		return 1
+	fi
+
+	"${command[@]}" >"$log" 2>&1 &
 	DUCKDB_SIDECAR_PID=$!
 
 	for _ in $(seq 1 80); do
-		if [ -S "$socket" ] && DUCKDB_SIDECAR_PLUGIN_DIR="$plugin_dir" WP_DUCKDB_REMOTE_SOCKET="$socket" php -d ffi.enable=1 <<'PHP' >/dev/null 2>&1
+		if DUCKDB_SIDECAR_PLUGIN_DIR="$plugin_dir" WP_DUCKDB_REMOTE_TRANSPORT="$transport" WP_DUCKDB_REMOTE_ENDPOINT="$endpoint" php -d ffi.enable=1 <<'PHP' >/dev/null 2>&1
 <?php
 $plugin_dir = getenv( 'DUCKDB_SIDECAR_PLUGIN_DIR' );
 if ( false === $plugin_dir || '' === $plugin_dir ) {
@@ -278,7 +323,32 @@ if ( is_file( $plugin_dir . '/vendor/autoload.php' ) ) {
 	require_once $plugin_dir . '/vendor/autoload.php';
 }
 require_once $plugin_dir . '/wp-includes/database/load.php';
-$connection = new WP_DuckDB_Remote_Connection( array( 'socket' => getenv( 'WP_DUCKDB_REMOTE_SOCKET' ) ) );
+$transport = getenv( 'WP_DUCKDB_REMOTE_TRANSPORT' );
+$endpoint  = getenv( 'WP_DUCKDB_REMOTE_ENDPOINT' );
+if ( 'unix' === $transport ) {
+	if ( ! is_string( $endpoint ) || ! is_socket( $endpoint ) ) {
+		exit( 1 );
+	}
+	$options = array(
+		'transport' => 'unix',
+		'socket'    => $endpoint,
+	);
+} elseif ( 'tcp' === $transport || 'http' === $transport ) {
+	if ( ! is_string( $endpoint ) || ! preg_match( '/^([^:]+):(\d+)$/', $endpoint, $matches ) ) {
+		exit( 1 );
+	}
+	$options = array(
+		'transport' => $transport,
+		'host'      => $matches[1],
+		'port'      => (int) $matches[2],
+	);
+	if ( 'http' === $transport ) {
+		$options['url'] = 'http://' . $endpoint . '/query';
+	}
+} else {
+	exit( 1 );
+}
+$connection = new WP_DuckDB_Remote_Connection( $options );
 $connection->query( 'SELECT 1' )->fetchAll();
 $connection->close();
 PHP
@@ -309,6 +379,14 @@ clear_duckdb_backend_env() {
 	unset WP_DUCKDB_BACKEND_READ_SQL
 	unset WP_DUCKDB_BACKEND_WRITE_SQL
 	unset WP_DUCKDB_BACKEND_ATOMIC_FLUSH
+	unset WP_DUCKDB_CONNECTION
+	unset DUCKDB_CONNECTION
+	unset WP_DUCKDB_REMOTE_HOST
+	unset DUCKDB_REMOTE_HOST
+	unset WP_DUCKDB_REMOTE_PORT
+	unset DUCKDB_REMOTE_PORT
+	unset WP_DUCKDB_REMOTE_URL
+	unset DUCKDB_REMOTE_URL
 	unset WP_DUCKDB_REMOTE_SOCKET
 	unset DUCKDB_REMOTE_SOCKET
 }
@@ -325,7 +403,7 @@ cleanup_backend() {
 	stop_minio_server "$minio_pid"
 	stop_duckdb_sidecar_server "$sidecar_pid"
 
-	if [ -n "$backend" ] && { uses_duckdb_external_config "$backend" || uses_duckdb_sidecar_config "$backend"; }; then
+	if [ -n "$backend" ] && { uses_duckdb_external_config "$backend" || uses_duckdb_sidecar_config "$backend" || uses_duckdb_benchmark_remote_config "$backend"; }; then
 		clear_duckdb_backend_env
 	fi
 }
@@ -658,6 +736,22 @@ $config .= 'define( \'WP_DUCKDB_LOCK_TIMEOUT_SECONDS\', ' . $lock_timeout . " );
 $remote_socket = duckdb_benchmark_env_first( array( 'WP_DUCKDB_REMOTE_SOCKET', 'DUCKDB_REMOTE_SOCKET' ) );
 if ( null !== $remote_socket ) {
 	$config .= 'define( \'DUCKDB_REMOTE_SOCKET\', ' . var_export( $remote_socket, true ) . " );\n";
+}
+$remote_transport = duckdb_benchmark_env_first( array( 'WP_DUCKDB_CONNECTION', 'DUCKDB_CONNECTION', 'WP_DUCKDB_REMOTE_TRANSPORT', 'DUCKDB_REMOTE_TRANSPORT' ) );
+if ( null !== $remote_transport ) {
+	$config .= 'define( \'DUCKDB_CONNECTION\', ' . var_export( $remote_transport, true ) . " );\n";
+}
+$remote_host = duckdb_benchmark_env_first( array( 'WP_DUCKDB_REMOTE_HOST', 'DUCKDB_REMOTE_HOST' ) );
+if ( null !== $remote_host ) {
+	$config .= 'define( \'DUCKDB_REMOTE_HOST\', ' . var_export( $remote_host, true ) . " );\n";
+}
+$remote_port = duckdb_benchmark_env_first( array( 'WP_DUCKDB_REMOTE_PORT', 'DUCKDB_REMOTE_PORT' ) );
+if ( null !== $remote_port ) {
+	$config .= 'define( \'DUCKDB_REMOTE_PORT\', ' . var_export( $remote_port, true ) . " );\n";
+}
+$remote_url = duckdb_benchmark_env_first( array( 'WP_DUCKDB_REMOTE_URL', 'DUCKDB_REMOTE_URL' ) );
+if ( null !== $remote_url ) {
+	$config .= 'define( \'DUCKDB_REMOTE_URL\', ' . var_export( $remote_url, true ) . " );\n";
 }
 
 if ( ! in_array( $backend, array( 'duckdb', 'duck', 'native', 'file', 'duckdb_sidecar' ), true ) ) {
@@ -1003,12 +1097,30 @@ is_s3_parquet_backend() {
 	[ "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" = "s3_parquet" ]
 }
 
+is_duckdb_powered_backend() {
+	! is_mysql_backend "$1" && ! is_sqlite_backend "$1"
+}
+
 uses_duckdb_external_config() {
 	is_s3_parquet_backend "$1" || is_sqlite_attach_backend "$1" || is_mysql_attach_backend "$1"
 }
 
 uses_duckdb_sidecar_config() {
 	is_duckdb_sidecar_backend "$1"
+}
+
+configured_duckdb_benchmark_transport() {
+	local transport=${WP_DUCKDB_BENCHMARK_DUCKDB_TRANSPORT:-}
+
+	if [ -z "$transport" ]; then
+		return
+	fi
+
+	printf '%s' "$transport" | tr '[:upper:]_' '[:lower:]-'
+}
+
+uses_duckdb_benchmark_remote_config() {
+	is_duckdb_powered_backend "$1" && [ -n "$(configured_duckdb_benchmark_transport)" ]
 }
 
 remove_working_database() {
@@ -1173,6 +1285,7 @@ write_meta() {
 	COMMIT="$commit" \
 	HOST="$host" \
 	LOCK_TIMEOUT="$lock_timeout" \
+	DUCKDB_BENCHMARK_TRANSPORT="${WP_DUCKDB_BENCHMARK_DUCKDB_TRANSPORT:-}" \
 	php <<'PHP' >"$meta_file"
 <?php
 echo json_encode(
@@ -1192,6 +1305,7 @@ echo json_encode(
 		'commit'                      => getenv( 'COMMIT' ),
 		'host'                        => getenv( 'HOST' ),
 		'duckdb_lock_timeout_seconds' => (int) getenv( 'LOCK_TIMEOUT' ),
+		'duckdb_benchmark_transport'  => getenv( 'DUCKDB_BENCHMARK_TRANSPORT' ),
 	),
 	JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
 ) . "\n";
@@ -1213,6 +1327,9 @@ run_backend() {
 	local minio_pid=''
 	local sidecar_pid=''
 	local mysql_port=''
+	local duckdb_transport=''
+	local duckdb_endpoint=''
+	local duckdb_port=''
 	local expected_write_events=0
 	local verification_output
 	local verification_status
@@ -1256,7 +1373,38 @@ run_backend() {
 		export WP_DUCKDB_BACKEND_WRITE_SQL='CREATE OR REPLACE TABLE wp_store.{table} AS SELECT * FROM {table}'
 		export WP_DUCKDB_BACKEND_ATOMIC_FLUSH=0
 	elif is_duckdb_sidecar_backend "$backend"; then
-		export WP_DUCKDB_REMOTE_SOCKET="$work_root/$backend_slug/duckdb-sidecar.sock"
+		duckdb_transport='unix'
+		duckdb_endpoint="$work_root/$backend_slug/duckdb-sidecar.sock"
+		export WP_DUCKDB_CONNECTION=unix
+		export WP_DUCKDB_REMOTE_SOCKET="$duckdb_endpoint"
+	elif uses_duckdb_benchmark_remote_config "$backend"; then
+		duckdb_transport=$(configured_duckdb_benchmark_transport)
+		if [ "$duckdb_transport" = "tcp-socket" ]; then
+			duckdb_transport='tcp'
+		elif [ "$duckdb_transport" = "unix-socket" ] || [ "$duckdb_transport" = "socket" ]; then
+			duckdb_transport='unix'
+		fi
+		if [ "$duckdb_transport" = "tcp" ]; then
+			duckdb_port=$(free_tcp_port)
+			duckdb_endpoint="127.0.0.1:$duckdb_port"
+			export WP_DUCKDB_CONNECTION=tcp
+			export WP_DUCKDB_REMOTE_HOST=127.0.0.1
+			export WP_DUCKDB_REMOTE_PORT="$duckdb_port"
+		elif [ "$duckdb_transport" = "http" ]; then
+			duckdb_port=$(free_tcp_port)
+			duckdb_endpoint="127.0.0.1:$duckdb_port"
+			export WP_DUCKDB_CONNECTION=http
+			export WP_DUCKDB_REMOTE_HOST=127.0.0.1
+			export WP_DUCKDB_REMOTE_PORT="$duckdb_port"
+			export WP_DUCKDB_REMOTE_URL="http://$duckdb_endpoint/query"
+		elif [ "$duckdb_transport" = "unix" ]; then
+			duckdb_endpoint="$work_root/$backend_slug/duckdb-sidecar.sock"
+			export WP_DUCKDB_CONNECTION=unix
+			export WP_DUCKDB_REMOTE_SOCKET="$duckdb_endpoint"
+		else
+			echo "Unsupported WP_DUCKDB_BENCHMARK_DUCKDB_TRANSPORT: $duckdb_transport" >&2
+			return 2
+		fi
 	fi
 
 	prepare_wordpress "$wp_root"
@@ -1273,8 +1421,8 @@ run_backend() {
 		prepare_databases_support_plugin "$wp_root"
 	fi
 	write_wp_config "$wp_root" "$backend" "$site_url" "$benchmark_token"
-	if is_duckdb_sidecar_backend "$backend"; then
-		start_duckdb_sidecar_server "$backend_slug" "$wp_root" "$WP_DUCKDB_REMOTE_SOCKET"
+	if [ -n "$duckdb_transport" ]; then
+		start_duckdb_sidecar_server "$backend_slug" "$wp_root" "$backend" "$duckdb_transport" "$duckdb_endpoint"
 		sidecar_pid=$DUCKDB_SIDECAR_PID
 	fi
 	php_install_site "$wp_root" "$tables_file"

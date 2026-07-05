@@ -169,6 +169,123 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 		);
 	}
 
+	public function test_json_external_backend_round_trips_through_tcp_sidecar(): void {
+		$this->requireDuckDBRuntime();
+		if ( ! function_exists( 'proc_open' ) ) {
+			$this->markTestSkipped( 'proc_open is required for the DuckDB TCP sidecar integration test.' );
+		}
+
+		$temp_dir     = $this->create_temp_dir();
+		$external_dir = $temp_dir . '/external';
+		$database     = $temp_dir . '/working.duckdb';
+		$repo_dir     = dirname( __DIR__, 2 );
+		$port         = $this->free_tcp_port();
+		$process      = null;
+		$pipes        = array();
+		$previous_env = $this->capture_duckdb_remote_env();
+
+		$this->create_external_wordpress_storage_files( 'json', $external_dir );
+
+		try {
+			$process = proc_open(
+				PHP_BINARY . ' -d ffi.enable=1 '
+					. escapeshellarg( $repo_dir . '/bin/duckdb-sidecar.php' )
+					. ' --tcp=' . escapeshellarg( '127.0.0.1:' . $port )
+					. ' --path=' . escapeshellarg( $database ),
+				array(
+					0 => array( 'pipe', 'r' ),
+					1 => array( 'pipe', 'w' ),
+					2 => array( 'pipe', 'w' ),
+				),
+				$pipes,
+				$repo_dir
+			);
+			if ( ! is_resource( $process ) ) {
+				$this->markTestSkipped( 'Could not start the DuckDB TCP sidecar process.' );
+			}
+			stream_set_blocking( $pipes[2], false );
+			$this->wait_for_tcp_sidecar( $port, $pipes );
+
+			putenv( 'WP_DUCKDB_CONNECTION=tcp' );
+			putenv( 'WP_DUCKDB_REMOTE_HOST=127.0.0.1' );
+			putenv( 'WP_DUCKDB_REMOTE_PORT=' . $port );
+
+			$storage = new WP_DuckDB_Storage_Backend(
+				array(
+					'backend'              => 'json',
+					'database_path'        => $database,
+					'external_storage_dir' => $external_dir,
+				)
+			);
+			$driver  = $storage->create_driver( 'wp' );
+
+			$this->assertSame(
+				'Configured External Site',
+				$driver->query(
+					"SELECT option_value
+					FROM wptests_options
+					WHERE option_name = 'blogname'"
+				)->fetchColumn()
+			);
+			$this->assertSame(
+				1,
+				$driver->query(
+					"UPDATE wptests_options
+					SET option_value = 'Changed Through TCP Sidecar'
+					WHERE option_name = 'blogname'"
+				)->rowCount()
+			);
+
+			$storage->flush();
+			$driver->close();
+			$storage->close();
+			unset( $driver, $storage );
+
+			$this->restore_duckdb_remote_env( $previous_env );
+
+			$fresh_storage = new WP_DuckDB_Storage_Backend(
+				array(
+					'backend'              => 'json',
+					'database_path'        => $temp_dir . '/fresh.duckdb',
+					'external_storage_dir' => $external_dir,
+				)
+			);
+			$fresh_driver  = $fresh_storage->create_driver( 'wp' );
+
+			$this->assertSame(
+				'Changed Through TCP Sidecar',
+				$fresh_driver->query(
+					"SELECT option_value
+					FROM wptests_options
+					WHERE option_name = 'blogname'"
+				)->fetchColumn()
+			);
+		} finally {
+			if ( isset( $fresh_driver ) ) {
+				$fresh_driver->close();
+			}
+			if ( isset( $fresh_storage ) ) {
+				$fresh_storage->close();
+			}
+			if ( isset( $driver ) ) {
+				$driver->close();
+			}
+			if ( isset( $storage ) ) {
+				$storage->close();
+			}
+			$this->restore_duckdb_remote_env( $previous_env );
+			foreach ( $pipes as $pipe ) {
+				if ( is_resource( $pipe ) ) {
+					fclose( $pipe );
+				}
+			}
+			if ( is_resource( $process ) ) {
+				proc_terminate( $process );
+				proc_close( $process );
+			}
+		}
+	}
+
 	public function test_custom_backend_templates_round_trip_wordpress_mutations(): void {
 		$this->requireDuckDBRuntime();
 
@@ -3261,6 +3378,61 @@ class WP_DuckDB_Storage_Backend_Tests extends WP_DuckDB_TestCase {
 				'backend' => 'arbitrary_backend',
 			)
 		);
+	}
+
+	private function free_tcp_port(): int {
+		$server = stream_socket_server( 'tcp://127.0.0.1:0', $errno, $errstr );
+		if ( false === $server ) {
+			$this->markTestSkipped( 'Could not allocate a local TCP port for the DuckDB sidecar test: ' . $errstr );
+		}
+
+		$name = stream_socket_get_name( $server, false );
+		fclose( $server );
+		if ( ! is_string( $name ) || ! preg_match( '/:(\d+)$/', $name, $matches ) ) {
+			$this->markTestSkipped( 'Could not determine the allocated local TCP port for the DuckDB sidecar test.' );
+		}
+
+		return (int) $matches[1];
+	}
+
+	private function wait_for_tcp_sidecar( int $port, array $pipes ): void {
+		for ( $i = 0; $i < 40; ++$i ) {
+			$errno  = 0;
+			$errstr = '';
+			$handle = @stream_socket_client( 'tcp://127.0.0.1:' . $port, $errno, $errstr, 0.25 );
+			if ( false !== $handle ) {
+				fclose( $handle );
+				return;
+			}
+			usleep( 250000 );
+		}
+
+		$stderr = isset( $pipes[2] ) && is_resource( $pipes[2] ) ? stream_get_contents( $pipes[2] ) : '';
+		$this->fail( 'Timed out waiting for DuckDB TCP sidecar endpoint: ' . $stderr );
+	}
+
+	/**
+	 * @return array<string,string|false>
+	 */
+	private function capture_duckdb_remote_env(): array {
+		return array(
+			'WP_DUCKDB_CONNECTION'  => getenv( 'WP_DUCKDB_CONNECTION' ),
+			'WP_DUCKDB_REMOTE_HOST' => getenv( 'WP_DUCKDB_REMOTE_HOST' ),
+			'WP_DUCKDB_REMOTE_PORT' => getenv( 'WP_DUCKDB_REMOTE_PORT' ),
+		);
+	}
+
+	/**
+	 * @param array<string,string|false> $values Environment values.
+	 */
+	private function restore_duckdb_remote_env( array $values ): void {
+		foreach ( $values as $name => $value ) {
+			if ( false === $value ) {
+				putenv( $name );
+			} else {
+				putenv( $name . '=' . $value );
+			}
+		}
 	}
 
 	private function create_external_wordpress_storage_files( string $backend, string $external_dir, ?string $extension = null ): void {

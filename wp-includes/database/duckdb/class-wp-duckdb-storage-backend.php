@@ -276,7 +276,9 @@ class WP_DuckDB_Storage_Backend {
 		}
 
 		$this->acquire_database_lock();
-		$this->connection = new WP_DuckDB_Connection( array( 'path' => $this->database_path ) );
+		$this->connection = null !== $remote_options
+			? new WP_DuckDB_Remote_Connection( $remote_options )
+			: new WP_DuckDB_Connection( array( 'path' => $this->database_path ) );
 		$this->run_setup_sql();
 
 		if ( $this->is_external() ) {

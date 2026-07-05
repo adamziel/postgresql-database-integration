@@ -727,6 +727,14 @@ WP_DUCKDB_BENCHMARK_SERVER_WORKERS=8 \
 ./bin/duckdb-wordpress-benchmark.sh mysql sqlite duckdb sqlite_attach mysql_attach s3_parquet
 ```
 
+Benchmark DuckDB external JSON storage over a TCP sidecar against native MySQL:
+
+```bash
+WP_DUCKDB_BENCHMARK_DUCKDB_TRANSPORT=tcp \
+WP_DUCKDB_BENCHMARK_CONCURRENCY="1 2 4 8" \
+./bin/duckdb-wordpress-benchmark.sh mysql json
+```
+
 Run the DuckDB production-readiness evidence harness when you want structured
 results that can be aggregated into a later report:
 

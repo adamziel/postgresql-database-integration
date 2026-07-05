@@ -46,17 +46,13 @@ $GLOBALS['wpdb'] = new WP_DuckDB_DB( $db_name );
  * Check whether WordPress should connect to DuckDB through a remote sidecar.
  *
  * Remote transports avoid loading the DuckDB FFI runtime inside the WordPress
- * request process. External DuckDB table backends still need the embedded
- * working database handle for hydrate/flush, so only native file storage can
- * skip the local runtime check.
+ * request process. External DuckDB table backends can use the same remote
+ * handle for hydrate/flush work when the storage backend is configured with a
+ * remote transport.
  *
  * @return bool Whether a remote DuckDB connection is configured.
  */
 function wp_duckdb_uses_remote_connection(): bool {
-	if ( ! wp_duckdb_uses_native_file_backend() ) {
-		return false;
-	}
-
 	$connection = wp_duckdb_config_value(
 		array( 'WP_DUCKDB_CONNECTION', 'DUCKDB_CONNECTION', 'WP_DUCKDB_REMOTE_TRANSPORT', 'DUCKDB_REMOTE_TRANSPORT' )
 	);
