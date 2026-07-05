@@ -3,11 +3,18 @@ title: Installer Options
 description: Flags accepted by bin/install-database-support.php.
 ---
 
-The bootstrap installer is designed for one-command setup from a new WordPress
-root:
+The bootstrap installer is designed for one-command setup from a WordPress root,
+whether WordPress has not run its installer yet or is already installed:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes
+```
+
+For an already-installed site, add `--force` when setup needs to update an
+existing `wp-config.php` or `wp-content/db.php`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes --force
 ```
 
 ## Bootstrap Options

@@ -7,15 +7,46 @@ WordPress Databases Support is an experimental database drop-in collection for
 running WordPress on non-MySQL backends while preserving the MySQL-facing
 `wpdb` API expected by WordPress core and plugins.
 
-## Start With Your Goal
+## Quick Start
 
-| Goal | Page |
-| --- | --- |
-| Install into a new WordPress site. | [Installation](installation/) |
-| Choose a backend in a browser before WordPress install. | [Setup Wizard](setup-wizard/) |
-| Configure everything from a shell script. | [CLI Setup](cli-setup/) |
-| Try a local DuckDB JSON site. | [DuckDB JSON WordPress](examples/duckdb-json-wordpress/) |
-| Compare DuckDB performance and production tradeoffs. | [Performance](guides/performance/) |
+Run these commands from the WordPress root directory. The examples use SQLite
+because it has the fewest external requirements; use [CLI Setup](cli-setup/)
+for PostgreSQL and DuckDB variants.
+
+### New WordPress Site, Before Install
+
+Use this when WordPress files exist but the WordPress installer has not run yet:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes
+```
+
+Then open WordPress and run the normal installer. WordPress will create its
+tables through the configured database drop-in.
+
+### Already Installed WordPress Site
+
+Use this when WordPress is already installed and you want to add the database
+drop-in to the existing site:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes --force
+```
+
+This installs the plugin and allows setup to update an existing `wp-config.php`
+or `wp-content/db.php`. It does not migrate existing MySQL content into the new
+backend, so test on a copy of the site before using it on a live install.
+
+## Other Paths
+
+Use these when you need a different setup flow or more context.
+
+| Starting point | Use this when | Start here |
+| --- | --- | --- |
+| Browser setup | You want to choose SQLite, PostgreSQL, or DuckDB before running WordPress install. | [Setup Wizard](setup-wizard/) |
+| More CLI examples | You need PostgreSQL, DuckDB, custom paths, or repeatable provisioning flags. | [CLI Setup](cli-setup/) |
+| Local DuckDB demo | You want a Docker-based WordPress site storing tables as DuckDB-backed JSON files. | [DuckDB JSON WordPress](examples/duckdb-json-wordpress/) |
+| DuckDB deployment decision | You need performance numbers and production tradeoffs before choosing DuckDB. | [Performance](guides/performance/) and [Production Readiness](guides/production-readiness/) |
 
 ## Supported Backends
 

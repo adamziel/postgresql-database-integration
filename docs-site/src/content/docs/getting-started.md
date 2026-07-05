@@ -5,6 +5,36 @@ description: Choose the fastest path for trying or installing WordPress Database
 
 This page gives you the shortest working path for each common starting point.
 
+## Add Support With One Command
+
+Run these commands from the WordPress root directory. The examples use SQLite
+because it has the fewest external requirements; use [CLI Setup](../cli-setup/)
+for PostgreSQL and DuckDB variants.
+
+### New WordPress Site, Before Install
+
+Use this when WordPress files exist but the WordPress installer has not run yet:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes
+```
+
+Then open WordPress and run the normal installer. WordPress will create its
+tables through the configured database drop-in.
+
+### Already Installed WordPress Site
+
+Use this when WordPress is already installed and you want to add the database
+drop-in to the existing site:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes --force
+```
+
+This installs the plugin and allows setup to update an existing `wp-config.php`
+or `wp-content/db.php`. It does not migrate existing MySQL content into the new
+backend, so test on a copy of the site before using it on a live install.
+
 ## Try DuckDB JSON With Docker
 
 Use this when you want to see a real WordPress site storing tables as JSON files
@@ -23,28 +53,6 @@ The JSON table files appear under:
 ```text
 examples/duckdb-json-wordpress/data/duckdb-json/
 ```
-
-## Install Into A New WordPress Site
-
-Run this from the root of a new WordPress site:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php
-```
-
-The installer places the plugin under `wp-content/plugins/`, downloads the
-pinned SQLite package, and prints the setup wizard URL.
-
-## Configure From The CLI
-
-Pass setup flags after `php --` when you want a one-command install and backend
-configuration:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes
-```
-
-Use [CLI Setup](../cli-setup/) for backend-specific examples.
 
 ## Choose A Backend
 
