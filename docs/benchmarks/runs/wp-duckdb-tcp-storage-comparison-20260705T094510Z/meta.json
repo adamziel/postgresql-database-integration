@@ -1,0 +1,28 @@
+{
+    "run_id": "wp-duckdb-tcp-storage-comparison-20260705T094510Z",
+    "created_at": "2026-07-05T09:49:35+00:00",
+    "output_dir": "/home/claude/wordpress-databases-support/docs/benchmarks/runs/wp-duckdb-tcp-storage-comparison-20260705T094510Z",
+    "work_root": "/tmp/wp-duckdb-benchmark-1001-wp-duckdb-tcp-storage-comparison-20260705T094510Z",
+    "backends": [
+        "mysql",
+        "duckdb",
+        "sqlite_attach",
+        "json"
+    ],
+    "concurrency": [
+        1,
+        2,
+        4,
+        8
+    ],
+    "read_requests_per_scenario": 40,
+    "write_requests_per_scenario": 20,
+    "server_workers": 4,
+    "wordpress_requested": "latest",
+    "wordpress_version": "7.0",
+    "php_version": "8.5.7",
+    "commit": "0b1e739c1452",
+    "host": "Linux sandbox-49185 7.0.9-204.fc44.x86_64 #1 SMP PREEMPT_DYNAMIC Tue May 19 22:42:18 UTC 2026 x86_64 GNU/Linux",
+    "duckdb_lock_timeout_seconds": 30,
+    "duckdb_benchmark_transport": "tcp"
+}
