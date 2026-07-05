@@ -6,13 +6,35 @@ description: Configure the database drop-in and backend constants from a shell c
 CLI setup is the repeatable path for scripted WordPress installs, local test
 harnesses, and environments where a browser wizard is not appropriate.
 
-## One-Command Install And Setup
+## One-Command Install And Setup With SQLite
 
-SQLite:
+Run these commands from the WordPress root directory.
+
+### New WordPress Site, Before Install
+
+Use this when WordPress files exist but the WordPress installer has not run yet:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes
 ```
+
+Then open WordPress and run the normal installer. WordPress will create its
+tables through the configured database drop-in.
+
+### Already Installed WordPress Site
+
+Use this when WordPress is already installed and you want to add the database
+drop-in to the existing site:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes --force
+```
+
+This installs the plugin and allows setup to update an existing `wp-config.php`
+or `wp-content/db.php`. It does not migrate existing MySQL content into the new
+backend, so test on a copy of the site before using it on a live install.
+
+## Backend Variants
 
 DuckDB:
 
