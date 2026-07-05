@@ -302,7 +302,7 @@ The `mysql` row is native WordPress MySQL/MariaDB. DuckDB is not loaded there.
 Rows named `DuckDB -> ...` mean WordPress talks to DuckDB, and DuckDB hydrates
 from or flushes to that storage target.
 
-| Storage path | DuckDB involved | Front page c1 / c8 | REST read c1 / c8 | REST write c1 / c8 | Practical reading |
+| Storage path | DuckDB involved | Front page, one / eight concurrent requests | REST read, one / eight concurrent requests | REST write, one / eight concurrent requests | Practical reading |
 | --- | --- | ---: | ---: | ---: | --- |
 | MySQL/MariaDB native | No | 19.6 / 81.4 | 65.5 / 269.5 | 60.1 / 213.7 | Baseline for production WordPress OLTP. |
 | DuckDB native over TCP sidecar | Yes | 17.8 / 18.9 | 52.9 / 48.7 | 36.2 / 34.7 | Works, but throughput is mostly flat as concurrency rises. |
@@ -312,7 +312,7 @@ from or flushes to that storage target.
 The same conclusion shows up when WordPress is removed from the hot path and the
 benchmark runs only WordPress-shaped SQL against copied WordPress databases:
 
-| Direct SQL workload at concurrency 8 | MySQL/MariaDB native SQL | DuckDB native SQL | DuckDB / MySQL |
+| Direct SQL workload with eight concurrent workers | MySQL/MariaDB native SQL | DuckDB native SQL | DuckDB / MySQL |
 | --- | ---: | ---: | ---: |
 | Front-page-shaped reads | 241.4 rps | 145.6 rps | 60% |
 | REST-read-shaped reads | 886.2 rps | 390.0 rps | 44% |
@@ -353,7 +353,7 @@ In the local direct-SQL tuning pass, increasing memory or checkpoint thresholds
 did not close the WordPress gap. The only consistently useful setting was
 reducing DuckDB internal parallelism for many small WordPress-shaped queries:
 
-| Setting | Front-page SQL c8 vs default | REST-read SQL c8 vs default | REST-write SQL c8 vs default | Write conflicts |
+| Setting | Front-page SQL with eight workers vs default | REST-read SQL with eight workers vs default | REST-write SQL with eight workers vs default | Write conflicts |
 | --- | ---: | ---: | ---: | ---: |
 | Default | 1.00x | 1.00x | 1.00x | 83 / 300 |
 | `SET threads=1` | 1.15x | 1.14x | 0.99x | 98 / 300 |
