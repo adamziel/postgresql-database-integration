@@ -21,7 +21,8 @@ docker compose up --build
 ```
 
 Open `http://localhost:8080` and log in with `admin` / `password`. See
-[DuckDB JSON WordPress](examples/duckdb-json-wordpress/) for the full example.
+the `examples/duckdb-json-wordpress/` directory in the repository for the
+Docker files.
 
 ### One-Command Install And Setup With JSON
 
@@ -45,6 +46,12 @@ Composer/network access for `satur.io/duckdb`, and the current JSON storage path
 is best treated as an experiment rather than a busy production database.
 
 More setup commands: [CLI Setup](cli-setup/).
+
+## How It Works
+
+If you want the mental model before changing a site, read
+[How It Works](how-it-works/). It explains the installer, the `db.php` drop-in,
+backend drivers, DuckDB connection modes, and DuckDB external storage.
 
 ## DuckDB Deployment Decision
 
