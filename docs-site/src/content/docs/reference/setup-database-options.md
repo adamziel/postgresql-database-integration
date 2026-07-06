@@ -32,16 +32,25 @@ php wp-content/plugins/wordpress-databases-support/bin/setup-database.php \
 | `--db-password=secret` | Database password. |
 | `--db-host=127.0.0.1:5432` | Database host and optional port. |
 
+## SQLite Options
+
+| Option | Purpose |
+| --- | --- |
+| `--db-dir=wp-content/database` | Local directory for the SQLite database file. |
+| `--sqlite-file=.ht.sqlite` | SQLite database file name inside `--db-dir`. |
+
 ## DuckDB Options
 
 | Option | Purpose |
 | --- | --- |
 | `--db-dir=wp-content/database` | Local directory for SQLite files, native DuckDB files, and default DuckDB external storage paths. |
+| `--duckdb-file=.ht.duckdb` | Native DuckDB file name inside `--db-dir`. |
 | `--duckdb-connection=ffi\|unix\|tcp\|http\|sidecar` | Configure embedded or remote DuckDB connection mode. |
 | `--duckdb-socket=/path/to/duckdb.sock` | Unix socket path. |
 | `--duckdb-host=127.0.0.1` | TCP sidecar host. |
 | `--duckdb-port=9901` | TCP sidecar port. |
 | `--duckdb-url=http://127.0.0.1:9902/query` | HTTP sidecar URL. |
+| `--duckdb-sidecar="php -d ffi.enable=1 .../duckdb-sidecar.php --stdio --path=..."` | Managed sidecar command for `--duckdb-connection=sidecar`. |
 | `--duckdb-backend=json\|csv\|parquet\|custom_name` | Store WordPress tables through a DuckDB external backend. Built-in file backends are `json`, `csv`, and `parquet`. |
 | `--duckdb-external-storage-dir=wp-content/database/duckdb-json` | Directory or URI prefix for one external file per WordPress table. Defaults to `wp-content/database/duckdb-{backend}` when `--duckdb-backend` is set. |
 | `--duckdb-working-database-file=wp-content/database/.ht.duckdb-working` | Mutable DuckDB working database used while hydrating and flushing external storage. Defaults to this path when `--duckdb-backend` is set. |
