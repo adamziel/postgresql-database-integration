@@ -15,7 +15,7 @@ install WordPress core.
 
 | Goal | Start here |
 | --- | --- |
-| Try the project without an existing site. | Use the Docker-based DuckDB JSON quick start on the [Overview](../#try-duckdb-json-wordpress). |
+| Try the project without an existing site. | Use the Docker-based JSON file storage quick start on the [Overview](../#try-wordpress-stored-as-json-files). |
 | Configure a new or existing WordPress site from a shell. | Use [CLI Setup](../cli-setup/). |
 | Download the packaged plugin zip. | Use [Releases](../releases/). |
 | Use SQLite, PostgreSQL, DuckDB native files, JSON, CSV, Parquet, S3, attached SQLite, or custom DuckDB SQL templates. | Use [Set Up Each Backend](../cli-setup/#set-up-each-backend). |

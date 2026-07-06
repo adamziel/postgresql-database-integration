@@ -1,18 +1,20 @@
 ---
-title: Overview
-description: Run WordPress on SQLite, PostgreSQL, DuckDB, and DuckDB-backed file or object storage.
+title: "WordPress Databases Support: SQLite, PostgreSQL, DuckDB, JSON, CSV, Parquet, S3"
+description: Run WordPress on SQLite, PostgreSQL, DuckDB native files, DuckDB-backed JSON, CSV, Parquet, S3-compatible object storage, attached SQLite, or custom DuckDB SQL.
 ---
 
 WordPress Databases Support is an experimental database drop-in collection for
-running WordPress on non-MySQL backends while preserving the MySQL-facing
-`wpdb` API expected by WordPress core and plugins.
+running WordPress on SQLite, PostgreSQL, DuckDB native files, DuckDB-backed
+JSON, CSV, Parquet, S3-compatible object storage, attached SQLite databases,
+and custom DuckDB SQL backends while preserving the MySQL-facing `wpdb` API
+expected by WordPress core and plugins.
 
 ## Quick Start
 
-### Try DuckDB JSON WordPress
+### Try WordPress Stored As JSON Files
 
 Use the Docker example when you want the fastest proof: a local WordPress site
-that stores every table as a JSON file through DuckDB.
+whose database is a directory of JSON files managed through DuckDB.
 
 ```bash
 curl -fsSL https://github.com/adamziel/wordpress-databases-support/archive/trunk.tar.gz | tar -xz
@@ -24,7 +26,16 @@ Open `http://localhost:8080` and log in with `admin` / `password`. See
 the `examples/duckdb-json-wordpress/` directory in the repository for the
 Docker files.
 
-### One-Command Install And Setup With JSON
+After startup, table files are written under
+`examples/duckdb-json-wordpress/data/duckdb-json/`; for example,
+`wp_options.json` stores `wp_options` rows as newline-delimited JSON:
+
+```json
+{"option_id":1,"option_name":"siteurl","option_value":"http://localhost:8080","autoload":"yes"}
+{"option_id":2,"option_name":"home","option_value":"http://localhost:8080","autoload":"yes"}
+```
+
+### Install On A WordPress Site With JSON File Storage
 
 Run this from a WordPress root to install the plugin, install the DuckDB PHP
 client, configure the drop-in, and store WordPress tables as JSON files. A
