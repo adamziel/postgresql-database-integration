@@ -24,6 +24,7 @@ export default defineConfig({
           label: 'Start Here',
           items: [
             { label: 'Overview', slug: 'index' },
+            { label: 'How It Works', slug: 'how-it-works' },
             { label: 'Installation', slug: 'installation' },
             { label: 'CLI Setup', slug: 'cli-setup' },
           ],
@@ -53,12 +54,6 @@ export default defineConfig({
             { label: 'Installer Options', slug: 'reference/installer-options' },
             { label: 'Setup CLI Options', slug: 'reference/setup-database-options' },
             { label: 'Configuration Constants', slug: 'reference/configuration-constants' },
-          ],
-        },
-        {
-          label: 'Examples',
-          items: [
-            { label: 'DuckDB JSON WordPress', slug: 'examples/duckdb-json-wordpress' },
           ],
         },
         {

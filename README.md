@@ -17,8 +17,8 @@ cd wordpress-databases-support-trunk/examples/duckdb-json-wordpress
 docker compose up --build
 ```
 
-Open `http://localhost:8080` and log in with `admin` / `password`. Full example
-docs: <https://adamziel.github.io/wordpress-databases-support/examples/duckdb-json-wordpress/>.
+Open `http://localhost:8080` and log in with `admin` / `password`. The Docker
+files live in [`examples/duckdb-json-wordpress/`](examples/duckdb-json-wordpress/).
 
 ### One-Command Install And Setup With JSON
 
@@ -73,6 +73,7 @@ Starlight and deployed to GitHub Pages from the `trunk` branch.
 
 Important pages:
 
+- [How it works](docs-site/src/content/docs/how-it-works.md)
 - [Installation](docs-site/src/content/docs/installation.md)
 - [CLI setup](docs-site/src/content/docs/cli-setup.md)
 - [Configuration constants](docs-site/src/content/docs/reference/configuration-constants.md)
