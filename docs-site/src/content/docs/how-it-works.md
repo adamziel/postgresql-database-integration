@@ -147,7 +147,7 @@ For DuckDB JSON, the command also installs the DuckDB PHP client when you pass
 `--install-duckdb-client`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=duckdb \
   --install-duckdb-client \
   --duckdb-backend=json \

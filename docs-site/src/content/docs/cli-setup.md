@@ -17,6 +17,12 @@ drop-in; they do not download or install WordPress core.
 The same commands work before the WordPress installer runs and on an already
 installed site.
 
+The installer script is published as a GitHub release asset. It installs the
+latest released plugin zip by default. Add `--release=v0.1.0` to pin a release,
+`--plugin-zip=/path/to/wordpress-databases-support.zip` to use a downloaded
+package, or `--ref=trunk` only when you intentionally want a development source
+snapshot.
+
 `--force` allows setup to update an existing `wp-config.php` or `wp-content/db.php`.
 It does not migrate existing MySQL content into the new backend. Test on a copy
 before changing a real site.
@@ -50,7 +56,7 @@ Run this from a WordPress root to install the plugin, install the DuckDB PHP
 client, configure the drop-in, and store WordPress tables as JSON files:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=duckdb \
   --install-duckdb-client \
   --duckdb-backend=json \
@@ -70,7 +76,7 @@ Use SQLite when you want a single local database file and no external database
 server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=sqlite \
   --yes \
   --force
@@ -86,7 +92,7 @@ Use PostgreSQL when WordPress should talk directly to a running PostgreSQL
 server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=postgresql \
   --db-name=wordpress \
   --db-user=wordpress \
@@ -104,7 +110,7 @@ Create the database and user before running the command. PHP also needs PDO and
 Use native DuckDB when WordPress should store data in one mutable DuckDB file:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=duckdb \
   --install-duckdb-client \
   --yes \
@@ -136,7 +142,7 @@ Use JSON when you want inspectable files for local development or a small demo.
 ### CSV Files
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=duckdb \
   --install-duckdb-client \
   --duckdb-backend=csv \
@@ -151,7 +157,7 @@ the metadata manifest beside the files is important.
 ### Parquet Files
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=duckdb \
   --install-duckdb-client \
   --duckdb-backend=parquet \
@@ -169,7 +175,7 @@ Use a custom backend when DuckDB can read and write the storage with SQL, but it
 is not one of the presets. This example stores pipe-delimited `.psv` files:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=duckdb \
   --install-duckdb-client \
   --duckdb-backend=pipe_text \
@@ -190,7 +196,7 @@ Use S3-compatible Parquet when DuckDB should persist table files through
 `httpfs` to S3, R2, MinIO, or another S3-compatible service:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=duckdb \
   --install-duckdb-client \
   --duckdb-backend=s3_parquet \
@@ -218,7 +224,7 @@ Use attached SQLite when DuckDB should hydrate from and flush to a separate
 SQLite database through DuckDB's `sqlite` extension:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=duckdb \
   --install-duckdb-client \
   --duckdb-backend=sqlite_attach \
@@ -334,7 +340,7 @@ DuckDB.
 Add `--dry-run` to any setup command to see which files would be written:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=duckdb \
   --duckdb-backend=parquet \
   --dry-run \

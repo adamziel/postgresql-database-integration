@@ -32,7 +32,7 @@ WordPress root is a directory that already contains WordPress core files such as
 `wp-load.php` and `wp-content/`; this command does not download WordPress core:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=duckdb \
   --install-duckdb-client \
   --duckdb-backend=json \
@@ -49,6 +49,18 @@ is best treated as an experiment rather than a busy production database.
 
 For every supported backend setup command, use
 [Set Up Each Backend](cli-setup/#set-up-each-backend).
+
+### Download The Plugin Zip
+
+Download the latest release package when you want to install the plugin through
+the WordPress plugin uploader or place it in `wp-content/plugins` yourself:
+
+```text
+https://github.com/adamziel/wordpress-databases-support/releases/latest/download/wordpress-databases-support.zip
+```
+
+The one-command installer downloads that same latest release package by default.
+See [Releases](releases/) for release pinning and local package verification.
 
 ## How It Works
 

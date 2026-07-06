@@ -7,7 +7,7 @@ The bootstrap installer is designed for one-command setup from a WordPress root,
 whether WordPress has not run its installer yet or is already installed:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=duckdb \
   --install-duckdb-client \
   --duckdb-backend=json \
@@ -19,6 +19,10 @@ curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-suppor
 `wp-content/db.php`. It does not migrate existing MySQL content into the new
 backend.
 
+The installer downloads the latest released plugin zip by default. Use
+`--release` to pin a release or `--ref` only when you deliberately want a
+development source snapshot.
+
 ## Bootstrap Options
 
 | Option | Purpose |
@@ -26,9 +30,11 @@ backend.
 | `--wp-path=/path/to/wordpress` | WordPress root. Defaults to the current directory. |
 | `--plugin-dir=/path/to/plugin` | Plugin install directory. Defaults to `wp-content/plugins/wordpress-databases-support`. |
 | `--setup=browser\|cli\|none` | Print the browser wizard URL, run CLI setup, or only install the plugin. If `--engine` is present, the installer defaults to CLI setup. |
-| `--ref=trunk` | Repository branch, tag, or commit to install from GitHub archives. |
-| `--plugin-zip=/path/to/wordpress-databases-support.zip` | Install from a packaged plugin zip instead of GitHub source archives. |
-| `--source-zip=/path/to/source.zip` | Install from a local source archive. |
+| `--release=latest` | Plugin release tag to install. Defaults to the latest GitHub release. |
+| `--plugin-zip=/path/to/wordpress-databases-support.zip` | Install from a local packaged plugin zip. |
+| `--plugin-zip-url=https://example.com/wordpress-databases-support.zip` | Install from a packaged plugin zip URL. |
+| `--ref=trunk` | Development-only path: install from a GitHub source archive ref instead of a release package. |
+| `--source-zip=/path/to/source.zip` | Development-only path: install from a local source archive. |
 | `--sqlite-ref=v3.0.0-rc.7` | SQLite integration release tag to package with the install. |
 | `--sqlite-zip=/path/to/plugin-sqlite-database-integration.zip` | Use a local SQLite integration package zip. |
 | `--force-install` | Replace an existing plugin directory. |

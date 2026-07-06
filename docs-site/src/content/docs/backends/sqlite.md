@@ -10,7 +10,7 @@ this plugin.
 ## Install And Configure
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- --engine=sqlite --yes
 ```
 
 By default, setup writes SQLite constants similar to:
