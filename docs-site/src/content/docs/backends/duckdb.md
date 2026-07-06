@@ -13,6 +13,20 @@ DuckDB support has two separate configuration axes:
 
 Keep those axes separate when you reason about a deployment.
 
+For copy-paste setup commands, start with
+[Set Up Each Backend](../../cli-setup/#set-up-each-backend). This page explains
+DuckDB-specific choices after you know which setup path you want.
+
+## Choose A DuckDB Path
+
+| If you want... | Read... | Why |
+| --- | --- | --- |
+| The simplest DuckDB setup. | [Native DuckDB File](#native-duckdb-file) | Stores WordPress in one mutable `.duckdb` file. |
+| JSON, CSV, Parquet, S3, attached SQLite, or custom DuckDB SQL templates. | [DuckDB Storage Backends](../duckdb-storage-backends/) | Storage backend controls where WordPress tables persist. |
+| Unix socket, TCP, HTTP, embedded FFI, or sidecar mode. | [DuckDB Connection Modes](../duckdb-connection-modes/) | Connection mode controls the process boundary and latency profile. |
+| S3-compatible object storage specifically. | [S3-Compatible Storage](../duckdb-s3/) | S3 needs `httpfs`, credentials, explicit table lists, and manifest care. |
+| Performance and production tradeoffs. | [Performance](../../guides/performance/) and [Production Readiness](../../guides/production-readiness/) | DuckDB works, but WordPress is a mixed read/write workload, not an analytical scan workload. |
+
 ## Native DuckDB File
 
 The simplest DuckDB setup stores WordPress in one DuckDB database file:

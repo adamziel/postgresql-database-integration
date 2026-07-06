@@ -1110,6 +1110,10 @@ DuckDB:
   --duckdb-backend-file-extension=psv
   --duckdb-backend-read-sql="SELECT * FROM read_csv_auto({path}, HEADER = true, DELIM = '|')"
   --duckdb-backend-write-sql="COPY {table} TO {path} (HEADER, DELIMITER '|')"
+  --duckdb-backend-setup-sql="INSTALL httpfs"
+  --duckdb-backend-tables=wp_options,wp_posts
+  --duckdb-backend-atomic-flush=0
+  --duckdb-metadata-manifest-file=wp-content/database/.wp-duckdb-json-metadata
 
 TEXT;
 		}

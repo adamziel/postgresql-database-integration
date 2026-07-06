@@ -1,10 +1,30 @@
 ---
 title: Installation
-description: Install WordPress Databases Support into a new or already-installed WordPress site with one command.
+description: Choose the right setup path for installing WordPress Databases Support.
 ---
 
-Run this command from a WordPress root to install the plugin, install the DuckDB
-PHP client, configure the drop-in, and store WordPress tables as JSON files:
+Installation is the entry point. Use this page to choose a path, then follow
+[CLI Setup](../cli-setup/) for the full copy-paste commands and backend flags.
+
+A WordPress root is a directory that already contains WordPress core files such
+as `wp-config.php`, `wp-load.php`, and `wp-content/`. The installer installs this
+database support plugin and writes the database drop-in. It does not download or
+install WordPress core.
+
+## Choose A Path
+
+| Goal | Start here |
+| --- | --- |
+| Try the project without an existing site. | Use the Docker-based DuckDB JSON quick start on the [Overview](../#try-duckdb-json-wordpress). |
+| Configure a new or existing WordPress site from a shell. | Use [CLI Setup](../cli-setup/). |
+| Use SQLite, PostgreSQL, DuckDB native files, JSON, CSV, Parquet, S3, attached SQLite, or custom DuckDB SQL templates. | Use [Set Up Each Backend](../cli-setup/#set-up-each-backend). |
+| Understand what the installer changes before running it. | Read [How It Works](../how-it-works/#what-the-installer-changes). |
+| Choose DuckDB for production-like mutable storage. | Read [Performance](../guides/performance/) and [Production Readiness](../guides/production-readiness/) first. |
+
+## Shortest CLI Path
+
+Run this from a WordPress root to install the plugin, install the DuckDB PHP
+client, configure the drop-in, and store WordPress tables as JSON files:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
@@ -22,38 +42,8 @@ Test on a copy before touching a real site. DuckDB JSON also needs PHP FFI,
 Composer/network access for `satur.io/duckdb`, and the current JSON storage path
 is best treated as an experiment rather than a busy production database.
 
-Use [CLI Setup](../cli-setup/) for SQLite, PostgreSQL, native DuckDB files,
-remote DuckDB connection modes, custom paths, and repeatable provisioning flags.
-
-## Backend Variants
-
-Pass setup flags after `php --`.
-
-SQLite:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes --force
-```
-
-DuckDB native file:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=duckdb --install-duckdb-client --yes --force
-```
-
-PostgreSQL:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
-  --engine=postgresql \
-  --db-name=wordpress \
-  --db-user=wordpress \
-  --db-password=secret \
-  --db-host=127.0.0.1:5432 \
-  --yes
-```
-
-See [Installer Options](../reference/installer-options/) for every bootstrap flag.
+Use [Set Up Each Backend](../cli-setup/#set-up-each-backend) for every backend
+variant and repeatable provisioning flag.
 
 ## Requirements
 

@@ -826,7 +826,17 @@ All database setup flags after php -- are forwarded to bin/setup-database.php:
   --duckdb-backend=json|csv|parquet|custom_name
   --duckdb-external-storage-dir=wp-content/database/duckdb-json
   --duckdb-working-database-file=wp-content/database/.ht.duckdb-working
+  --duckdb-backend-read-sql="SELECT * FROM read_csv_auto({path})"
+  --duckdb-backend-write-sql="COPY {table} TO {path}"
+  --duckdb-backend-setup-sql="INSTALL httpfs"
+  --duckdb-backend-tables=wp_options,wp_posts
+  --duckdb-backend-atomic-flush=0
+  --duckdb-metadata-manifest-file=wp-content/database/.wp-duckdb-json-metadata
   --duckdb-connection=ffi|unix|tcp|http|sidecar
+  --duckdb-socket=/run/wp-duckdb/wordpress.sock
+  --duckdb-host=127.0.0.1 --duckdb-port=9901
+  --duckdb-url=http://127.0.0.1:9902/query
+  --duckdb-sidecar="php -d ffi.enable=1 .../bin/duckdb-sidecar.php --stdio --path=..."
   --force --dry-run --strict --yes
 
 TEXT;
