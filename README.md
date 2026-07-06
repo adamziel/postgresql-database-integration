@@ -6,9 +6,10 @@ preserving the MySQL-facing `wpdb` API expected by WordPress core and plugins.
 
 ## Quick Start
 
-Run these commands from the WordPress root directory. The examples use SQLite
-because it has the fewest external requirements; use [CLI setup](docs-site/src/content/docs/cli-setup.md)
-for PostgreSQL and DuckDB variants.
+Run these commands from the WordPress root directory. These are the shortest
+[CLI setup](docs-site/src/content/docs/cli-setup.md) examples and use SQLite
+because it has the fewest external requirements. Use [CLI setup](docs-site/src/content/docs/cli-setup.md)
+for PostgreSQL, DuckDB, custom paths, and repeatable provisioning flags.
 
 ### New WordPress Site, Before Install
 
@@ -55,15 +56,20 @@ Use these when you need a different setup flow or more context.
 | Starting point | Use this when | Start here |
 | --- | --- | --- |
 | Local DuckDB demo | You want a Docker-based WordPress site storing tables as DuckDB-backed JSON files. | [DuckDB JSON Docker example](examples/duckdb-json-wordpress/README.md) |
-| Browser setup | You want to choose SQLite, PostgreSQL, or DuckDB before running WordPress install. | [Setup wizard](docs-site/src/content/docs/setup-wizard.md) |
 | More CLI examples | You need PostgreSQL, DuckDB, custom paths, or repeatable provisioning flags. | [CLI setup](docs-site/src/content/docs/cli-setup.md) |
 | DuckDB mode selection | You need to compare DuckDB connection transports and storage formats. | [DuckDB connection modes](docs-site/src/content/docs/backends/duckdb-connection-modes.md) and [storage backends](docs-site/src/content/docs/backends/duckdb-storage-backends.md) |
-| Production decision | You need performance numbers and operational tradeoffs before choosing a backend. | [Production readiness](docs-site/src/content/docs/guides/production-readiness.md) and [performance](docs-site/src/content/docs/guides/performance.md) |
 | Contributor setup | You want to run the test suites or work on the drivers. | [Development testing](docs-site/src/content/docs/development/testing.md) |
 
 See [installer options](docs-site/src/content/docs/reference/installer-options.md)
 for `--wp-path`, `--setup`, `--engine`, DuckDB client installation, and local zip
 options.
+
+## DuckDB Deployment Decision
+
+Read this before choosing DuckDB for mutable WordPress storage. You need
+performance numbers and production tradeoffs, not just the install command:
+[performance](docs-site/src/content/docs/guides/performance.md) and
+[production readiness](docs-site/src/content/docs/guides/production-readiness.md).
 
 ## Quick Demo: DuckDB JSON
 

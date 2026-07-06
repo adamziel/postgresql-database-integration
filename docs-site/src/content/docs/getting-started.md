@@ -7,9 +7,10 @@ This page gives you the shortest working path for each common starting point.
 
 ## Add Support With One Command
 
-Run these commands from the WordPress root directory. The examples use SQLite
-because it has the fewest external requirements; use [CLI Setup](../cli-setup/)
-for PostgreSQL and DuckDB variants.
+Run these commands from the WordPress root directory. These are the shortest
+[CLI Setup](../cli-setup/) examples and use SQLite because it has the fewest
+external requirements. Use [CLI Setup](../cli-setup/) for PostgreSQL, DuckDB,
+custom paths, and repeatable provisioning flags.
 
 ### New WordPress Site, Before Install
 
