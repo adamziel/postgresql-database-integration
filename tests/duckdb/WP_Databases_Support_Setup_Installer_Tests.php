@@ -84,6 +84,29 @@ class WP_Databases_Support_Setup_Installer_Tests extends PHPUnit\Framework\TestC
 		$this->assertStringContainsString( "define( 'DB_FILE', '.second.sqlite' );", $config );
 	}
 
+	public function test_installer_configures_duckdb_json_storage(): void {
+		$wp_root   = $this->create_wordpress_root();
+		$installer = new WP_Databases_Support_Setup_Installer( dirname( __DIR__, 2 ) );
+
+		$result = $installer->install(
+			array(
+				'wp_path'        => $wp_root,
+				'engine'         => 'duckdb',
+				'duckdb_backend' => 'json',
+				'yes'            => true,
+			)
+		);
+
+		$this->assertSame( 'duckdb', $result['engine'] );
+
+		$config = file_get_contents( $wp_root . '/wp-config.php' );
+		$this->assertIsString( $config );
+		$this->assertStringContainsString( "define( 'DUCKDB_BACKEND', 'json' );", $config );
+		$this->assertStringContainsString( "define( 'DUCKDB_WORKING_DATABASE_FILE', '" . $wp_root . "/wp-content/database/.ht.duckdb-working' );", $config );
+		$this->assertStringContainsString( "define( 'DUCKDB_EXTERNAL_STORAGE_DIR', '" . $wp_root . "/wp-content/database/duckdb-json/' );", $config );
+		$this->assertDirectoryExists( $wp_root . '/wp-content/database/duckdb-json' );
+	}
+
 	public function test_installer_configures_postgresql_credentials(): void {
 		$wp_root   = $this->create_wordpress_root();
 		$installer = new WP_Databases_Support_Setup_Installer( dirname( __DIR__, 2 ) );

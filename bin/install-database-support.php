@@ -805,8 +805,8 @@ Run from a WordPress root:
   curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php
 
 Install and configure in one command:
-  curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes
-  curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=duckdb --yes
+  curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=duckdb --install-duckdb-client --duckdb-backend=json --yes --force
+  curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes --force
 
 Installer options:
   --wp-path=/path/to/wordpress       WordPress root. Defaults to the current directory.
@@ -823,6 +823,9 @@ Installer options:
 All database setup flags after php -- are forwarded to bin/setup-database.php:
   --engine=sqlite|postgresql|duckdb
   --db-name=wordpress --db-user=wordpress --db-password=secret --db-host=127.0.0.1:5432
+  --duckdb-backend=json|csv|parquet|custom_name
+  --duckdb-external-storage-dir=wp-content/database/duckdb-json
+  --duckdb-working-database-file=wp-content/database/.ht.duckdb-working
   --duckdb-connection=ffi|unix|tcp|http|sidecar
   --force --dry-run --strict --yes
 

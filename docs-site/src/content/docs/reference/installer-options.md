@@ -7,15 +7,17 @@ The bootstrap installer is designed for one-command setup from a WordPress root,
 whether WordPress has not run its installer yet or is already installed:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes
+curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+  --engine=duckdb \
+  --install-duckdb-client \
+  --duckdb-backend=json \
+  --yes \
+  --force
 ```
 
-For an already-installed site, add `--force` when setup needs to update an
-existing `wp-config.php` or `wp-content/db.php`:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes --force
-```
+`--force` allows setup to update an existing `wp-config.php` or
+`wp-content/db.php`. It does not migrate existing MySQL content into the new
+backend.
 
 ## Bootstrap Options
 
@@ -35,8 +37,9 @@ curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-suppor
 ## Forwarded Setup Options
 
 Database setup flags such as `--engine`, `--db-name`, `--duckdb-connection`,
-`--force`, `--dry-run`, `--strict`, and `--yes` are forwarded to
-`bin/setup-database.php`.
+`--duckdb-backend`, `--duckdb-external-storage-dir`,
+`--duckdb-working-database-file`, `--force`, `--dry-run`, `--strict`, and
+`--yes` are forwarded to `bin/setup-database.php`.
 
 `--force-install` and `--force` are intentionally separate. Use
 `--force-install` to replace the plugin directory. Use `--force` to allow setup
