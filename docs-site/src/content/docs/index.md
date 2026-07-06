@@ -9,43 +9,42 @@ running WordPress on non-MySQL backends while preserving the MySQL-facing
 
 ## Quick Start
 
-Run these commands from the WordPress root directory. These are the shortest
-[CLI Setup](cli-setup/) examples and use SQLite because it has the fewest
-external requirements. Use [CLI Setup](cli-setup/) for PostgreSQL, DuckDB,
-custom paths, and repeatable provisioning flags.
+### Try DuckDB JSON WordPress
 
-### New WordPress Site, Before Install
-
-Use this when WordPress files exist but the WordPress installer has not run yet:
+Use the Docker example when you want the fastest proof: a local WordPress site
+that stores every table as a JSON file through DuckDB.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/archive/trunk.tar.gz | tar -xz
+cd wordpress-databases-support-trunk/examples/duckdb-json-wordpress
+docker compose up --build
 ```
 
-Then open WordPress and run the normal installer. WordPress will create its
-tables through the configured database drop-in.
+Open `http://localhost:8080` and log in with `admin` / `password`. See
+[DuckDB JSON WordPress](examples/duckdb-json-wordpress/) for the full example.
 
-### Already Installed WordPress Site
+### One-Command Install And Setup With JSON
 
-Use this when WordPress is already installed and you want to add the database
-drop-in to the existing site:
+Run this from a WordPress root to install the plugin, install the DuckDB PHP
+client, configure the drop-in, and store WordPress tables as JSON files:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes --force
+curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+  --engine=duckdb \
+  --install-duckdb-client \
+  --duckdb-backend=json \
+  --yes \
+  --force
 ```
 
-This installs the plugin and allows setup to update an existing `wp-config.php`
-or `wp-content/db.php`. It does not migrate existing MySQL content into the new
-backend, so test on a copy of the site before using it on a live install.
+The same command works before the WordPress installer runs and on an already
+installed site. `--force` only allows setup to update an existing `wp-config.php`
+or `wp-content/db.php`; it does not migrate existing MySQL content into JSON.
+Test on a copy before touching a real site. DuckDB JSON also needs PHP FFI,
+Composer/network access for `satur.io/duckdb`, and the current JSON storage path
+is best treated as an experiment rather than a busy production database.
 
-## Other Paths
-
-Use these when you need a different setup flow or more context.
-
-| Starting point | Use this when | Start here |
-| --- | --- | --- |
-| More CLI examples | You need PostgreSQL, DuckDB, custom paths, or repeatable provisioning flags. | [CLI Setup](cli-setup/) |
-| Local DuckDB demo | You want a Docker-based WordPress site storing tables as DuckDB-backed JSON files. | [DuckDB JSON WordPress](examples/duckdb-json-wordpress/) |
+More setup commands: [CLI Setup](cli-setup/).
 
 ## DuckDB Deployment Decision
 

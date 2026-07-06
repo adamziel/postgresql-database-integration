@@ -14,6 +14,10 @@ description: WordPress constants used by the database drop-in and DuckDB backend
 
 ## DuckDB Storage Constants
 
+The setup CLI can write the common DuckDB storage constants for you with
+`--duckdb-backend`, `--duckdb-external-storage-dir`, and
+`--duckdb-working-database-file`.
+
 | Constant | Purpose |
 | --- | --- |
 | `DUCKDB_FILE` | Native DuckDB database file name. |

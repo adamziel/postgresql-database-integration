@@ -89,6 +89,11 @@ if ( ! class_exists( 'WP_Databases_Support_Setup_Installer' ) ) {
 					$created[] = rtrim( (string) $constants['DB_DIR'], '/\\' );
 				}
 
+				if ( isset( $constants['DUCKDB_EXTERNAL_STORAGE_DIR'] ) && $this->is_local_duckdb_path( $constants['DUCKDB_EXTERNAL_STORAGE_DIR'] ) ) {
+					$this->ensure_directory( rtrim( (string) $constants['DUCKDB_EXTERNAL_STORAGE_DIR'], '/\\' ) );
+					$created[] = rtrim( (string) $constants['DUCKDB_EXTERNAL_STORAGE_DIR'], '/\\' );
+				}
+
 				$this->write_file( $config['path'], $config['contents'] );
 				$this->write_file( $dropin['path'], $dropin['contents'] );
 			}
@@ -259,22 +264,26 @@ if ( ! class_exists( 'WP_Databases_Support_Setup_Installer' ) ) {
 		 */
 		private function normalize_aliases( array $options ) {
 			$aliases = array(
-				'path'                 => 'wp_path',
-				'wordpress_path'       => 'wp_path',
-				'db_name'              => 'database_name',
-				'db_user'              => 'database_user',
-				'db_password'          => 'database_password',
-				'db_host'              => 'database_host',
-				'sqlite_file'          => 'sqlite_database_file',
-				'duckdb_file'          => 'duckdb_database_file',
-				'duckdb_connection'    => 'duckdb_connection_mode',
-				'duckdb_socket'        => 'duckdb_remote_socket',
-				'duckdb_host'          => 'duckdb_remote_host',
-				'duckdb_port'          => 'duckdb_remote_port',
-				'duckdb_url'           => 'duckdb_remote_url',
-				'duckdb_sidecar'       => 'duckdb_sidecar_command',
-				'y'                    => 'yes',
-				'f'                    => 'force',
+				'path'                    => 'wp_path',
+				'wordpress_path'          => 'wp_path',
+				'db_name'                 => 'database_name',
+				'db_user'                 => 'database_user',
+				'db_password'             => 'database_password',
+				'db_host'                 => 'database_host',
+				'sqlite_file'             => 'sqlite_database_file',
+				'duckdb_file'             => 'duckdb_database_file',
+				'duckdb_connection'       => 'duckdb_connection_mode',
+				'duckdb_socket'           => 'duckdb_remote_socket',
+				'duckdb_host'             => 'duckdb_remote_host',
+				'duckdb_port'             => 'duckdb_remote_port',
+				'duckdb_url'              => 'duckdb_remote_url',
+				'duckdb_sidecar'          => 'duckdb_sidecar_command',
+				'duckdb_storage_backend' => 'duckdb_backend',
+				'duckdb_external_dir'    => 'duckdb_external_storage_dir',
+				'duckdb_json_dir'        => 'duckdb_external_storage_dir',
+				'duckdb_working_file'    => 'duckdb_working_database_file',
+				'y'                       => 'yes',
+				'f'                       => 'force',
 			);
 
 			foreach ( $aliases as $alias => $canonical ) {
@@ -349,6 +358,42 @@ if ( ! class_exists( 'WP_Databases_Support_Setup_Installer' ) ) {
 				'duckdb_php_autoload',
 				$this->plugin_dir . '/vendor/autoload.php'
 			);
+
+			$backend = $this->option_string( $options, 'duckdb_backend', '' );
+			if ( '' !== $backend ) {
+				$backend = strtolower( trim( $backend ) );
+				$constants['DUCKDB_BACKEND'] = $backend;
+				$constants['DUCKDB_WORKING_DATABASE_FILE'] = isset( $options['duckdb_working_database_file'] )
+					? $this->normalize_duckdb_path_against( $options['duckdb_working_database_file'], $options['wp_path'] )
+					: rtrim( $db_dir, '/\\' ) . '/.ht.duckdb-working';
+
+				$constants['DUCKDB_EXTERNAL_STORAGE_DIR'] = isset( $options['duckdb_external_storage_dir'] )
+					? $this->normalize_duckdb_path_against( $options['duckdb_external_storage_dir'], $options['wp_path'] )
+					: rtrim( $db_dir, '/\\' ) . '/duckdb-' . $backend . '/';
+			} elseif ( isset( $options['duckdb_working_database_file'] ) ) {
+				$constants['DUCKDB_WORKING_DATABASE_FILE'] = $this->normalize_duckdb_path_against( $options['duckdb_working_database_file'], $options['wp_path'] );
+			}
+
+			foreach (
+				array(
+					'duckdb_backend_file_extension' => 'DUCKDB_BACKEND_FILE_EXTENSION',
+					'duckdb_backend_read_sql'       => 'DUCKDB_BACKEND_READ_SQL',
+					'duckdb_backend_write_sql'      => 'DUCKDB_BACKEND_WRITE_SQL',
+					'duckdb_backend_setup_sql'      => 'DUCKDB_BACKEND_SETUP_SQL',
+					'duckdb_backend_tables'         => 'DUCKDB_BACKEND_TABLES',
+					'duckdb_metadata_manifest_file' => 'DUCKDB_METADATA_MANIFEST_FILE',
+				) as $option => $constant
+			) {
+				if ( array_key_exists( $option, $options ) && false !== $options[ $option ] && null !== $options[ $option ] && '' !== $options[ $option ] ) {
+					$constants[ $constant ] = in_array( $option, array( 'duckdb_metadata_manifest_file' ), true )
+						? $this->normalize_duckdb_path_against( $options[ $option ], $options['wp_path'] )
+						: $options[ $option ];
+				}
+			}
+
+			if ( array_key_exists( 'duckdb_backend_atomic_flush', $options ) ) {
+				$constants['DUCKDB_BACKEND_ATOMIC_FLUSH'] = $this->truthy( $options['duckdb_backend_atomic_flush'] );
+			}
 
 			$connection = $this->option_string( $options, 'duckdb_connection_mode', '' );
 			if ( '' !== $connection ) {
@@ -652,6 +697,33 @@ if ( ! class_exists( 'WP_Databases_Support_Setup_Installer' ) ) {
 			}
 
 			return $this->normalize_path( $path );
+		}
+
+		/**
+		 * Normalize a DuckDB path-like setting without rewriting URI storage.
+		 *
+		 * @param mixed  $path Path, URI, or :memory: value.
+		 * @param string $base Base directory for relative local paths.
+		 * @return string Path.
+		 */
+		private function normalize_duckdb_path_against( $path, $base ) {
+			$path = str_replace( '\\', '/', trim( (string) $path ) );
+			if ( '' === $path || ':memory:' === $path || 1 === preg_match( '#^[a-z][a-z0-9+.-]*://#i', $path ) ) {
+				return $path;
+			}
+
+			return $this->normalize_path_against( $path, $base );
+		}
+
+		/**
+		 * Check whether a DuckDB path-like setting is a local filesystem path.
+		 *
+		 * @param mixed $path Path-like setting.
+		 * @return bool Whether it points to the local filesystem.
+		 */
+		private function is_local_duckdb_path( $path ) {
+			$path = trim( (string) $path );
+			return '' !== $path && ':memory:' !== $path && 1 !== preg_match( '#^[a-z][a-z0-9+.-]*://#i', $path );
 		}
 
 		/**
@@ -1027,11 +1099,17 @@ SQLite:
 
 DuckDB:
   --db-dir=wp-content/database --duckdb-file=.ht.duckdb
+  --duckdb-backend=json
+  --duckdb-external-storage-dir=wp-content/database/duckdb-json
+  --duckdb-working-database-file=wp-content/database/.ht.duckdb-working
   --duckdb-connection=ffi|unix|tcp|http|sidecar
   --duckdb-socket=/run/wp-duckdb/wordpress.sock
   --duckdb-host=127.0.0.1 --duckdb-port=9901
   --duckdb-url=http://127.0.0.1:9902/query
   --duckdb-sidecar="php -d ffi.enable=1 .../bin/duckdb-sidecar.php --stdio --path=..."
+  --duckdb-backend-file-extension=psv
+  --duckdb-backend-read-sql="SELECT * FROM read_csv_auto({path}, HEADER = true, DELIM = '|')"
+  --duckdb-backend-write-sql="COPY {table} TO {path} (HEADER, DELIMITER '|')"
 
 TEXT;
 		}

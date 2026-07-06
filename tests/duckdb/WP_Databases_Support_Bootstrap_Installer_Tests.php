@@ -92,6 +92,37 @@ class WP_Databases_Support_Bootstrap_Installer_Tests extends PHPUnit\Framework\T
 		$this->assertStringContainsString( $plugin_dir, $dropin );
 	}
 
+	public function test_cli_mode_forwards_duckdb_json_setup_args(): void {
+		$wp_root     = $this->create_wordpress_root();
+		$source_zip  = $this->create_plugin_source_archive();
+		$sqlite_zip  = $this->create_sqlite_archive();
+		$install_php = dirname( __DIR__, 2 ) . '/bin/install-database-support.php';
+
+		$command = PHP_BINARY
+			. ' ' . escapeshellarg( $install_php )
+			. ' --wp-path=' . escapeshellarg( $wp_root )
+			. ' --source-zip=' . escapeshellarg( $source_zip )
+			. ' --sqlite-zip=' . escapeshellarg( $sqlite_zip )
+			. ' --engine=duckdb'
+			. ' --duckdb-backend=json'
+			. ' --yes';
+
+		$output = array();
+		$exit   = 0;
+		exec( $command . ' 2>&1', $output, $exit );
+
+		$joined = implode( "\n", $output );
+		$this->assertSame( 0, $exit, $joined );
+		$this->assertStringContainsString( 'Running database setup...', $joined );
+		$this->assertStringContainsString( 'Configured WordPress for duckdb.', $joined );
+
+		$config = file_get_contents( $wp_root . '/wp-config.php' );
+		$this->assertIsString( $config );
+		$this->assertStringContainsString( "define( 'DUCKDB_BACKEND', 'json' );", $config );
+		$this->assertStringContainsString( "define( 'DUCKDB_EXTERNAL_STORAGE_DIR', '" . $wp_root . "/wp-content/database/duckdb-json/' );", $config );
+		$this->assertDirectoryExists( $wp_root . '/wp-content/database/duckdb-json' );
+	}
+
 	public function test_incomplete_existing_plugin_requires_force_install(): void {
 		$wp_root     = $this->create_wordpress_root();
 		$source_zip  = $this->create_plugin_source_archive();
