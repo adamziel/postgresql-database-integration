@@ -29,6 +29,45 @@ class WP_Databases_Support_Bootstrap_Installer_Tests extends PHPUnit\Framework\T
 		parent::tearDown();
 	}
 
+	public function test_default_release_url_points_to_latest_package_asset(): void {
+		$installer = new WP_Databases_Support_Bootstrap_Installer();
+		$method    = new ReflectionMethod( WP_Databases_Support_Bootstrap_Installer::class, 'plugin_release_zip_url' );
+
+		$this->assertSame(
+			'https://github.com/adamziel/wordpress-databases-support/releases/latest/download/wordpress-databases-support.zip',
+			$method->invoke( $installer, 'latest' )
+		);
+		$this->assertSame(
+			'https://github.com/adamziel/wordpress-databases-support/releases/download/v0.1.0/wordpress-databases-support.zip',
+			$method->invoke( $installer, 'v0.1.0' )
+		);
+	}
+
+	public function test_browser_mode_installs_from_packaged_plugin_zip(): void {
+		$wp_root     = $this->create_wordpress_root();
+		$plugin_zip  = $this->create_plugin_package_archive();
+		$install_php = dirname( __DIR__, 2 ) . '/bin/install-database-support.php';
+
+		$command = PHP_BINARY
+			. ' ' . escapeshellarg( $install_php )
+			. ' --wp-path=' . escapeshellarg( $wp_root )
+			. ' --plugin-zip=' . escapeshellarg( $plugin_zip );
+
+		$output = array();
+		$exit   = 0;
+		exec( $command . ' 2>&1', $output, $exit );
+
+		$joined = implode( "\n", $output );
+		$this->assertSame( 0, $exit, $joined );
+		$this->assertStringContainsString( 'Installed plugin at ', $joined );
+		$this->assertStringContainsString( '/wp-content/plugins/wordpress-databases-support/setup-database.php', $joined );
+
+		$plugin_dir = $wp_root . '/wp-content/plugins/wordpress-databases-support';
+		$this->assertFileExists( $plugin_dir . '/wordpress-databases-support.php' );
+		$this->assertFileExists( $plugin_dir . '/bin/setup-database.php' );
+		$this->assertFileExists( $plugin_dir . '/external/sqlite-database-integration/packages/plugin-sqlite-database-integration/wp-includes/sqlite/db.php' );
+	}
+
 	public function test_browser_mode_installs_from_archives_and_prints_wizard_path(): void {
 		$wp_root     = $this->create_wordpress_root();
 		$source_zip  = $this->create_plugin_source_archive();
@@ -213,6 +252,40 @@ PHP
 		file_put_contents( $root . '/wp-includes/database/load.php', "<?php\n// Driver fixture.\n" );
 
 		$zip = $temp_dir . '/sqlite.zip';
+		$this->zip_directory( $root, $zip );
+
+		return $zip;
+	}
+
+	private function create_plugin_package_archive(): string {
+		$temp_dir = $this->create_temp_dir( 'wpds-bootstrap-package-' );
+		$root     = $temp_dir . '/wordpress-databases-support';
+		$repo     = dirname( __DIR__, 2 );
+
+		mkdir( $root . '/bin', 0777, true );
+		mkdir( $root . '/wp-includes/database/setup', 0777, true );
+		mkdir( $root . '/external/sqlite-database-integration/packages/plugin-sqlite-database-integration/wp-includes/sqlite', 0777, true );
+		mkdir( $root . '/external/sqlite-database-integration/packages/plugin-sqlite-database-integration/wp-includes/database', 0777, true );
+		copy( $repo . '/wordpress-databases-support.php', $root . '/wordpress-databases-support.php' );
+		copy( $repo . '/db.copy', $root . '/db.copy' );
+		copy( $repo . '/constants.php', $root . '/constants.php' );
+		copy( $repo . '/setup-database.php', $root . '/setup-database.php' );
+		copy( $repo . '/bin/setup-database.php', $root . '/bin/setup-database.php' );
+		copy( $repo . '/wp-includes/db.php', $root . '/wp-includes/db.php' );
+		copy(
+			$repo . '/wp-includes/database/setup/class-wp-databases-support-setup-installer.php',
+			$root . '/wp-includes/database/setup/class-wp-databases-support-setup-installer.php'
+		);
+		file_put_contents(
+			$root . '/external/sqlite-database-integration/packages/plugin-sqlite-database-integration/wp-includes/sqlite/db.php',
+			"<?php\n// Packaged SQLite fixture.\n"
+		);
+		file_put_contents(
+			$root . '/external/sqlite-database-integration/packages/plugin-sqlite-database-integration/wp-includes/database/load.php',
+			"<?php\n// Packaged SQLite driver fixture.\n"
+		);
+
+		$zip = $temp_dir . '/wordpress-databases-support.zip';
 		$this->zip_directory( $root, $zip );
 
 		return $zip;

@@ -27,6 +27,7 @@ export default defineConfig({
             { label: 'Overview', slug: 'index' },
             { label: 'Installation', slug: 'installation' },
             { label: 'CLI Setup', slug: 'cli-setup' },
+            { label: 'Releases', slug: 'releases' },
             { label: 'How It Works', slug: 'how-it-works' },
           ],
         },
@@ -62,7 +63,6 @@ export default defineConfig({
           items: [
             { label: 'Testing', slug: 'development/testing' },
             { label: 'CI', slug: 'development/ci' },
-            { label: 'Releases', slug: 'development/releases' },
           ],
         },
       ],

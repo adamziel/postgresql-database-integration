@@ -28,7 +28,7 @@ WordPress root is a directory that already contains WordPress core files such as
 `wp-load.php` and `wp-content/`; this command does not download WordPress core.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=duckdb \
   --install-duckdb-client \
   --duckdb-backend=json \
@@ -44,6 +44,17 @@ Composer/network access for `satur.io/duckdb`, and the current JSON storage path
 is best treated as an experiment rather than a busy production database.
 
 More setup commands: [CLI setup](https://adamziel.github.io/wordpress-databases-support/cli-setup/).
+
+### Download The Plugin Zip
+
+Download the latest release package:
+
+<https://github.com/adamziel/wordpress-databases-support/releases/latest/download/wordpress-databases-support.zip>
+
+The one-command installer above downloads that same latest release package by
+default. Use `--release=v0.1.0` to pin a release, or
+`--plugin-zip=/path/to/wordpress-databases-support.zip` to install a package you
+already downloaded.
 
 ## Status
 
@@ -78,6 +89,7 @@ Important pages:
 - [How it works](https://adamziel.github.io/wordpress-databases-support/how-it-works/)
 - [Installation](https://adamziel.github.io/wordpress-databases-support/installation/)
 - [CLI setup](https://adamziel.github.io/wordpress-databases-support/cli-setup/)
+- [Releases](https://adamziel.github.io/wordpress-databases-support/releases/)
 - [Configuration constants](https://adamziel.github.io/wordpress-databases-support/reference/configuration-constants/)
 - [DuckDB performance](https://adamziel.github.io/wordpress-databases-support/guides/performance/)
 - [Testing](https://adamziel.github.io/wordpress-databases-support/development/testing/)

@@ -17,6 +17,7 @@ install WordPress core.
 | --- | --- |
 | Try the project without an existing site. | Use the Docker-based DuckDB JSON quick start on the [Overview](../#try-duckdb-json-wordpress). |
 | Configure a new or existing WordPress site from a shell. | Use [CLI Setup](../cli-setup/). |
+| Download the packaged plugin zip. | Use [Releases](../releases/). |
 | Use SQLite, PostgreSQL, DuckDB native files, JSON, CSV, Parquet, S3, attached SQLite, or custom DuckDB SQL templates. | Use [Set Up Each Backend](../cli-setup/#set-up-each-backend). |
 | Understand what the installer changes before running it. | Read [How It Works](../how-it-works/#what-the-installer-changes). |
 | Choose DuckDB for production-like mutable storage. | Read [Performance](../guides/performance/) and [Production Readiness](../guides/production-readiness/) first. |
@@ -27,7 +28,7 @@ Run this from a WordPress root to install the plugin, install the DuckDB PHP
 client, configure the drop-in, and store WordPress tables as JSON files:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=duckdb \
   --install-duckdb-client \
   --duckdb-backend=json \
@@ -44,6 +45,10 @@ is best treated as an experiment rather than a busy production database.
 
 Use [Set Up Each Backend](../cli-setup/#set-up-each-backend) for every backend
 variant and repeatable provisioning flag.
+
+The bootstrap installer downloads the latest released plugin zip by default. To
+pin a release, add `--release=v0.1.0`. To test an unreleased development
+snapshot, add `--ref=trunk`.
 
 ## Requirements
 

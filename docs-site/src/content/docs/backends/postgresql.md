@@ -10,7 +10,7 @@ PostgreSQL driver.
 ## Install And Configure
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
+curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- \
   --engine=postgresql \
   --db-name=wordpress \
   --db-user=wordpress \

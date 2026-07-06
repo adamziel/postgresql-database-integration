@@ -5,7 +5,7 @@
  *
  * This script is intentionally standalone so it can be run with:
  *
- * curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php
+ * curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php
  *
  * @package wordpress-databases-support
  */
@@ -17,9 +17,11 @@ if ( ! class_exists( 'WP_Databases_Support_Bootstrap_Installer' ) ) {
 	 */
 	class WP_Databases_Support_Bootstrap_Installer {
 		const PLUGIN_SLUG = 'wordpress-databases-support';
+		const PLUGIN_ZIP_NAME = 'wordpress-databases-support.zip';
 		const DEFAULT_REPO_OWNER = 'adamziel';
 		const DEFAULT_REPO_NAME = 'wordpress-databases-support';
 		const DEFAULT_REF = 'trunk';
+		const DEFAULT_PLUGIN_RELEASE = 'latest';
 		const SQLITE_REPO_OWNER = 'WordPress';
 		const SQLITE_REPO_NAME = 'sqlite-database-integration';
 		const SQLITE_PLUGIN_RELEASE = 'v3.0.0-rc.7';
@@ -93,6 +95,8 @@ if ( ! class_exists( 'WP_Databases_Support_Bootstrap_Installer' ) ) {
 				'repo_zip_url'          => true,
 				'plugin_zip'            => true,
 				'plugin_zip_url'        => true,
+				'release'               => true,
+				'version'               => true,
 				'sqlite_ref'            => true,
 				'sqlite_zip'            => true,
 				'sqlite_zip_url'        => true,
@@ -179,6 +183,11 @@ if ( ! class_exists( 'WP_Databases_Support_Bootstrap_Installer' ) ) {
 			if ( isset( $options['with_duckdb_client'] ) && ! isset( $options['install_duckdb_client'] ) ) {
 				$options['install_duckdb_client'] = $options['with_duckdb_client'];
 			}
+			if ( isset( $options['version'] ) && ! isset( $options['release'] ) ) {
+				$options['release'] = $options['version'];
+			}
+
+			$use_source_archive = isset( $options['source_ref'] ) || isset( $options['source_zip'] ) || isset( $options['source_zip_url'] );
 
 			$wp_path = isset( $options['wp_path'] ) ? $options['wp_path'] : getcwd();
 			$wp_path = $this->normalize_path( $wp_path );
@@ -216,6 +225,8 @@ if ( ! class_exists( 'WP_Databases_Support_Bootstrap_Installer' ) ) {
 				'source_zip_url'        => isset( $options['source_zip_url'] ) ? (string) $options['source_zip_url'] : '',
 				'plugin_zip'            => isset( $options['plugin_zip'] ) ? (string) $options['plugin_zip'] : '',
 				'plugin_zip_url'        => isset( $options['plugin_zip_url'] ) ? (string) $options['plugin_zip_url'] : '',
+				'release'               => isset( $options['release'] ) ? (string) $options['release'] : self::DEFAULT_PLUGIN_RELEASE,
+				'use_source_archive'    => $use_source_archive,
 				'sqlite_zip'            => isset( $options['sqlite_zip'] ) ? (string) $options['sqlite_zip'] : '',
 				'sqlite_zip_url'        => isset( $options['sqlite_zip_url'] ) ? (string) $options['sqlite_zip_url'] : '',
 				'sqlite_ref'            => isset( $options['sqlite_ref'] ) ? (string) $options['sqlite_ref'] : self::SQLITE_PLUGIN_RELEASE,
@@ -242,7 +253,7 @@ if ( ! class_exists( 'WP_Databases_Support_Bootstrap_Installer' ) ) {
 			}
 
 			$this->ensure_directory( dirname( $plugin_dir ) );
-			if ( '' !== $options['plugin_zip'] || '' !== $options['plugin_zip_url'] ) {
+			if ( '' !== $options['plugin_zip'] || '' !== $options['plugin_zip_url'] || empty( $options['use_source_archive'] ) ) {
 				$source_dir = $this->prepare_packaged_plugin( $options );
 			} else {
 				$source_dir = $this->prepare_source_plugin( $options );
@@ -264,7 +275,9 @@ if ( ! class_exists( 'WP_Databases_Support_Bootstrap_Installer' ) ) {
 		private function prepare_packaged_plugin( array $options ) {
 			$temp_dir = $this->create_temp_dir( 'wpds-plugin-zip-' );
 			$zip      = $temp_dir . '/plugin.zip';
-			$source   = '' !== $options['plugin_zip'] ? $options['plugin_zip'] : $options['plugin_zip_url'];
+			$source   = '' !== $options['plugin_zip']
+				? $options['plugin_zip']
+				: ( '' !== $options['plugin_zip_url'] ? $options['plugin_zip_url'] : $this->plugin_release_zip_url( $options['release'] ) );
 			$this->materialize_archive( $source, $zip );
 			$extract_dir = $temp_dir . '/extract';
 			$this->ensure_directory( $extract_dir );
@@ -717,6 +730,21 @@ if ( ! class_exists( 'WP_Databases_Support_Bootstrap_Installer' ) ) {
 		}
 
 		/**
+		 * Build this plugin's release asset URL.
+		 *
+		 * @param string $release Release tag or "latest".
+		 * @return string URL.
+		 */
+		private function plugin_release_zip_url( $release ) {
+			$release = trim( $release );
+			if ( '' === $release || 'latest' === strtolower( $release ) ) {
+				return 'https://github.com/' . rawurlencode( self::DEFAULT_REPO_OWNER ) . '/' . rawurlencode( self::DEFAULT_REPO_NAME ) . '/releases/latest/download/' . self::PLUGIN_ZIP_NAME;
+			}
+
+			return 'https://github.com/' . rawurlencode( self::DEFAULT_REPO_OWNER ) . '/' . rawurlencode( self::DEFAULT_REPO_NAME ) . '/releases/download/' . rawurlencode( $release ) . '/' . self::PLUGIN_ZIP_NAME;
+		}
+
+		/**
 		 * Build the SQLite integration release asset URL.
 		 *
 		 * @param string $release Release tag.
@@ -802,19 +830,21 @@ if ( ! class_exists( 'WP_Databases_Support_Bootstrap_Installer' ) ) {
 Install WordPress Databases Support without git.
 
 Run from a WordPress root:
-  curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php
+  curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php
 
 Install and configure in one command:
-  curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=duckdb --install-duckdb-client --duckdb-backend=json --yes --force
-  curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- --engine=sqlite --yes --force
+  curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- --engine=duckdb --install-duckdb-client --duckdb-backend=json --yes --force
+  curl -fsSL https://github.com/adamziel/wordpress-databases-support/releases/latest/download/install-database-support.php | php -- --engine=sqlite --yes --force
 
 Installer options:
   --wp-path=/path/to/wordpress       WordPress root. Defaults to the current directory.
   --plugin-dir=PATH                  Plugin install directory. Defaults to wp-content/plugins/wordpress-databases-support.
   --setup=browser|cli|none           Open wizard path, run CLI setup, or install only.
-  --ref=trunk                        Repository ref to install from GitHub archives.
-  --plugin-zip=/path/plugin.zip      Install from a packaged plugin zip instead of GitHub source archives.
-  --source-zip=/path/source.zip      Install from a local repository archive.
+  --release=latest                   Plugin release tag to install. Defaults to the latest GitHub release.
+  --plugin-zip=/path/plugin.zip      Install from a local packaged plugin zip.
+  --plugin-zip-url=URL               Install from a packaged plugin zip URL.
+  --ref=trunk                        Development: install from a GitHub source archive ref instead of a release.
+  --source-zip=/path/source.zip      Development: install from a local repository archive.
   --sqlite-ref=v3.0.0-rc.7           SQLite integration release tag to package with the install.
   --sqlite-zip=/path/sqlite.zip      Use a local SQLite integration package zip.
   --force-install                    Replace an existing plugin directory.
