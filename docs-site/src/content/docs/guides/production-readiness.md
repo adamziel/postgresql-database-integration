@@ -18,6 +18,16 @@ MySQL/MariaDB on a busy mutable site.
 | DuckDB S3 Parquet | Proven against MinIO in CI, but object-storage latency and manifest durability are operational concerns. |
 | DuckDB attached databases | Proof that DuckDB can hydrate and flush attached stores. Use isolated databases because simple examples replace tables. |
 
+## Backend Maturity Snapshot
+
+| Area | SQLite | PostgreSQL | DuckDB native | DuckDB external storage |
+| --- | --- | --- | --- | --- |
+| Core WordPress install | Uses the upstream SQLite integration package. | Covered by this repository's PostgreSQL test jobs. | Covered by DuckDB WordPress and core DB tests. | Proven by WordPress smoke jobs for JSON, CSV, Parquet, S3 Parquet, attached SQLite, and custom templates. |
+| Plugin compatibility | Depends on upstream SQLite behavior and your plugin set. | Test plugins that emit MySQL-specific SQL. | Test plugin SQL and write contention. | Test plugin tables, metadata manifest durability, and cold reload. |
+| Existing MySQL migration | Not provided. | Not provided. | Not provided. | Not provided. |
+| Backup and restore | Treat the SQLite file as the durable database. | Use normal PostgreSQL backup tooling. | Back up the DuckDB database file and test restore. | Back up the external files plus the metadata manifest. |
+| Concurrency posture | File-backed; validate under your traffic shape. | Conventional server-backed database posture. | DuckDB write concurrency needs workload-specific testing. | Hydrate/flush storage is not row-level OLTP storage. |
+
 ## Readiness Harness
 
 Run the structured DuckDB readiness harness when you want evidence that can be

@@ -3,12 +3,19 @@ title: CLI Setup
 description: Install the database drop-in and configure a WordPress database backend from a shell command.
 ---
 
-CLI setup is the repeatable path for scripted WordPress installs, local test
-harnesses, and environments where a browser wizard is not appropriate. The
-commands on this page use the installer, so they do not require a `git clone`.
+CLI setup is the repeatable path for setting up each supported backend:
+SQLite, PostgreSQL, DuckDB native files, and DuckDB-backed JSON, CSV, Parquet,
+S3-compatible object storage, attached databases, or custom DuckDB SQL
+templates. The commands on this page use the installer, so they do not require a
+`git clone`.
 
-Run them from a WordPress root. They work before the WordPress installer runs
-and on an already installed site.
+Run them from a WordPress root. A WordPress root is a directory that already
+contains WordPress core files such as `wp-load.php` and `wp-content/`. These
+commands install this database support plugin and configure the database
+drop-in; they do not download or install WordPress core.
+
+The same commands work before the WordPress installer runs and on an already
+installed site.
 
 `--force` allows setup to update an existing `wp-config.php` or `wp-content/db.php`.
 It does not migrate existing MySQL content into the new backend. Test on a copy
@@ -21,6 +28,21 @@ This page separates three choices:
   Parquet, attached SQLite, or a custom DuckDB SQL template.
 - DuckDB connection mode: embedded FFI, Unix socket, TCP, HTTP, or managed
   sidecar.
+
+## Set Up Each Backend
+
+Use this table as the map. Each link below leads to a complete command you can
+run from a WordPress root.
+
+| If you want... | Use... |
+| --- | --- |
+| Inspectable local files for a demo. | [Start With JSON](#start-with-json) |
+| One local database file with no server. | [SQLite](#sqlite) or [DuckDB Native File](#duckdb-native-file) |
+| A conventional server-backed non-MySQL database. | [PostgreSQL](#postgresql) |
+| Local file formats for interchange or analytics. | [JSON](#json-files), [CSV](#csv-files), or [Parquet](#parquet-files) |
+| Object storage through S3, R2, or MinIO. | [S3-Compatible Parquet](#s3-compatible-parquet) |
+| A DuckDB extension or storage target not listed here. | [Other DuckDB Backends](#other-duckdb-backends) |
+| Better DuckDB request latency with a separate process. | [DuckDB Connection Modes](#duckdb-connection-modes) |
 
 ## Start With JSON
 

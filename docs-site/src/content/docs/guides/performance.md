@@ -1,12 +1,26 @@
 ---
 title: Performance
 description: Interpret the current WordPress-shaped performance evidence for DuckDB and other backends.
+lastUpdated: 2026-07-05
 ---
 
 DuckDB is usable as WordPress storage, but the current WordPress request
 workload does not behave like an analytical DuckDB workload. Treat the numbers
 below as local, WordPress-shaped benchmark evidence, not universal database
 benchmarks.
+
+## Evidence Context
+
+The headline WordPress HTTP benchmark was generated on July 5, 2026 from run
+`wp-duckdb-tcp-storage-comparison-20260705T094510Z`. It used WordPress 7.0,
+PHP 8.5.7, four PHP server workers, MariaDB for the MySQL baseline, and DuckDB
+over the TCP sidecar for the native DuckDB row. The benchmark ran front-page
+requests, REST reads, and REST writes at one, two, four, and eight concurrent
+requests.
+
+Treat these as local benchmark results for this repository's WordPress-shaped
+workload. Re-run the benchmark on your deployment shape before making capacity
+plans.
 
 ## Practical Summary
 

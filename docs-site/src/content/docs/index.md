@@ -27,7 +27,9 @@ Docker files.
 ### One-Command Install And Setup With JSON
 
 Run this from a WordPress root to install the plugin, install the DuckDB PHP
-client, configure the drop-in, and store WordPress tables as JSON files:
+client, configure the drop-in, and store WordPress tables as JSON files. A
+WordPress root is a directory that already contains WordPress core files such as
+`wp-load.php` and `wp-content/`; this command does not download WordPress core:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
@@ -45,7 +47,8 @@ Test on a copy before touching a real site. DuckDB JSON also needs PHP FFI,
 Composer/network access for `satur.io/duckdb`, and the current JSON storage path
 is best treated as an experiment rather than a busy production database.
 
-More setup commands: [CLI Setup](cli-setup/).
+For every supported backend setup command, use
+[Set Up Each Backend](cli-setup/#set-up-each-backend).
 
 ## How It Works
 

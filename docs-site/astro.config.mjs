@@ -8,6 +8,7 @@ export default defineConfig({
     starlight({
       title: 'WordPress Databases Support',
       description: 'Run WordPress on SQLite, PostgreSQL, DuckDB, and DuckDB-backed storage formats.',
+      lastUpdated: true,
       editLink: {
         baseUrl: 'https://github.com/adamziel/wordpress-databases-support/edit/trunk/docs-site/',
       },

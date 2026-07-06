@@ -3,8 +3,10 @@
 Start a local WordPress site that uses DuckDB as the WordPress database adapter
 and stores each WordPress table as a JSON file.
 
-The published docs version of this example is
-<https://adamziel.github.io/wordpress-databases-support/examples/duckdb-json-wordpress/>.
+The published docs cover this example from the
+[Overview](https://adamziel.github.io/wordpress-databases-support/#try-duckdb-json-wordpress)
+and explain the matching one-command setup on
+[CLI Setup](https://adamziel.github.io/wordpress-databases-support/cli-setup/#start-with-json).
 
 ```bash
 docker compose up --build

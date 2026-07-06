@@ -23,7 +23,9 @@ files live in [`examples/duckdb-json-wordpress/`](examples/duckdb-json-wordpress
 ### One-Command Install And Setup With JSON
 
 Run this from a WordPress root to install the plugin, install the DuckDB PHP
-client, configure the drop-in, and store WordPress tables as JSON files:
+client, configure the drop-in, and store WordPress tables as JSON files. A
+WordPress root is a directory that already contains WordPress core files such as
+`wp-load.php` and `wp-content/`; this command does not download WordPress core.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/adamziel/wordpress-databases-support/trunk/bin/install-database-support.php | php -- \
@@ -41,7 +43,7 @@ Test on a copy before touching a real site. DuckDB JSON also needs PHP FFI,
 Composer/network access for `satur.io/duckdb`, and the current JSON storage path
 is best treated as an experiment rather than a busy production database.
 
-More setup commands: [CLI setup](docs-site/src/content/docs/cli-setup.md).
+More setup commands: [CLI setup](https://adamziel.github.io/wordpress-databases-support/cli-setup/).
 
 ## Status
 
@@ -53,16 +55,16 @@ Current backends:
 
 | Backend | Status | Start here |
 | --- | --- | --- |
-| SQLite | Routed through the upstream WordPress SQLite Database Integration package. | [SQLite docs](docs-site/src/content/docs/backends/sqlite.md) |
-| PostgreSQL | Local PostgreSQL driver with WordPress core test coverage. | [PostgreSQL docs](docs-site/src/content/docs/backends/postgresql.md) |
-| DuckDB | Local DuckDB driver with native files, sidecar transports, and external storage formats. | [DuckDB docs](docs-site/src/content/docs/backends/duckdb.md) |
+| SQLite | Routed through the upstream WordPress SQLite Database Integration package. | [SQLite docs](https://adamziel.github.io/wordpress-databases-support/backends/sqlite/) |
+| PostgreSQL | Local PostgreSQL driver with WordPress core test coverage. | [PostgreSQL docs](https://adamziel.github.io/wordpress-databases-support/backends/postgresql/) |
+| DuckDB | Local DuckDB driver with native files, sidecar transports, and external storage formats. | [DuckDB docs](https://adamziel.github.io/wordpress-databases-support/backends/duckdb/) |
 
 ## DuckDB Deployment Decision
 
 Read this before choosing DuckDB for mutable WordPress storage. You need
 performance numbers and production tradeoffs, not just the install command:
-[performance](docs-site/src/content/docs/guides/performance.md) and
-[production readiness](docs-site/src/content/docs/guides/production-readiness.md).
+[performance](https://adamziel.github.io/wordpress-databases-support/guides/performance/) and
+[production readiness](https://adamziel.github.io/wordpress-databases-support/guides/production-readiness/).
 
 ## Documentation
 
@@ -73,12 +75,12 @@ Starlight and deployed to GitHub Pages from the `trunk` branch.
 
 Important pages:
 
-- [How it works](docs-site/src/content/docs/how-it-works.md)
-- [Installation](docs-site/src/content/docs/installation.md)
-- [CLI setup](docs-site/src/content/docs/cli-setup.md)
-- [Configuration constants](docs-site/src/content/docs/reference/configuration-constants.md)
-- [DuckDB performance](docs-site/src/content/docs/guides/performance.md)
-- [Testing](docs-site/src/content/docs/development/testing.md)
+- [How it works](https://adamziel.github.io/wordpress-databases-support/how-it-works/)
+- [Installation](https://adamziel.github.io/wordpress-databases-support/installation/)
+- [CLI setup](https://adamziel.github.io/wordpress-databases-support/cli-setup/)
+- [Configuration constants](https://adamziel.github.io/wordpress-databases-support/reference/configuration-constants/)
+- [DuckDB performance](https://adamziel.github.io/wordpress-databases-support/guides/performance/)
+- [Testing](https://adamziel.github.io/wordpress-databases-support/development/testing/)
 
 ## Current Limitations
 
