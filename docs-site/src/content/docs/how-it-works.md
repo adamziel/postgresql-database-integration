@@ -105,6 +105,36 @@ dispatching it. It handles common WordPress statements such as:
 Unsupported SQL should fail loudly. Silent partial compatibility is dangerous for
 a database layer because it can corrupt data while appearing to work.
 
+### How SQL Parsing Works
+
+The SQL compatibility layer starts with a MySQL lexer. The lexer reads the raw
+SQL string and turns it into tokens: keywords, identifiers, quoted identifiers,
+string literals, numeric literals, operators, comments, and punctuation. That is
+why the driver can rewrite `` `wp_posts` `` as a backend identifier without
+accidentally changing the same text inside a string literal or comment.
+
+After tokenization, the driver rejects multiple statements and validates the
+token stream with the generated MySQL grammar in this repository. That grammar is
+loaded by `WP_MySQL_Parser`, a recursive-descent parser that produces an AST for
+the statement. In the DuckDB driver, the AST is mainly used as a syntax gate: if
+the SQL is not valid MySQL-shaped SQL, the driver rejects it before trying to
+execute anything.
+
+Most backend adaptation then happens from the token stream rather than from one
+large generic AST rewriter. The driver looks at the first meaningful token to
+dispatch the statement, then uses targeted translators for the statement family:
+`SELECT`, `INSERT`, `CREATE TABLE`, `ALTER TABLE`, `SHOW`, `DESCRIBE`, and so on.
+Those translators preserve MySQL literals, quote backend identifiers, map data
+types, rewrite supported functions and operators, and emulate MySQL metadata
+queries when WordPress expects them.
+
+This is deliberately narrower than "any MySQL query can run anywhere." The
+parser can prove a statement is shaped like MySQL, but the backend driver still
+has to know how to translate that shape safely. A syntactically valid MySQL
+statement may still be rejected when it depends on MySQL-only runtime behavior,
+server administration commands, storage engines, procedures, triggers, or
+locking semantics that the selected backend cannot emulate.
+
 ## What The Installer Changes
 
 The one-command installer has two jobs:
