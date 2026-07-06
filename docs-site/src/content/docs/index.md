@@ -9,9 +9,10 @@ running WordPress on non-MySQL backends while preserving the MySQL-facing
 
 ## Quick Start
 
-Run these commands from the WordPress root directory. The examples use SQLite
-because it has the fewest external requirements; use [CLI Setup](cli-setup/)
-for PostgreSQL and DuckDB variants.
+Run these commands from the WordPress root directory. These are the shortest
+[CLI Setup](cli-setup/) examples and use SQLite because it has the fewest
+external requirements. Use [CLI Setup](cli-setup/) for PostgreSQL, DuckDB,
+custom paths, and repeatable provisioning flags.
 
 ### New WordPress Site, Before Install
 
@@ -43,10 +44,14 @@ Use these when you need a different setup flow or more context.
 
 | Starting point | Use this when | Start here |
 | --- | --- | --- |
-| Browser setup | You want to choose SQLite, PostgreSQL, or DuckDB before running WordPress install. | [Setup Wizard](setup-wizard/) |
 | More CLI examples | You need PostgreSQL, DuckDB, custom paths, or repeatable provisioning flags. | [CLI Setup](cli-setup/) |
 | Local DuckDB demo | You want a Docker-based WordPress site storing tables as DuckDB-backed JSON files. | [DuckDB JSON WordPress](examples/duckdb-json-wordpress/) |
-| DuckDB deployment decision | You need performance numbers and production tradeoffs before choosing DuckDB. | [Performance](guides/performance/) and [Production Readiness](guides/production-readiness/) |
+
+## DuckDB Deployment Decision
+
+Read this before choosing DuckDB for mutable WordPress storage. You need
+performance numbers and production tradeoffs, not just the install command:
+[Performance](guides/performance/) and [Production Readiness](guides/production-readiness/).
 
 ## Supported Backends
 

@@ -26,7 +26,6 @@ export default defineConfig({
             { label: 'Overview', slug: 'index' },
             { label: 'Getting Started', slug: 'getting-started' },
             { label: 'Installation', slug: 'installation' },
-            { label: 'Setup Wizard', slug: 'setup-wizard' },
             { label: 'CLI Setup', slug: 'cli-setup' },
           ],
         },
